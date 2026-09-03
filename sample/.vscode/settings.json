@@ -1,0 +1,6 @@
+{
+  "workbench.editorAssociations": {
+    "*.asc": "sigmixa.rawLog",
+    "*.blf": "sigmixa.rawLog"
+  }
+}

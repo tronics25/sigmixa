@@ -1,0 +1,162 @@
+{
+  "name": "sigmixa",
+  "displayName": "SigMixa",
+  "description": "Signal-centered CAN log analysis and visualization for Visual Studio Code",
+  "version": "0.6.0-rc.1",
+  "publisher": "tronics25",
+  "license": "MIT",
+  "private": true,
+  "icon": "media/sigmixa-icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tronics25/sigmixa.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tronics25/sigmixa/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onCustomEditor:sigmixa.rawLog",
+    "onView:sigmixa.logFiles",
+    "onView:sigmixa.frames",
+    "onView:sigmixa.plugins"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "sigmixa.rawLog",
+        "displayName": "SigMixa",
+        "selector": [
+          {
+            "filenamePattern": "*.asc"
+          },
+          {
+            "filenamePattern": "*.blf"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sigmixa",
+          "title": "SigMixa",
+          "icon": "media/activity-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "sigmixa": [
+        {
+          "id": "sigmixa.logFiles",
+          "name": "LOG FILES"
+        },
+        {
+          "id": "sigmixa.frames",
+          "name": "CAN FRAMES"
+        },
+        {
+          "id": "sigmixa.plugins",
+          "name": "PLUGINS"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "sigmixa.openLog",
+        "title": "Open CAN Log",
+        "category": "SigMixa",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "sigmixa.addFrame",
+        "title": "Register CAN Frame",
+        "category": "SigMixa",
+        "icon": "$(add)"
+      },
+      {
+        "command": "sigmixa.openFrame",
+        "title": "Open CAN Frame Definition",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.deleteFrame",
+        "title": "Delete CAN Frame",
+        "category": "SigMixa",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "sigmixa.addPlugin",
+        "title": "Register Plugin",
+        "category": "SigMixa",
+        "icon": "$(add)"
+      },
+      {
+        "command": "sigmixa.openPlugin",
+        "title": "Open Plugin Configuration",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.refresh",
+        "title": "Refresh",
+        "category": "SigMixa",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "sigmixa.openLog",
+          "when": "view == sigmixa.logFiles",
+          "group": "navigation"
+        },
+        {
+          "command": "sigmixa.addFrame",
+          "when": "view == sigmixa.frames",
+          "group": "navigation"
+        },
+        {
+          "command": "sigmixa.addPlugin",
+          "when": "view == sigmixa.plugins",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "sigmixa.deleteFrame",
+          "when": "view == sigmixa.frames && viewItem == sigmixa.manualFrame",
+          "group": "inline"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "sample:generate": "node scripts/generate-base-showcase.mjs && node scripts/add-plugin-diagnostic.mjs && node scripts/generate-reference-signals.mjs && node scripts/add-trajectory-data.mjs && node scripts/generate-showcase-blf.mjs && node scripts/generate-sample-project.mjs",
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.js",
+    "package:vsix": "npm run verify && npx --offline @vscode/vsce package --no-dependencies --out outputs/sigmixa-${npm_package_version}.vsix",
+    "watch": "node esbuild.js --watch",
+    "check-types": "tsc --noEmit -p ./",
+    "check-boundaries": "node scripts/check-boundaries.mjs",
+    "test": "node scripts/run-tests.mjs",
+    "verify": "npm run check-boundaries && npm run check-types && npm test && npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "@vscode/codicons": "^0.0.46-24"
+  }
+}

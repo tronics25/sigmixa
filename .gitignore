@@ -1,0 +1,16 @@
+node_modules/
+out/
+work/
+outputs/
+media/codicons/
+*.vsix
+.DS_Store
+
+design/
+README_INTERNAL.md
+/docs/private/
+.sigmixa/
+!sample/.sigmixa/
+!sample/.sigmixa/project.json
+!sample/.sigmixa/plugins/
+!sample/.sigmixa/plugins/**

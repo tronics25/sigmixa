@@ -1,0 +1,1023 @@
+{
+  "schemaVersion": 2,
+  "frames": [
+    {
+      "id": "ff-2a0",
+      "name": "Vehicle Powertrain Status",
+      "frameLength": 64,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-speed",
+          "name": "Vehicle Speed",
+          "unit": "km/h",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-batt",
+          "name": "Battery Voltage",
+          "unit": "V",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-engine-speed",
+          "name": "Engine Speed",
+          "unit": "rpm",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.25,
+            "lsbText": "0.25",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-accelerator",
+          "name": "Accelerator Position",
+          "unit": "%",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-engine-torque",
+          "name": "Engine Torque",
+          "unit": "Nm",
+          "byteOffset": 8,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-coolant-temp",
+          "name": "Coolant Temperature",
+          "unit": "°C",
+          "byteOffset": 10,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": -40
+          }
+        },
+        {
+          "id": "sig-drive-mode",
+          "name": "Drive Mode",
+          "unit": "",
+          "byteOffset": 11,
+          "bitOffset": 0,
+          "lengthBits": 3,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-odometer",
+          "name": "Odometer",
+          "unit": "km",
+          "byteOffset": 12,
+          "bitOffset": 0,
+          "lengthBits": 32,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-temp",
+          "name": "Motor Temperature",
+          "unit": "°C",
+          "byteOffset": 40,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": -40
+          }
+        }
+      ],
+      "derivedSignals": [
+        {
+          "id": "sig-corrected-speed",
+          "name": "Voltage Corrected Speed",
+          "unit": "km/h",
+          "operation": {
+            "type": "expression",
+            "expression": "[Vehicle Speed] * [Battery Voltage] / 12"
+          }
+        },
+        {
+          "id": "sig-corrected-speed-rate",
+          "name": "Vehicle Speed Percent",
+          "unit": "%",
+          "operation": {
+            "type": "expression",
+            "expression": "clamp([Voltage Corrected Speed] / 1.2, 0, 100)"
+          }
+        },
+        {
+          "id": "sig-speed-grade",
+          "name": "Speed Zone",
+          "unit": "",
+          "operation": {
+            "type": "lookup",
+            "input": "Voltage Corrected Speed",
+            "outOfRange": "clamp",
+            "points": [
+              {
+                "input": 0,
+                "output": 0
+              },
+              {
+                "input": 30,
+                "output": 1
+              },
+              {
+                "input": 60,
+                "output": 2
+              },
+              {
+                "input": 120,
+                "output": 3
+              },
+              {
+                "input": 160,
+                "output": 4
+              }
+            ]
+          }
+        },
+        {
+          "id": "sig-smoothed-speed",
+          "name": "Filtered Vehicle Speed",
+          "unit": "km/h",
+          "operation": {
+            "type": "filter",
+            "input": "Vehicle Speed",
+            "filter": "low-pass",
+            "timeSeconds": 0.5
+          }
+        },
+        {
+          "id": "sig-average-accelerator",
+          "name": "Average Accelerator Position",
+          "unit": "%",
+          "operation": {
+            "type": "filter",
+            "input": "Accelerator Position",
+            "filter": "moving-average",
+            "timeSeconds": 1
+          }
+        },
+        {
+          "id": "sig-mechanical-power",
+          "name": "Mechanical Power",
+          "unit": "kW",
+          "operation": {
+            "type": "expression",
+            "expression": "[Engine Torque] * [Engine Speed] * 0.00010472"
+          }
+        },
+        {
+          "id": "sig-power-utilization",
+          "name": "Power Utilization",
+          "unit": "%",
+          "operation": {
+            "type": "expression",
+            "expression": "clamp(abs([Mechanical Power]) / 0.8, 0, 100)"
+          }
+        }
+      ],
+      "canId": "2A0"
+    },
+    {
+      "id": "ff-300",
+      "name": "Brake and Wheel Speed",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-brake-pressure",
+          "name": "Brake Pressure",
+          "unit": "bar",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-pedal",
+          "name": "Brake Pedal Position",
+          "unit": "%",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-speed-fl",
+          "name": "Front Left Wheel Speed",
+          "unit": "km/h",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-speed-fr",
+          "name": "Front Right Wheel Speed",
+          "unit": "km/h",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [
+        {
+          "id": "sig-wheel-speed-difference",
+          "name": "Front Wheel Speed Difference",
+          "unit": "km/h",
+          "operation": {
+            "type": "expression",
+            "expression": "abs([Front Left Wheel Speed] - [Front Right Wheel Speed])"
+          }
+        },
+        {
+          "id": "sig-brake-level",
+          "name": "Brake Level",
+          "unit": "",
+          "operation": {
+            "type": "lookup",
+            "input": "Brake Pressure",
+            "outOfRange": "clamp",
+            "points": [
+              {
+                "input": 0,
+                "output": 0
+              },
+              {
+                "input": 20,
+                "output": 1
+              },
+              {
+                "input": 60,
+                "output": 2
+              },
+              {
+                "input": 120,
+                "output": 3
+              }
+            ]
+          }
+        },
+        {
+          "id": "sig-smoothed-brake-pressure",
+          "name": "Smoothed Brake Pressure",
+          "unit": "bar",
+          "operation": {
+            "type": "filter",
+            "input": "Brake Pressure",
+            "filter": "low-pass",
+            "timeSeconds": 0.4
+          }
+        }
+      ],
+      "canId": "300"
+    },
+    {
+      "id": "ff-310",
+      "name": "Body Control Status",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-headlight",
+          "name": "Headlight",
+          "unit": "",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 1,
+          "signedness": "unsigned",
+          "byteOrder": "big",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-turn-left",
+          "name": "Left Turn Signal",
+          "unit": "",
+          "byteOffset": 0,
+          "bitOffset": 1,
+          "lengthBits": 1,
+          "signedness": "unsigned",
+          "byteOrder": "big",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-turn-right",
+          "name": "Right Turn Signal",
+          "unit": "",
+          "byteOffset": 0,
+          "bitOffset": 2,
+          "lengthBits": 1,
+          "signedness": "unsigned",
+          "byteOrder": "big",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-horn",
+          "name": "Horn",
+          "unit": "",
+          "byteOffset": 0,
+          "bitOffset": 3,
+          "lengthBits": 1,
+          "signedness": "unsigned",
+          "byteOrder": "big",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-driver-door",
+          "name": "Driver Door Open",
+          "unit": "",
+          "byteOffset": 1,
+          "bitOffset": 0,
+          "lengthBits": 1,
+          "signedness": "unsigned",
+          "byteOrder": "big",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-passenger-door",
+          "name": "Passenger Door Open",
+          "unit": "",
+          "byteOffset": 1,
+          "bitOffset": 1,
+          "lengthBits": 1,
+          "signedness": "unsigned",
+          "byteOrder": "big",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-seatbelt",
+          "name": "Driver Seatbelt Latched",
+          "unit": "",
+          "byteOffset": 1,
+          "bitOffset": 2,
+          "lengthBits": 1,
+          "signedness": "unsigned",
+          "byteOrder": "big",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-gear-position",
+          "name": "Gear Position",
+          "unit": "",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 4,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-cabin-temperature",
+          "name": "Cabin Temperature",
+          "unit": "°C",
+          "byteOffset": 3,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": -40
+          }
+        }
+      ],
+      "derivedSignals": [],
+      "canId": "310"
+    },
+    {
+      "id": "ff-184",
+      "name": "Vehicle Position and Motion",
+      "frameLength": 16,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-position-x",
+          "name": "Position X",
+          "unit": "m",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-position-y",
+          "name": "Position Y",
+          "unit": "m",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-position-z",
+          "name": "Position Z",
+          "unit": "m",
+          "byteOffset": 8,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-heading",
+          "name": "Heading",
+          "unit": "deg",
+          "byteOffset": 10,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-yaw-rate",
+          "name": "Yaw Rate",
+          "unit": "deg/s",
+          "byteOffset": 12,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-lateral-accel",
+          "name": "Lateral Acceleration",
+          "unit": "g",
+          "byteOffset": 14,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.001,
+            "lsbText": "0.001",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [
+        {
+          "id": "sig-path-radius",
+          "name": "Path Radius",
+          "unit": "m",
+          "operation": {
+            "type": "expression",
+            "expression": "sqrt([Position X] ^ 2 + [Position Y] ^ 2)"
+          }
+        },
+        {
+          "id": "sig-planar-position",
+          "name": "Planar Position Mean",
+          "unit": "m",
+          "operation": {
+            "type": "expression",
+            "expression": "([Position X] + [Position Y]) / 2"
+          }
+        }
+      ],
+      "canId": "184"
+    },
+    {
+      "id": "ff-18ff50e5",
+      "name": "Environmental Status",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-ambient-can",
+          "name": "Ambient Temperature CAN",
+          "unit": "°C",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": -40
+          }
+        },
+        {
+          "id": "sig-barometric-pressure",
+          "name": "Barometric Pressure",
+          "unit": "kPa",
+          "byteOffset": 1,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-module-voltage",
+          "name": "Module Supply Voltage",
+          "unit": "V",
+          "byteOffset": 3,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-altitude",
+          "name": "Altitude",
+          "unit": "m",
+          "byteOffset": 5,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-environment-counter",
+          "name": "Environment Counter",
+          "unit": "",
+          "byteOffset": 7,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [],
+      "canId": "18FF50E5"
+    },
+    {
+      "id": "ff-5a0x",
+      "name": "ADAS Object Summary",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-object-distance",
+          "name": "Object Distance",
+          "unit": "m",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-relative-speed",
+          "name": "Relative Speed",
+          "unit": "m/s",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-object-angle",
+          "name": "Object Angle",
+          "unit": "deg",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-object-confidence",
+          "name": "Object Confidence",
+          "unit": "%",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.5,
+            "lsbText": "0.5",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-object-valid",
+          "name": "Object Valid",
+          "unit": "",
+          "byteOffset": 7,
+          "bitOffset": 0,
+          "lengthBits": 1,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [
+        {
+          "id": "sig-time-to-collision",
+          "name": "Time To Collision",
+          "unit": "s",
+          "operation": {
+            "type": "expression",
+            "expression": "[Object Distance] / max(-[Relative Speed], 0.1)"
+          }
+        }
+      ],
+      "canId": "5A0x"
+    }
+  ],
+  "plugins": [
+    {
+      "id": "sample.byte-scaler",
+      "version": "1.1.0",
+      "source": ".sigmixa/plugins/byte-scaler",
+      "enabled": true,
+      "configSchemaVersion": "1",
+      "config": {
+        "byteIndex": 10,
+        "factor": 1,
+        "label": "Coolant Raw Byte"
+      }
+    },
+    {
+      "id": "sample.payload-metric",
+      "version": "1.0.0",
+      "source": ".sigmixa/plugins/payload-metric",
+      "enabled": true,
+      "configSchemaVersion": "1",
+      "config": {
+        "mode": "average",
+        "throwOnMarker": true
+      }
+    }
+  ],
+  "pluginBindings": [
+    {
+      "id": "plugin-binding:sample.byte-scaler:ff-2a0",
+      "pluginId": "sample.byte-scaler",
+      "frameId": "ff-2a0",
+      "enabled": true,
+      "automatic": true
+    },
+    {
+      "id": "plugin-binding:sample.payload-metric:ff-2a0",
+      "pluginId": "sample.payload-metric",
+      "frameId": "ff-2a0",
+      "enabled": true,
+      "automatic": true
+    }
+  ],
+  "externalCsvSources": [
+    {
+      "id": "reference-signals",
+      "path": "reference-signals.csv",
+      "fileName": "reference-signals.csv",
+      "timestampColumn": "Time_ms",
+      "timestampUnit": "milliseconds",
+      "valueColumns": [
+        {
+          "column": "Reference Speed",
+          "name": "Reference Speed",
+          "unit": "km/h"
+        },
+        {
+          "column": "Ambient Temperature",
+          "name": "Ambient Temperature",
+          "unit": "°C"
+        }
+      ]
+    }
+  ],
+  "lookupTables": [],
+  "calculations": [],
+  "viewStates": {
+    "frame-definition-columns": {
+      "name": 130,
+      "unit": 75,
+      "byte": 70,
+      "bit": 62,
+      "length": 82,
+      "signed": 100,
+      "endian": 112,
+      "scale": 180,
+      "offset": 90,
+      "actions": 52,
+      "derivedName": 180,
+      "derivedUnit": 90,
+      "derivedType": 160,
+      "definition": 520,
+      "derivedActions": 52
+    },
+    "log-view-default": {
+      "tableSelectedIds": [
+        "sig-speed",
+        "sig-engine-speed",
+        "sig-engine-torque",
+        "sig-mechanical-power",
+        "sig-brake-pressure",
+        "sig-wheel-speed-difference",
+        "sig-headlight",
+        "sig-gear-position",
+        "sig-object-distance",
+        "sig-time-to-collision",
+        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte",
+        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric"
+      ],
+      "tableWidths": {
+        "time": 118,
+        "sig-speed": 130,
+        "sig-engine-speed": 130,
+        "sig-accelerator": 145,
+        "sig-engine-torque": 135,
+        "sig-coolant-temp": 150,
+        "sig-mechanical-power": 140,
+        "sig-brake-pressure": 130,
+        "sig-pedal": 145,
+        "sig-wheel-speed-difference": 180,
+        "sig-headlight": 110,
+        "sig-gear-position": 120,
+        "sig-object-distance": 130,
+        "sig-relative-speed": 130,
+        "sig-time-to-collision": 130,
+        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte": 140,
+        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric": 140
+      },
+      "chartSelectedIds": [
+        "sig-speed",
+        "sig-smoothed-speed",
+        "external:reference-signals:Reference%20Speed",
+        "sig-engine-speed",
+        "sig-engine-torque",
+        "sig-brake-pressure",
+        "sig-temp",
+        "external:reference-signals:Ambient%20Temperature",
+        "sig-yaw-rate",
+        "sig-lateral-accel",
+        "sig-object-distance",
+        "sig-time-to-collision"
+      ],
+      "chartColors": {
+        "sig-speed": "#2563eb",
+        "sig-smoothed-speed": "#0891b2",
+        "external:reference-signals:Reference%20Speed": "#f97316",
+        "sig-engine-speed": "#7c3aed",
+        "sig-accelerator": "#84cc16",
+        "sig-engine-torque": "#dc2626",
+        "sig-mechanical-power": "#eab308",
+        "sig-brake-pressure": "#ef4444",
+        "sig-wheel-speed-fl": "#0ea5e9",
+        "sig-wheel-speed-fr": "#22c55e",
+        "sig-temp": "#a855f7",
+        "sig-ambient-can": "#f59e0b",
+        "external:reference-signals:Ambient%20Temperature": "#16a34a",
+        "sig-yaw-rate": "#ec4899",
+        "sig-lateral-accel": "#14b8a6",
+        "sig-object-distance": "#3b82f6",
+        "sig-relative-speed": "#f43f5e",
+        "sig-time-to-collision": "#8b5cf6",
+        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte": "#7c3aed",
+        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric": "#0891b2"
+      },
+      "chartMode": "raw",
+      "chartPaneWidth": 270,
+      "chartPaneCollapsed": false,
+      "trajectoryXId": "sig-position-x",
+      "trajectoryYId": "sig-position-y",
+      "trajectoryZId": "sig-position-z",
+      "trajectoryInvert": {
+        "x": false,
+        "y": false,
+        "z": false
+      },
+      "trajectoryEqualAspect": true,
+      "trajectoryTrail": "all",
+      "trajectoryTrailSeconds": 10,
+      "trajectorySpeed": 1
+    }
+  }
+}
