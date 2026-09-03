@@ -1,6 +1,6 @@
 # Change Log
 
-## 0.6.0-rc.1
+## 0.7.0 (Pre-Release)
 
 - Renamed the extension and workspace experience to SigMixa.
 - Unified commands, Views, project settings and Plugin SDK names under SigMixa.
