@@ -2,7 +2,7 @@
   "name": "sigmixa",
   "displayName": "SigMixa",
   "description": "Signal-centered CAN log analysis and visualization for Visual Studio Code",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "publisher": "tronics25",
   "license": "MIT",
   "private": true,

@@ -1,5 +1,11 @@
 # Change Log
 
+## 0.8.1
+
+- Added Marketplace screenshots for Frame Definition, RAW Log, Signal Table, Time Series and 3D Trajectory workflows.
+- Updated the Trajectory screenshot showcase to use synchronized vehicle Position X, Y and Z Signals.
+- Excluded workspace-specific `.sigmixa` settings from packaged extensions.
+
 ## 0.8.0
 
 - Added DBC import/export for Frame and Signal definitions, including Intel/Motorola byte order, signedness, Scale/Offset, limits, units and extended CAN IDs.

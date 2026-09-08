@@ -21,6 +21,38 @@ SigMixa imports CAN logs, decodes them into Signals, and provides searchable tab
 - Synchronized 2D/3D Trajectory with axis controls, trails, camera presets and playback
 - Extensible Plugins with configurable Frame bindings and schema-generated settings
 
+## See SigMixa in action
+
+### Define Frames and Signals visually
+
+Configure CAN IDs, frame lengths, bit layouts and Signal decoding rules in one editor, or import the definitions from DBC.
+
+[![SigMixa Frame Definition editor showing a CAN FD bit layout and Signal definitions](media/screenshots/frame-definition.png)](media/screenshots/frame-definition.png)
+
+### Inspect and decode every frame
+
+Search and filter virtualized Classic CAN and CAN FD logs while decoded Signal values remain visible beside the original payload.
+
+[![SigMixa RAW Log showing decoded CAN frames](media/screenshots/raw-log.png)](media/screenshots/raw-log.png)
+
+### Compare decoded Signals as a table
+
+Choose Signals by Frame, inspect their values on independent timestamps and export the visible event rows to CSV.
+
+[![SigMixa Signal Table showing decoded vehicle data](media/screenshots/signal-table.png)](media/screenshots/signal-table.png)
+
+### Explore behavior over time
+
+Plot multiple Signals with distinct colors, switch between actual and normalized scales, then zoom or pan through the capture.
+
+[![SigMixa Time Series chart showing vehicle Signals](media/screenshots/time-series.png)](media/screenshots/time-series.png)
+
+### Replay synchronized trajectories
+
+Map synchronized Signals such as vehicle Position X, Y and Z onto 2D or 3D axes, adjust the camera and trail, and replay the path against log time.
+
+[![SigMixa 3D Trajectory view with playback controls](media/screenshots/trajectory.png)](media/screenshots/trajectory.png)
+
 ## Getting started
 
 1. Install the SigMixa VSIX from **Extensions → … → Install from VSIX…**.
