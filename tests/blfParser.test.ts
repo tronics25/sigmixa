@@ -65,11 +65,63 @@ test('bundled BLF showcase mirrors every supported ASC frame', async () => {
   assert.deepEqual(diagnostics.map((item) => item.code), ['BLF_EXPERIMENTAL']);
 });
 
+test('python-can Classic CAN and CAN_MESSAGE2 fixtures are compatible', () => {
+  for (const name of ['test_CanMessage.blf', 'test_CanMessage2.blf']) {
+    const { frames, diagnostics } = parseFixture(name);
+    assert.equal(frames.length, 2);
+    assert.deepEqual(diagnostics.map((item) => item.code), ['BLF_EXPERIMENTAL']);
+    for (const frame of frames) {
+      assert.ok(Math.abs(frame.timestamp - 2459565876.494607) < 1e-6);
+      assert.deepEqual([frame.channel, frame.direction, frame.canId, frame.extended, frame.dlcCode, frame.dataLength], [0x1111, 'Rx', 0x4444444, false, 15, 8]);
+      assert.deepEqual([...frame.data], [0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc]);
+    }
+  }
+});
+
+test('python-can CAN FD and CAN_FD_MESSAGE_64 fixtures are compatible', () => {
+  const regular = parseFixture('test_CanFdMessage.blf');
+  assert.equal(regular.frames.length, 2);
+  assert.deepEqual([regular.frames[0].channel, regular.frames[0].direction, regular.frames[0].canId, regular.frames[0].dlcCode, regular.frames[0].dataLength], [0x1111, 'Rx', 0x4444444, 15, 64]);
+  assert.deepEqual([...regular.frames[0].data], range(64));
+
+  const fd64 = parseFixture('test_CanFdMessage64.blf');
+  assert.equal(fd64.frames.length, 2);
+  assert.deepEqual([fd64.frames[0].channel, fd64.frames[0].direction, fd64.frames[0].canId, fd64.frames[0].dlcCode, fd64.frames[0].dataLength], [0x11, 'Tx', 0x15555555, 15, 64]);
+  assert.deepEqual([...fd64.frames[0].data], range(64));
+});
+
+test('python-can issue 1905 fixture restores file start time and CANoe-compatible FD64 padding', () => {
+  const { frames, diagnostics } = parseFixture('issue_1905.blf');
+  assert.equal(frames.length, 22);
+  assert.deepEqual(diagnostics.map((item) => item.code), ['BLF_EXPERIMENTAL']);
+  assert.ok(Math.abs(frames[0].timestamp - 1735654183.491113) < 1e-6);
+  assert.deepEqual([frames[0].channel, frames[0].direction, frames[0].canId, frames[0].extended, frames[0].dlcCode, frames[0].dataLength], [7, 'Rx', 0x6a9, false, 15, 64]);
+  assert.deepEqual([...frames[0].data], [...Array(48).fill(0xff), ...Array(16).fill(0)]);
+});
+
+test('an inner object split across python-can-style LogContainers is reassembled', () => {
+  const inner = object(1, classic(2, 0, 0x123, [1, 2, 3]), 42n);
+  const buffer = blfContainers([inner.subarray(0, 21), inner.subarray(21)], true);
+  const frames: CanFrame[] = []; const diagnostics: Diagnostic[] = [];
+  const result = parseBlfBuffer(buffer, { sourceId: 'split.blf', onFrames: (items) => frames.push(...items), onDiagnostics: (items) => diagnostics.push(...items) });
+  assert.equal(result.framesParsed, 1);
+  assert.deepEqual([...frames[0].data], [1, 2, 3]);
+  assert.deepEqual(diagnostics.map((item) => item.code), ['BLF_EXPERIMENTAL']);
+});
+
 function blf(contents: Buffer, compressed: boolean): Buffer {
+  return blfContainers([contents], compressed);
+}
+
+function blfContainers(contents: readonly Buffer[], compressed: boolean): Buffer {
   const fileHeader = Buffer.alloc(144); fileHeader.write('LOGG'); fileHeader.writeUInt32LE(fileHeader.length, 4);
-  const payload = compressed ? zlib.deflateSync(contents) : contents;
-  const container = Buffer.alloc(16 + payload.length); container.writeUInt16LE(compressed ? 2 : 0, 0); container.writeUInt32LE(contents.length, 8); payload.copy(container, 16);
-  return Buffer.concat([fileHeader, object(10, container, 0n)]);
+  return Buffer.concat([fileHeader, ...contents.map((content) => {
+    const payload = compressed ? zlib.deflateSync(content) : content;
+    const container = Buffer.alloc(16 + payload.length); container.writeUInt16LE(compressed ? 2 : 0, 0); container.writeUInt32LE(content.length, 8); payload.copy(container, 16);
+    const size = 16 + container.length; const result = Buffer.alloc(size + size % 4);
+    result.write('LOBJ'); result.writeUInt16LE(16, 4); result.writeUInt16LE(1, 6); result.writeUInt32LE(size, 8); result.writeUInt32LE(10, 12); container.copy(result, 16);
+    return result;
+  })]);
 }
 
 function object(type: number, payload: Buffer, timestamp: bigint, flags = NS): Buffer {
@@ -92,3 +144,9 @@ function fd64(channel: number, direction: number, id: number, dlc: number, data:
 
 function range(length: number): number[] { return Array.from({ length }, (_, index) => index); }
 function align4(value: number): number { return Math.ceil(value / 4) * 4; }
+
+function parseFixture(name: string): { readonly frames: CanFrame[]; readonly diagnostics: Diagnostic[] } {
+  const frames: CanFrame[] = []; const diagnostics: Diagnostic[] = [];
+  parseBlfBuffer(readFileSync(`tests/fixtures/python-can/${name}`), { sourceId: name, onFrames: (items) => frames.push(...items), onDiagnostics: (items) => diagnostics.push(...items) });
+  return { frames, diagnostics };
+}

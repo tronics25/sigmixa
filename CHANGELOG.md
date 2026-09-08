@@ -1,5 +1,14 @@
 # Change Log
 
+## 0.8.0
+
+- Added DBC import/export for Frame and Signal definitions, including Intel/Motorola byte order, signedness, Scale/Offset, limits, units and extended CAN IDs.
+- Improved BLF compatibility using python-can fixtures, including base-header LogContainers, cross-container objects, padding, file start timestamps and CAN FD 64-byte records.
+
+BLF support is verified with python-can compatibility fixtures but remains
+experimental until files produced by multiple CANoe/CANalyzer versions have
+been tested.
+
 ## 0.7.0 (Pre-Release)
 
 - Renamed the extension and workspace experience to SigMixa.
@@ -8,7 +17,3 @@
 - Added frame-local Expression, Lookup Table, and Filter derived Signals.
 - Added External CSV Signals and stateful Plugins.
 - Added incremental ASC and experimental BLF input.
-
-BLF production compatibility is not yet claimed. Real CANoe/CANalyzer files
-from multiple versions will be validated after release; current coverage uses
-independently generated synthetic Golden fixtures.

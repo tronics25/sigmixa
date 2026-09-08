@@ -24,6 +24,8 @@ export interface ManualSignalDefinition {
   readonly signedness: SignalSignedness;
   readonly byteOrder: ByteOrder;
   readonly conversion: ManualConversion;
+  readonly minimum?: number;
+  readonly maximum?: number;
 }
 
 export interface ManualDerivedSignalDefinition {
@@ -165,6 +167,9 @@ export function validateFrameDefinition(frame: ManualFrameDefinition): Validatio
     if (!parsed.valid) add('SIGNAL_LSB_TEXT_INVALID', `${signal.name || signal.id}: ${parsed.error}`, detail);
     else if (Math.abs(parsed.resolution.value - signal.conversion.lsb) > Math.max(1e-15, Math.abs(signal.conversion.lsb) * 1e-12)) add('SIGNAL_LSB_MISMATCH', `${signal.name || signal.id}: stored Scale value does not match its display text.`, detail);
     if (!Number.isFinite(signal.conversion.offset)) add('SIGNAL_OFFSET_INVALID', `${signal.name || signal.id}: offset must be finite.`, detail);
+    if (signal.minimum !== undefined && !Number.isFinite(signal.minimum)) add('SIGNAL_MINIMUM_INVALID', `${signal.name || signal.id}: minimum must be finite or blank.`, detail);
+    if (signal.maximum !== undefined && !Number.isFinite(signal.maximum)) add('SIGNAL_MAXIMUM_INVALID', `${signal.name || signal.id}: maximum must be finite or blank.`, detail);
+    if (signal.minimum !== undefined && signal.maximum !== undefined && signal.minimum > signal.maximum) add('SIGNAL_RANGE_INVALID', `${signal.name || signal.id}: minimum cannot exceed maximum.`, detail);
   }
   const availableNames = new Set(frame.signals.map((signal) => signal.name.trim()).filter(Boolean));
   for (const signal of frame.derivedSignals ?? []) {

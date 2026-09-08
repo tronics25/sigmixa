@@ -14,6 +14,7 @@ SigMixa imports CAN logs, decodes them into Signals, and provides searchable tab
 - Virtualized RAW Log with search, filters, progress, cancellation and diagnostics
 - Resizable columns with Auto Fit and Fit to View
 - Configurable Signal Definitions with Intel/Motorola byte order, signed values, Scale and Offset
+- DBC import/export for CAN Frame and Signal definitions
 - Derived Signals using expressions, lookup tables, low-pass filters and moving averages
 - Signal Table with virtual rows and CSV export
 - Time Series with independent timestamps, colors, zoom, pan and CSV overlays
@@ -27,6 +28,10 @@ SigMixa imports CAN logs, decodes them into Signals, and provides searchable tab
 3. Open the SigMixa icon in the Activity Bar.
 4. Select **LOG FILES → Open CAN Log** and choose an ASC or BLF file.
 5. Add or edit definitions under **CAN FRAMES**, then use RAW Log, Table, Time Series or Trajectory.
+
+Use the database button in **CAN FRAMES** to import `BO_`/`SG_` definitions from
+a DBC file. The export button writes one selected Frame or all registered Frames
+back to DBC. Existing CAN IDs are never overwritten without confirmation.
 
 Project settings are saved in `.sigmixa/project.json` inside the workspace. This file contains Frame and Signal definitions, Plugin registrations, CSV sources and saved view selections.
 
@@ -48,10 +53,11 @@ Open the [`sample`](sample) directory as a VS Code workspace and load `sigmixa-s
 
 ## Current limitations
 
-- BLF support is experimental until files produced by multiple CANoe/CANalyzer versions have been verified.
+- BLF support is verified with python-can compatibility fixtures but remains experimental until files produced by multiple CANoe/CANalyzer versions have been tested.
 - External CSV Signals are available in Time Series, but are not merged into the event-row Table.
 - Trajectory axes must come from one source and have exactly matching timestamps.
 - Plugin configuration uses SigMixa's standard schema editor; Plugin-specific custom views are not supported.
+- DBC multiplexing, negative Scale, value tables, comments and attributes are not yet modeled. Unsupported Signal rows and Derived Signal exports are reported in the **SigMixa DBC** output.
 
 ## License
 

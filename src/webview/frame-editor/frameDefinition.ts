@@ -30,6 +30,8 @@ const columnDefinitions: readonly SizingColumn<ManualSignalDefinition>[] = [
   { id: 'endian', label: 'BYTE ORDER', minWidth: 112, maxWidth: 145, value: (signal) => signal.byteOrder },
   { id: 'scale', label: 'SCALE', minWidth: 130, maxWidth: 220, value: (signal) => scaleFor(signal).lsbText },
   { id: 'offset', label: 'OFFSET', minWidth: 90, maxWidth: 130, value: (signal) => String(scaleFor(signal).offset) },
+  { id: 'minimum', label: 'MIN', minWidth: 85, maxWidth: 130, value: (signal) => signal.minimum === undefined ? '' : String(signal.minimum) },
+  { id: 'maximum', label: 'MAX', minWidth: 85, maxWidth: 130, value: (signal) => signal.maximum === undefined ? '' : String(signal.maximum) },
   { id: 'actions', label: '', minWidth: 52, maxWidth: 52, value: () => '' },
 ];
 
@@ -44,7 +46,7 @@ const derivedColumnDefinitions: readonly SizingColumn<ManualDerivedSignalDefinit
 const saved = (vscode.getState() ?? {}) as { widths?: Record<string, number> };
 let widths: Record<string, number> = {
   name: 150, unit: 80, byte: 72, bit: 64, length: 84, signed: 105, endian: 116,
-  scale: saved.widths?.scale ?? saved.widths?.lsb ?? 170, offset: 94, actions: 52,
+  scale: saved.widths?.scale ?? saved.widths?.lsb ?? 170, offset: 94, minimum: 90, maximum: 90, actions: 52,
   derivedName: 180, derivedUnit: 90, derivedType: 160, definition: saved.widths?.definition ?? saved.widths?.expression ?? 520, derivedActions: 52, ...saved.widths,
 };
 
@@ -150,6 +152,8 @@ function buildSignalTable(value: ManualFrameDefinition): HTMLElement {
       cell(selectInput([['unsigned','Unsigned'],['signed','Signed']], signal.signedness, (next) => updateSignal(signal.id, (current) => ({ ...current, signedness: next as 'unsigned' | 'signed' })))),
       cell(selectInput([['little','Little'],['big','Big']], signal.byteOrder, (next) => updateSignal(signal.id, (current) => ({ ...current, byteOrder: next as 'little' | 'big' })))),
       cell(scaleInput(signal)), cell(offsetInput(signal)),
+      cell(optionalNumberInput(signal.minimum, (next) => updateSignal(signal.id, (current) => ({ ...current, minimum: next })))),
+      cell(optionalNumberInput(signal.maximum, (next) => updateSignal(signal.id, (current) => ({ ...current, maximum: next })))),
       cell(trashButton(`Delete ${signal.name}`, () => { if (frame) updateFrame({ signals: frame.signals.filter((item) => item.id !== signal.id) }); render(); }))
     ); wrap.appendChild(row);
   }
@@ -234,6 +238,7 @@ function filterInput(signal: ManualDerivedSignalDefinition, available: readonly 
 
 function textInput(value: string, change: (value: string) => void): HTMLInputElement { const input = document.createElement('input'); input.value = value; input.addEventListener('change', () => { change(input.value); serverDiagnostics = []; render(); }); return input; }
 function numberInput(value: number, min: number, max: number, change: (value: number) => void): HTMLInputElement { const input = document.createElement('input'); input.type = 'number'; input.min = String(min); input.max = String(max); input.value = String(value); input.addEventListener('change', () => { change(Number(input.value)); serverDiagnostics = []; render(); }); return input; }
+function optionalNumberInput(value: number | undefined, change: (value: number | undefined) => void): HTMLInputElement { const input = document.createElement('input'); input.type = 'number'; input.value = value === undefined ? '' : String(value); input.addEventListener('change', () => { change(input.value.trim() ? Number(input.value) : undefined); serverDiagnostics = []; render(); }); return input; }
 function selectInput(options: readonly (readonly [string,string])[], value: string, change: (value: string) => void): HTMLSelectElement { const select = document.createElement('select'); for (const [id,label] of options) { const option = document.createElement('option'); option.value = id; option.textContent = label; option.selected = id === value; select.appendChild(option); } select.addEventListener('change', () => { change(select.value); serverDiagnostics = []; render(); }); return select; }
 function scaleFor(signal: ManualSignalDefinition): { readonly type: 'scale-offset'; readonly lsb: number; readonly lsbText: string; readonly offset: number } { return signal.conversion; }
 function scaleInput(signal: ManualSignalDefinition): HTMLElement { const conversion = scaleFor(signal); const container = document.createElement('div'); const wrap = document.createElement('div'); wrap.className = 'resolution'; const factor = resolutionStepFactor(conversion.lsbText); const input = document.createElement('input'); input.value = conversion.lsbText; input.setAttribute('aria-label', `Scale for ${signal.name}`); const parsed = parseResolution(input.value); if (!parsed.valid) input.setAttribute('aria-invalid','true'); input.addEventListener('change', () => { const result = parseResolution(input.value); updateSignal(signal.id, (current) => ({ ...current, conversion: { ...scaleFor(current), lsbText: input.value, ...(result.valid ? { lsb: result.resolution.value } : {}) } })); render(); }); const spinner = document.createElement('span'); spinner.className = 'scale-spinner'; const up = iconButton('chevron-up', `Scale ×${factor}`, () => stepScale(signal, 'increase')); const down = iconButton('chevron-down', `Scale ÷${factor}`, () => stepScale(signal, 'decrease')); spinner.append(up, down); wrap.append(input, spinner); container.appendChild(wrap); if (!parsed.valid) { const error = document.createElement('span'); error.className = 'inline-error'; error.textContent = parsed.error; container.appendChild(error); } return container; }

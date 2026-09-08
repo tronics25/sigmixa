@@ -34,7 +34,7 @@ compressed.copy(container, 16);
 const fileHeader = Buffer.alloc(144);
 fileHeader.write('LOGG');
 fileHeader.writeUInt32LE(fileHeader.length, 4);
-writeFileSync(output, Buffer.concat([fileHeader, object(10, container, 0n)]));
+writeFileSync(output, Buffer.concat([fileHeader, containerObject(container)]));
 console.log(`Generated ${output}: ${objects.length} frames matching the ASC showcase`);
 
 function parseClassic(fields) {
@@ -87,6 +87,15 @@ function object(type, payload, time) {
   result.writeUInt32LE(size, 8); result.writeUInt32LE(type, 12);
   result.writeUInt32LE(0x2, 16); result.writeBigUInt64LE(time, 24);
   payload.copy(result, 32);
+  return result;
+}
+
+function containerObject(payload) {
+  const size = 16 + payload.length;
+  const result = Buffer.alloc(size + size % 4);
+  result.write('LOBJ'); result.writeUInt16LE(16, 4); result.writeUInt16LE(1, 6);
+  result.writeUInt32LE(size, 8); result.writeUInt32LE(10, 12);
+  payload.copy(result, 16);
   return result;
 }
 

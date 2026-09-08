@@ -2,7 +2,7 @@
   "name": "sigmixa",
   "displayName": "SigMixa",
   "description": "Signal-centered CAN log analysis and visualization for Visual Studio Code",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "tronics25",
   "license": "MIT",
   "private": true,
@@ -83,6 +83,18 @@
         "icon": "$(add)"
       },
       {
+        "command": "sigmixa.importDbc",
+        "title": "Import Frame Definitions from DBC",
+        "category": "SigMixa",
+        "icon": "$(database)"
+      },
+      {
+        "command": "sigmixa.exportDbc",
+        "title": "Export Frame Definitions to DBC",
+        "category": "SigMixa",
+        "icon": "$(export)"
+      },
+      {
         "command": "sigmixa.openFrame",
         "title": "Open CAN Frame Definition",
         "category": "SigMixa"
@@ -124,6 +136,16 @@
           "group": "navigation"
         },
         {
+          "command": "sigmixa.importDbc",
+          "when": "view == sigmixa.frames",
+          "group": "navigation@2"
+        },
+        {
+          "command": "sigmixa.exportDbc",
+          "when": "view == sigmixa.frames",
+          "group": "navigation@3"
+        },
+        {
           "command": "sigmixa.addPlugin",
           "when": "view == sigmixa.plugins",
           "group": "navigation"
@@ -134,6 +156,11 @@
           "command": "sigmixa.deleteFrame",
           "when": "view == sigmixa.frames && viewItem == sigmixa.manualFrame",
           "group": "inline"
+        },
+        {
+          "command": "sigmixa.exportDbc",
+          "when": "view == sigmixa.frames",
+          "group": "navigation"
         }
       ]
     }
@@ -142,7 +169,7 @@
     "sample:generate": "node scripts/generate-base-showcase.mjs && node scripts/add-plugin-diagnostic.mjs && node scripts/generate-reference-signals.mjs && node scripts/add-trajectory-data.mjs && node scripts/generate-showcase-blf.mjs && node scripts/generate-sample-project.mjs",
     "vscode:prepublish": "npm run compile",
     "compile": "node esbuild.js",
-    "package:vsix": "npm run verify && npx --offline @vscode/vsce package --pre-release --no-dependencies --out outputs/sigmixa-${npm_package_version}.vsix",
+    "package:vsix": "npm run verify && npx --offline @vscode/vsce package --no-dependencies --out outputs/sigmixa-${npm_package_version}.vsix",
     "watch": "node esbuild.js --watch",
     "check-types": "tsc --noEmit -p ./",
     "check-boundaries": "node scripts/check-boundaries.mjs",

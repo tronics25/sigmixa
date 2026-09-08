@@ -13,11 +13,14 @@ const NANOSECONDS = 0x2;
 const EXTENDED_ID = 0x80000000;
 const TX_FLAG = 0x1;
 
-interface ObjectHeader {
+interface BaseObjectHeader {
   readonly offset: number;
   readonly headerSize: number;
   readonly objectSize: number;
   readonly objectType: number;
+}
+
+interface ObjectHeader extends BaseObjectHeader {
   readonly flags: number;
   readonly timestamp: bigint;
 }
@@ -48,14 +51,16 @@ export interface BlfParseOptions {
 
 /**
  * Experimental Vector BLF reader based on the public object layouts used by
- * interoperable OSS readers. Golden tests use independently-built binary
- * fixtures; validation against files emitted by Vector tools remains pending.
+ * interoperable OSS readers. Compatibility tests include python-can fixtures;
+ * validation against a broader set of production files remains ongoing.
  */
 export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfParseSummary {
   let framesParsed = 0;
   let diagnosticCount = 0;
   let sequence = 0;
   let bytesRead = 0;
+  let containerTail: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  const startTimestamp = fileStartTimestamp(buffer);
   const pendingFrames: CanFrame[] = [];
   const flushFrames = () => { if (pendingFrames.length) options.onFrames(pendingFrames.splice(0)); };
   const report = (code: string, severity: Diagnostic['severity'], message: string, offset?: number, details?: Diagnostic['details']) => {
@@ -67,7 +72,7 @@ export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfPar
     }]);
   };
 
-  report('BLF_EXPERIMENTAL', 'info', 'BLF support is validated with synthetic Golden fixtures only; verification against CANoe/CANalyzer files is still pending.');
+  report('BLF_EXPERIMENTAL', 'info', 'BLF support is validated with python-can compatibility fixtures; verification against a broader set of CANoe/CANalyzer files is still ongoing.');
 
   if (buffer.length < 8 || buffer.toString('ascii', 0, 4) !== 'LOGG') {
     report('BLF_SIGNATURE', 'error', 'The file does not contain a Vector BLF LOGG signature.', 0);
@@ -79,9 +84,9 @@ export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfPar
     return summary(buffer.length, bytesRead, framesParsed, diagnosticCount, false);
   }
 
-  let offset = align4(fileHeaderSize);
+  let offset = findObjectOffset(buffer, fileHeaderSize) ?? fileHeaderSize;
   while (offset + 16 <= buffer.length && !options.signal?.aborted) {
-    const header = readObjectHeader(buffer, offset);
+    const header = readBaseObjectHeader(buffer, offset);
     if (!header) {
       report('BLF_OBJECT_HEADER', 'error', 'A BLF object header is invalid; parsing stopped to avoid misreading later bytes.', offset);
       break;
@@ -109,7 +114,8 @@ export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfPar
           if (expectedSize && contents.length !== expectedSize) {
             report('BLF_CONTAINER_SIZE', 'warning', 'The expanded LogContainer size differs from the declared size.', offset, { expectedSize, actualSize: contents.length });
           }
-          parseObjects(contents, options, report, (frame) => {
+          const combined = containerTail.length ? Buffer.concat([containerTail, contents]) : contents;
+          containerTail = parseObjects(combined, startTimestamp, options, report, (frame) => {
             const normalized = { ...frame, id: `${options.sourceId}:blf:${sequence++}`, sourceId: options.sourceId };
             pendingFrames.push(normalized);
             if (pendingFrames.length >= 1000) flushFrames();
@@ -122,9 +128,15 @@ export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfPar
     }
     bytesRead = Math.min(buffer.length, offset + header.objectSize);
     options.onProgress?.({ framesParsed, bytesRead, totalBytes: buffer.length });
-    offset += align4(header.objectSize);
+    const objectEnd = offset + header.objectSize;
+    const nextOffset = findObjectOffset(buffer, objectEnd);
+    if (nextOffset === undefined) { offset = objectEnd; break; }
+    offset = nextOffset;
   }
-  if (!options.signal?.aborted && offset < buffer.length && buffer.length - offset < 16 && buffer.subarray(offset).some((byte) => byte !== 0)) {
+  if (!options.signal?.aborted && containerTail.some((byte) => byte !== 0)) {
+    report('BLF_INNER_OBJECT_TRUNCATED', 'error', 'The final LogContainer ends with an incomplete BLF object.', undefined, { remainingBytes: containerTail.length });
+  }
+  if (!options.signal?.aborted && offset < buffer.length && buffer.subarray(offset).some((byte) => byte !== 0)) {
     report('BLF_TRAILING_BYTES', 'warning', 'Non-padding bytes remain after the last complete BLF object.', offset);
   }
   flushFrames();
@@ -139,78 +151,103 @@ export async function parseBlfFile(filePath: string, options: BlfParseOptions): 
 
 function parseObjects(
   buffer: Buffer,
+  startTimestamp: number,
   options: BlfParseOptions,
   report: (code: string, severity: Diagnostic['severity'], message: string, offset?: number, details?: Diagnostic['details']) => void,
   append: (frame: Omit<CanFrame, 'id' | 'sourceId'>) => void
-): void {
+): Buffer {
   let offset = 0;
-  while (offset + 16 <= buffer.length && !options.signal?.aborted) {
+  while (!options.signal?.aborted) {
+    if (offset + 16 > buffer.length) return buffer.subarray(offset);
+    const objectOffset = findObjectOffset(buffer, offset);
+    if (objectOffset === undefined) {
+      if (buffer.length - offset > 7) report('BLF_INNER_OBJECT_HEADER', 'error', 'An object inside a LogContainer is invalid; this container was stopped.', offset);
+      return buffer.subarray(offset);
+    }
+    offset = objectOffset;
+    const base = readBaseObjectHeader(buffer, offset);
+    if (!base) {
+      report('BLF_INNER_OBJECT_HEADER', 'error', 'An object inside a LogContainer is invalid; this container was stopped.', offset);
+      return Buffer.alloc(0);
+    }
+    if (offset + base.objectSize > buffer.length) {
+      return buffer.subarray(offset);
+    }
     const header = readObjectHeader(buffer, offset);
     if (!header) {
-      report('BLF_INNER_OBJECT_HEADER', 'error', 'An object inside a LogContainer is invalid; this container was stopped.', offset);
-      break;
-    }
-    if (offset + header.objectSize > buffer.length) {
-      report('BLF_INNER_OBJECT_TRUNCATED', 'error', 'An object inside a LogContainer is truncated; this container was stopped.', offset, { objectType: header.objectType });
-      break;
+      report('BLF_INNER_OBJECT_HEADER', 'error', 'An object inside a LogContainer has an unsupported timed header and was skipped.', offset, { objectType: base.objectType });
+      offset += base.objectSize;
+      continue;
     }
     const frame = header.objectType === CAN_MESSAGE || header.objectType === CAN_MESSAGE_2
-      ? classicFrame(buffer, header)
+      ? classicFrame(buffer, header, startTimestamp)
       : header.objectType === CAN_FD_MESSAGE
-        ? fdFrame(buffer, header)
+        ? fdFrame(buffer, header, startTimestamp)
         : header.objectType === CAN_FD_MESSAGE_64
-          ? fd64Frame(buffer, header)
+          ? fd64Frame(buffer, header, startTimestamp)
           : undefined;
     if (frame === null) report('BLF_MESSAGE_TRUNCATED', 'warning', `BLF CAN object ${header.objectType} is shorter than its public layout and was skipped.`, offset, { objectType: header.objectType });
     else if (frame) append(frame);
-    offset += align4(header.objectSize);
+    offset += header.objectSize;
   }
+  return buffer.subarray(offset);
 }
 
-function classicFrame(buffer: Buffer, header: ObjectHeader): Omit<CanFrame, 'id' | 'sourceId'> | null {
+function classicFrame(buffer: Buffer, header: ObjectHeader, startTimestamp: number): Omit<CanFrame, 'id' | 'sourceId'> | null {
   const p = header.offset + header.headerSize;
   if (p + 16 > header.offset + header.objectSize) return null;
   const dlcCode = buffer.readUInt8(p + 3);
   const id = decodeCanId(buffer.readUInt32LE(p + 4));
   const dataLength = Math.min(dlcCode, 8);
-  return frame(header, id, buffer.readUInt16LE(p), buffer.readUInt8(p + 2) & TX_FLAG ? 'Tx' : 'Rx', dlcCode, buffer.subarray(p + 8, p + 8 + dataLength));
+  return frame(header, startTimestamp, id, buffer.readUInt16LE(p), buffer.readUInt8(p + 2) & TX_FLAG ? 'Tx' : 'Rx', dlcCode, buffer.subarray(p + 8, p + 8 + dataLength));
 }
 
-function fdFrame(buffer: Buffer, header: ObjectHeader): Omit<CanFrame, 'id' | 'sourceId'> | null {
+function fdFrame(buffer: Buffer, header: ObjectHeader, startTimestamp: number): Omit<CanFrame, 'id' | 'sourceId'> | null {
   const p = header.offset + header.headerSize;
   if (p + 84 > header.offset + header.objectSize) return null;
   const dlcCode = buffer.readUInt8(p + 3);
   const validDataBytes = Math.min(buffer.readUInt8(p + 14), 64);
-  return frame(header, decodeCanId(buffer.readUInt32LE(p + 4)), buffer.readUInt16LE(p), buffer.readUInt8(p + 2) & TX_FLAG ? 'Tx' : 'Rx', dlcCode, buffer.subarray(p + 20, p + 20 + validDataBytes));
+  return frame(header, startTimestamp, decodeCanId(buffer.readUInt32LE(p + 4)), buffer.readUInt16LE(p), buffer.readUInt8(p + 2) & TX_FLAG ? 'Tx' : 'Rx', dlcCode, buffer.subarray(p + 20, p + 20 + validDataBytes));
 }
 
 // Public CAN_FD_MESSAGE_64 layout: <BBBBLLLLLLLHBBL>, followed by payload.
-function fd64Frame(buffer: Buffer, header: ObjectHeader): Omit<CanFrame, 'id' | 'sourceId'> | null {
+function fd64Frame(buffer: Buffer, header: ObjectHeader, startTimestamp: number): Omit<CanFrame, 'id' | 'sourceId'> | null {
   const p = header.offset + header.headerSize;
   if (p + 40 > header.offset + header.objectSize) return null;
   const dlcCode = buffer.readUInt8(p + 1);
   const validDataBytes = Math.min(buffer.readUInt8(p + 2), 64);
-  const payloadEnd = p + 40 + validDataBytes;
-  if (payloadEnd > header.offset + header.objectSize) return null;
-  return frame(header, decodeCanId(buffer.readUInt32LE(p + 4)), buffer.readUInt8(p), buffer.readUInt8(p + 34) & TX_FLAG ? 'Tx' : 'Rx', dlcCode, buffer.subarray(p + 40, payloadEnd));
+  const extDataOffset = buffer.readUInt8(p + 35);
+  const dataBoundary = header.offset + (extDataOffset || header.objectSize);
+  const availableBytes = Math.max(0, Math.min(header.offset + header.objectSize, dataBoundary) - (p + 40));
+  const dataLength = Math.min(validDataBytes, availableBytes);
+  const data = Buffer.alloc(validDataBytes);
+  buffer.copy(data, 0, p + 40, p + 40 + dataLength);
+  return frame(header, startTimestamp, decodeCanId(buffer.readUInt32LE(p + 4)), buffer.readUInt8(p), buffer.readUInt8(p + 34) & TX_FLAG ? 'Tx' : 'Rx', dlcCode, data);
 }
 
-function frame(header: ObjectHeader, id: { canId: number; extended: boolean }, channel: number, direction: 'Rx' | 'Tx', dlcCode: number, bytes: Uint8Array): Omit<CanFrame, 'id' | 'sourceId'> {
+function frame(header: ObjectHeader, startTimestamp: number, id: { canId: number; extended: boolean }, channel: number, direction: 'Rx' | 'Tx', dlcCode: number, bytes: Uint8Array): Omit<CanFrame, 'id' | 'sourceId'> {
   const data = Uint8Array.from(bytes);
-  return { timestamp: timestampSeconds(header.timestamp, header.flags), ...id, direction, channel, dlcCode: Math.min(dlcCode, 15), dataLength: data.length, data };
+  return { timestamp: startTimestamp + timestampSeconds(header.timestamp, header.flags), ...id, direction, channel, dlcCode: Math.min(dlcCode, 15), dataLength: data.length, data };
+}
+
+function readBaseObjectHeader(buffer: Buffer, offset: number): BaseObjectHeader | undefined {
+  if (offset + 16 > buffer.length || buffer.toString('ascii', offset, offset + 4) !== 'LOBJ') return undefined;
+  const headerSize = buffer.readUInt16LE(offset + 4);
+  const objectSize = buffer.readUInt32LE(offset + 8);
+  const objectType = buffer.readUInt32LE(offset + 12);
+  if (headerSize < 16 || objectSize < headerSize) return undefined;
+  return { offset, headerSize, objectSize, objectType };
 }
 
 function readObjectHeader(buffer: Buffer, offset: number): ObjectHeader | undefined {
-  if (offset + 16 > buffer.length || buffer.toString('ascii', offset, offset + 4) !== 'LOBJ') return undefined;
-  const headerSize = buffer.readUInt16LE(offset + 4);
+  const base = readBaseObjectHeader(buffer, offset);
+  if (!base) return undefined;
   const version = buffer.readUInt16LE(offset + 6);
-  const objectSize = buffer.readUInt32LE(offset + 8);
-  const objectType = buffer.readUInt32LE(offset + 12);
   const minimum = version === 1 ? 32 : version === 2 ? 40 : Number.MAX_SAFE_INTEGER;
-  if (headerSize < minimum || objectSize < headerSize || offset + headerSize > buffer.length) return undefined;
+  if (base.headerSize < minimum) return undefined;
   const flags = buffer.readUInt32LE(offset + 16);
   const timestamp = buffer.readBigUInt64LE(offset + 24);
-  return { offset, headerSize, objectSize, objectType, flags, timestamp };
+  return { ...base, flags, timestamp };
 }
 
 function timestampSeconds(value: bigint, flags: number): number {
@@ -223,7 +260,19 @@ function decodeCanId(raw: number): { canId: number; extended: boolean } {
   return { canId: raw & 0x1fffffff, extended: (raw & EXTENDED_ID) !== 0 };
 }
 
-function align4(value: number): number { return Math.ceil(value / 4) * 4; }
+function findObjectOffset(buffer: Buffer, offset: number): number | undefined {
+  const found = buffer.indexOf('LOBJ', offset, 'ascii');
+  return found >= offset && found < Math.min(buffer.length, offset + 8) ? found : undefined;
+}
+
+function fileStartTimestamp(buffer: Buffer): number {
+  if (buffer.length < 72 || buffer.readUInt32LE(4) < 72) return 0;
+  const year = buffer.readUInt16LE(40); const month = buffer.readUInt16LE(42); const day = buffer.readUInt16LE(46);
+  const hour = buffer.readUInt16LE(48); const minute = buffer.readUInt16LE(50); const second = buffer.readUInt16LE(52); const milliseconds = buffer.readUInt16LE(54);
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59 || milliseconds > 999) return 0;
+  const value = Date.UTC(year, month - 1, day, hour, minute, second, milliseconds) / 1000;
+  return Number.isFinite(value) ? value : 0;
+}
 
 function summary(totalBytes: number, bytesRead: number, framesParsed: number, diagnostics: number, cancelled: boolean): BlfParseSummary {
   return { totalBytes, bytesRead, linesRead: 0, framesParsed, diagnostics, cancelled, experimental: true };

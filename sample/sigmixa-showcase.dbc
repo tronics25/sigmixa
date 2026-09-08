@@ -1,0 +1,18 @@
+VERSION "SigMixa showcase"
+
+NS_ :
+
+BS_:
+
+BU_: VehicleECU Dashboard
+
+BO_ 672 Vehicle_Powertrain_Status: 8 VehicleECU
+ SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|250] "km/h" Dashboard
+ SG_ BatteryVoltage : 16|16@1+ (0.001,0) [0|65.535] "V" Dashboard
+ SG_ EngineSpeed : 32|16@1+ (0.25,0) [0|16000] "rpm" Dashboard
+ SG_ EngineTorque : 48|16@1- (0.1,0) [-3276.8|3276.7] "Nm" Dashboard
+
+BO_ 2566869221 Environmental_Status: 12 VehicleECU
+ SG_ AmbientTemperature : 7|16@0- (0.1,-40) [-40|150] "degC" Dashboard
+ SG_ AtmosphericPressure : 23|16@0+ (0.125,0) [0|8191.875] "kPa" Dashboard
+ SG_ SupplyVoltage : 32|16@1+ (0.001,0) [0|65.535] "V" Dashboard

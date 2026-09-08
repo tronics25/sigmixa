@@ -11,6 +11,7 @@ The vehicle accelerates, cruises, turns, brakes and stops. Mixed-rate frames pro
 - RAW Log search, filters and deliberately malformed rows for diagnostics
 - Unsigned, signed and packed-bit Signal Definitions
 - Scale and Offset conversions
+- DBC import/export with Intel, Motorola, signed and extended-ID definitions
 - Expression, Lookup Table, Low-pass and Moving Average Derived Signals
 - Multiple Plugins bound to the same Frame, including one intentional isolated Plugin error
 - External CSV overlay from `reference-signals.csv`
@@ -30,3 +31,8 @@ The vehicle accelerates, cruises, turns, brakes and stops. Mixed-rate frames pro
 The `.sigmixa/project.json` file already contains useful Signal definitions and view selections. The Plugin settings use fictional data.
 
 `sigmixa-showcase.blf` contains the same supported CAN data as the ASC showcase for checking the experimental BLF importer. ASC-only malformed rows and remote frames are not represented in BLF.
+
+`sigmixa-showcase.dbc` can be imported from the **CAN FRAMES** database button.
+It contains standard and extended Frames plus Intel/Little Endian and
+Motorola/Big Endian Signals. Export the imported Frames to verify the supported
+definitions round-trip through DBC.
