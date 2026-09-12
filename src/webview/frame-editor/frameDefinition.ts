@@ -69,7 +69,7 @@ let widths: Record<string, number> = {
 
 function derivedSummary(signal: ManualDerivedSignalDefinition): string {
   if (signal.operation.type === 'expression') return signal.operation.expression;
-  if (signal.operation.type === 'lookup') return `${signal.operation.input} · ${t('Linear interpolation', '線形補完')} · ${signal.operation.points.length} points · ${signal.operation.outOfRange}`;
+  if (signal.operation.type === 'lookup') return `${signal.operation.input} · ${t('Linear interpolation', '線形補間')} · ${signal.operation.points.length} points · ${signal.operation.outOfRange}`;
   return `${signal.operation.input} · ${signal.operation.filter} · ${signal.operation.timeSeconds}s`;
 }
 
@@ -261,7 +261,7 @@ function buildDerivedTable(value: ManualFrameDefinition): HTMLElement {
     row.append(
       cell(textInput(signal.name, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, name: next })))),
       cell(textInput(signal.unit, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, unit: next })))),
-      cell(selectInput([['expression',t('Expression','計算式')],['lookup',t('Lookup Table','ルックアップテーブル')],['filter',t('Filter','フィルター')]], signal.operation.type, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, operation: operationForType(next as ManualDerivedSignalDefinition['operation']['type'], current.operation, available) })))),
+      cell(selectInput([['expression',t('Expression','計算式')],['lookup',t('Linear interpolation','線形補間')],['filter',t('Filter','フィルター')]], signal.operation.type, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, operation: operationForType(next as ManualDerivedSignalDefinition['operation']['type'], current.operation, available) })))),
       cell(derivedDefinitionInput(signal, available)),
       cell(trashButton(`Delete ${signal.name}`, () => { if (frame) updateFrame({ derivedSignals: (frame.derivedSignals ?? []).filter((item) => item.id !== signal.id) }); render(); }))
     ); wrap.appendChild(row);
@@ -293,7 +293,6 @@ function lookupInput(signal: ManualDerivedSignalDefinition, available: readonly 
   const controls = document.createElement('div'); controls.className = 'definition-controls';
   controls.append(
     signalNameSelect(available, operation.input, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, operation: current.operation.type === 'lookup' ? { ...current.operation, input: next } : current.operation }))),
-    selectInput([['linear',t('Linear interpolation','線形補完')]], 'linear', () => undefined),
     selectInput([['clamp',t('Clamp outside range','範囲外を端値に固定')],['error',t('Error outside range','範囲外をエラー')]], operation.outOfRange, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, operation: current.operation.type === 'lookup' ? { ...current.operation, outOfRange: next as 'clamp' | 'error' } : current.operation })))
   );
   const table = document.createElement('div'); table.className = 'lookup-table';

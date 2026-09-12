@@ -1,5 +1,9 @@
 # Change Log
 
+## 0.9.1
+
+- Renamed the Derived Signal Lookup Table type to Linear interpolation and removed the redundant single-option interpolation selector.
+
 ## 0.9.0
 
 - Added CAN Frame multiplexing with per-Signal activation values and ranges, DBC import/export, and Multiplexer-aware decoding and bit-layout previews.

@@ -2,7 +2,7 @@
   "name": "sigmixa",
   "displayName": "SigMixa",
   "description": "%sigmixa.description%",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "publisher": "tronics25",
   "license": "MIT",
   "private": true,

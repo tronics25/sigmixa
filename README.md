@@ -15,7 +15,7 @@ SigMixa imports CAN logs, decodes them into Signals, and provides searchable tab
 - Resizable columns with Auto Fit and Fit to View
 - Configurable Signal Definitions with Intel/Motorola byte order, signed values, Scale/Offset and Multiplexing
 - DBC import/export for CAN Frame and Signal definitions
-- Derived Signals using expressions, lookup tables, low-pass filters and moving averages
+- Derived Signals using expressions, linear interpolation, low-pass filters and moving averages
 - Signal Table with virtual rows and CSV export
 - Time Series with independent timestamps, colors, zoom, pan and CSV overlays
 - Synchronized 2D/3D Trajectory with axis controls, trails, camera presets and playback
