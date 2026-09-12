@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createManualSignal, normalizeFrameDefinition, validateFrameDefinition, type ManualFrameDefinition, type ManualSignalDefinition } from '../src/core/manual/manualDefinition';
+import { createManualSignal, formatMultiplexerActivation, normalizeFrameDefinition, orderSignalsByDataPosition, parseMultiplexerActivation, validateFrameDefinition, type ManualFrameDefinition, type ManualSignalDefinition } from '../src/core/manual/manualDefinition';
 
 function signal(patch: Partial<ManualSignalDefinition> = {}): ManualSignalDefinition {
   return { id: 'signal-1', name: ' Value ', unit: ' V ', byteOffset: 0, bitOffset: 0, lengthBits: 8, signedness: 'unsigned', byteOrder: 'little', conversion: { type: 'scale-offset', lsb: 1 / 128, lsbText: '1/128', offset: 0 }, ...patch };
@@ -18,6 +18,16 @@ test('new signals inherit previous byte order and first signal defaults to littl
   assert.equal(createManualSignal('next', signal({ byteOrder: 'big' })).byteOrder, 'big');
 });
 
+test('editor ordering follows byte and bit position while preserving ties', () => {
+  const ordered = orderSignalsByDataPosition([
+    signal({ id: 'byte-2', byteOffset: 2, bitOffset: 0 }),
+    signal({ id: 'byte-0-bit-4-first', byteOffset: 0, bitOffset: 4 }),
+    signal({ id: 'byte-0-bit-1', byteOffset: 0, bitOffset: 1 }),
+    signal({ id: 'byte-0-bit-4-second', byteOffset: 0, bitOffset: 4 }),
+  ]);
+  assert.deepEqual(ordered.map((item) => item.id), ['byte-0-bit-1', 'byte-0-bit-4-first', 'byte-0-bit-4-second', 'byte-2']);
+});
+
 test('validation reports overlap, frame overflow, invalid lengths, and inconsistent LSB text', () => {
   const result = validateFrameDefinition(frame([
     signal(),
@@ -31,6 +41,18 @@ test('frame length accepts Classic and legal CAN FD payload sizes only', () => {
   assert.equal(validateFrameDefinition({ ...frame([]), frameLength: 0 }).valid, true);
   assert.equal(validateFrameDefinition({ ...frame([]), frameLength: 12 }).valid, true);
   assert.ok(validateFrameDefinition({ ...frame([]), frameLength: 9 }).diagnostics.some((item) => item.code === 'FRAME_LENGTH_RANGE'));
+});
+
+test('Multiplexer activation accepts zero, values, and ranges while allowing disjoint bit reuse', () => {
+  assert.deepEqual(parseMultiplexerActivation('0, 2-4'), { type: 'conditional', ranges: [{ from: 0, to: 0 }, { from: 2, to: 4 }] });
+  assert.equal(formatMultiplexerActivation({ ...signal(), multiplexing: parseMultiplexerActivation('0, 2-4') }), '0, 2-4');
+  const multiplexed = frame([
+    signal({ id: 'mux', name: 'Mode', lengthBits: 4, multiplexing: { type: 'multiplexer' } }),
+    signal({ id: 'value-a', name: 'A', byteOffset: 1, multiplexing: { type: 'conditional', ranges: [{ from: 0, to: 1 }] } }),
+    signal({ id: 'value-b', name: 'B', byteOffset: 1, multiplexing: { type: 'conditional', ranges: [{ from: 2, to: 4 }] } }),
+  ]);
+  assert.deepEqual(validateFrameDefinition({ ...multiplexed, multiplexing: true }).diagnostics, []);
+  assert.ok(validateFrameDefinition({ ...multiplexed, multiplexing: true, signals: [...multiplexed.signals.slice(0, 2), { ...multiplexed.signals[2], multiplexing: { type: 'conditional', ranges: [{ from: 1, to: 2 }] } }] }).diagnostics.some((item) => item.code === 'SIGNAL_OVERLAP'));
 });
 
 test('Derived Signals may reference extracted and only earlier Derived Signals', () => {

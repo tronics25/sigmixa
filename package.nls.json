@@ -1,0 +1,15 @@
+{
+  "sigmixa.description": "Signal-centered CAN log analysis and visualization for Visual Studio Code",
+  "sigmixa.views.logFiles": "LOG FILES",
+  "sigmixa.views.frames": "CAN FRAMES",
+  "sigmixa.views.plugins": "PLUGINS",
+  "sigmixa.command.openLog": "Open CAN Log",
+  "sigmixa.command.addFrame": "Register CAN Frame",
+  "sigmixa.command.importDbc": "Import Frame Definitions from DBC",
+  "sigmixa.command.exportDbc": "Export Frame Definitions to DBC",
+  "sigmixa.command.openFrame": "Open CAN Frame Definition",
+  "sigmixa.command.deleteFrame": "Delete CAN Frame",
+  "sigmixa.command.addPlugin": "Register Plugin",
+  "sigmixa.command.openPlugin": "Open Plugin Configuration",
+  "sigmixa.command.refresh": "Refresh"
+}

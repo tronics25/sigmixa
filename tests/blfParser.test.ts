@@ -18,7 +18,7 @@ test('synthetic BLF golden fixture imports Classic, CAN FD, FD64, direction, cha
   const buffer = blf(inner, true);
   const frames: CanFrame[] = []; const diagnostics: Diagnostic[] = [];
   const result = parseBlfBuffer(buffer, { sourceId: 'golden.blf', onFrames: (items) => frames.push(...items), onDiagnostics: (items) => diagnostics.push(...items) });
-  assert.equal(result.framesParsed, 3); assert.equal(result.cancelled, false); assert.deepEqual(diagnostics.map((item) => item.code), ['BLF_EXPERIMENTAL']);
+  assert.equal(result.framesParsed, 3); assert.equal(result.cancelled, false); assert.deepEqual(diagnostics, []);
   assert.deepEqual(frames.map((frame) => [frame.timestamp, frame.channel, frame.direction, frame.canId, frame.extended, frame.dlcCode, frame.dataLength]), [
     [12.5, 2, 'Rx', 0x123, false, 3, 3],
     [12.75, 3, 'Tx', 0x18ff50e5, true, 9, 12],
@@ -62,14 +62,14 @@ test('bundled BLF showcase mirrors every supported ASC frame', async () => {
   });
   assert.equal(result.framesParsed, 3038); assert.equal(frames.length, result.framesParsed);
   assert.deepEqual(frames.map(comparable), supportedAscFrames.map(comparable));
-  assert.deepEqual(diagnostics.map((item) => item.code), ['BLF_EXPERIMENTAL']);
+  assert.deepEqual(diagnostics, []);
 });
 
 test('python-can Classic CAN and CAN_MESSAGE2 fixtures are compatible', () => {
   for (const name of ['test_CanMessage.blf', 'test_CanMessage2.blf']) {
     const { frames, diagnostics } = parseFixture(name);
     assert.equal(frames.length, 2);
-    assert.deepEqual(diagnostics.map((item) => item.code), ['BLF_EXPERIMENTAL']);
+    assert.deepEqual(diagnostics, []);
     for (const frame of frames) {
       assert.ok(Math.abs(frame.timestamp - 2459565876.494607) < 1e-6);
       assert.deepEqual([frame.channel, frame.direction, frame.canId, frame.extended, frame.dlcCode, frame.dataLength], [0x1111, 'Rx', 0x4444444, false, 15, 8]);
@@ -93,7 +93,7 @@ test('python-can CAN FD and CAN_FD_MESSAGE_64 fixtures are compatible', () => {
 test('python-can issue 1905 fixture restores file start time and CANoe-compatible FD64 padding', () => {
   const { frames, diagnostics } = parseFixture('issue_1905.blf');
   assert.equal(frames.length, 22);
-  assert.deepEqual(diagnostics.map((item) => item.code), ['BLF_EXPERIMENTAL']);
+  assert.deepEqual(diagnostics, []);
   assert.ok(Math.abs(frames[0].timestamp - 1735654183.491113) < 1e-6);
   assert.deepEqual([frames[0].channel, frames[0].direction, frames[0].canId, frames[0].extended, frames[0].dlcCode, frames[0].dataLength], [7, 'Rx', 0x6a9, false, 15, 64]);
   assert.deepEqual([...frames[0].data], [...Array(48).fill(0xff), ...Array(16).fill(0)]);
@@ -106,7 +106,7 @@ test('an inner object split across python-can-style LogContainers is reassembled
   const result = parseBlfBuffer(buffer, { sourceId: 'split.blf', onFrames: (items) => frames.push(...items), onDiagnostics: (items) => diagnostics.push(...items) });
   assert.equal(result.framesParsed, 1);
   assert.deepEqual([...frames[0].data], [1, 2, 3]);
-  assert.deepEqual(diagnostics.map((item) => item.code), ['BLF_EXPERIMENTAL']);
+  assert.deepEqual(diagnostics, []);
 });
 
 function blf(contents: Buffer, compressed: boolean): Buffer {

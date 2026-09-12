@@ -1,5 +1,6 @@
 import type { SignalDefinition } from '../../core/signal/signal';
 import type { SignalGroupDto } from '../../extension/editors/rawLogProtocol';
+import { t } from './i18n';
 
 /** Curated graph colors shared by automatic assignment and the compact picker. */
 export const SIGNAL_COLOR_PRESETS = [
@@ -44,12 +45,12 @@ export class SignalSelector {
     const previousScrollTop = scrollContainer.scrollTop;
     const restoreScroll = () => { scrollContainer.scrollTop = Math.min(previousScrollTop, Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight)); };
     host.replaceChildren(); host.className = 'signal-selector';
-    const search = document.createElement('input'); search.type = 'search'; search.placeholder = 'Search Signals…'; search.value = this.search; search.setAttribute('aria-label', 'Search Signals');
+    const search = document.createElement('input'); search.type = 'search'; search.placeholder = t('Search Signals…', 'Signalを検索…'); search.value = this.search; search.setAttribute('aria-label', t('Search Signals', 'Signalを検索'));
     search.addEventListener('input', () => { this.search = search.value; this.render(); requestAnimationFrame(() => { const next = host.querySelector<HTMLInputElement>('input[type=search]'); next?.focus(); next?.setSelectionRange(this.search.length, this.search.length); }); });
     const actions = document.createElement('div'); actions.className = 'selector-actions';
-    const selectAll = button('Select all', () => this.toggleAll(true)); const clear = button('Clear all', () => this.toggleAll(false)); actions.append(selectAll, clear); host.append(search, actions);
+    const selectAll = button(t('Select all', 'すべて選択'), () => this.toggleAll(true)); const clear = button(t('Clear all', 'すべて解除'), () => this.toggleAll(false)); actions.append(selectAll, clear); host.append(search, actions);
     const visible = this.visibleGroups();
-    if (!visible.length) { const empty = document.createElement('p'); empty.className = 'muted'; empty.textContent = 'No matching Signals.'; host.appendChild(empty); restoreScroll(); return; }
+    if (!visible.length) { const empty = document.createElement('p'); empty.className = 'muted'; empty.textContent = t('No matching Signals.', '一致するSignalはありません。'); host.appendChild(empty); restoreScroll(); return; }
     const nameCounts = new Map<string, number>();
     for (const definition of this.definitions.values()) nameCounts.set(definition.name, (nameCounts.get(definition.name) ?? 0) + 1);
     for (const group of visible) {
@@ -101,7 +102,7 @@ export class SignalSelector {
     const current = this.options.colors?.get(id) ?? SIGNAL_COLOR_PRESETS[Math.abs(hash(id)) % SIGNAL_COLOR_PRESETS.length];
     const signalName = this.definitions.get(id)?.name ?? 'Signal';
     const control = document.createElement('button'); control.type = 'button'; control.className = 'color-button'; control.style.backgroundColor = current;
-    control.title = `Choose color for ${signalName}`; control.setAttribute('aria-label', `Choose color for ${signalName}`); control.setAttribute('aria-haspopup', 'dialog'); control.setAttribute('aria-expanded', 'false');
+    control.title = t(`Choose color for ${signalName}`, `${signalName}の色を選択`); control.setAttribute('aria-label', control.title); control.setAttribute('aria-haspopup', 'dialog'); control.setAttribute('aria-expanded', 'false');
     control.addEventListener('click', (event) => {
       event.preventDefault(); event.stopPropagation();
       if (this.closeColorPopup) { this.closeColorPopup(); return; }
@@ -112,14 +113,14 @@ export class SignalSelector {
 
   private removeSignalButton(definition: SignalDefinition, group: SignalGroupDto): HTMLButtonElement {
     const control = document.createElement('button'); control.type = 'button'; control.className = 'remove-source';
-    control.title = `Remove ${definition.name}`; control.setAttribute('aria-label', `Remove ${definition.name}`);
+    control.title = t(`Remove ${definition.name}`, `${definition.name}を削除`); control.setAttribute('aria-label', control.title);
     const icon = document.createElement('i'); icon.className = 'codicon codicon-trash'; icon.setAttribute('aria-hidden', 'true'); control.appendChild(icon);
     control.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); this.options.onRemoveSignal?.(definition, group); });
     return control;
   }
 
   private openColorPopup(id: string, current: string, control: HTMLButtonElement): void {
-    const popup = document.createElement('div'); popup.className = 'color-popup'; popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', 'Signal color presets');
+    const popup = document.createElement('div'); popup.className = 'color-popup'; popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', t('Signal color presets', 'Signalの色プリセット'));
     const swatches = SIGNAL_COLOR_PRESETS.map((color) => {
       const swatch = document.createElement('button'); swatch.type = 'button'; swatch.className = 'color-swatch'; swatch.style.backgroundColor = color; swatch.title = color;
       swatch.setAttribute('aria-label', `Use ${color}`); swatch.setAttribute('aria-pressed', String(color.toLowerCase() === current.toLowerCase()));

@@ -191,6 +191,10 @@ function record(value: unknown): Record<string, unknown> {
 
 function coerceSignal(value: unknown): ManualSignalDefinition {
   const signal = record(value);
+  const multiplexingValue = record(signal.multiplexing);
+  const multiplexing: ManualSignalDefinition['multiplexing'] = multiplexingValue.type === 'multiplexer' ? { type: 'multiplexer' }
+    : multiplexingValue.type === 'conditional' ? { type: 'conditional', ranges: Array.isArray(multiplexingValue.ranges) ? multiplexingValue.ranges.map((item) => { const range = record(item); return { from: Number(range.from), to: Number(range.to) }; }) : [] }
+    : undefined;
   const conversionValue = record(signal.conversion);
   const isScaleOffset = conversionValue.type === 'scale-offset';
   const conversion = isScaleOffset
@@ -208,6 +212,7 @@ function coerceSignal(value: unknown): ManualSignalDefinition {
     conversion,
     minimum: signal.minimum === undefined ? undefined : Number(signal.minimum),
     maximum: signal.maximum === undefined ? undefined : Number(signal.maximum),
+    multiplexing,
   };
 }
 
@@ -241,6 +246,7 @@ function coerceFrame(value: unknown): ManualFrameDefinition {
     extended: parsedCanId?.extended ?? frame.extended === true,
     name: String(frame.name ?? ''),
     frameLength: Number(frame.frameLength ?? 8),
+    multiplexing: frame.multiplexing === true || undefined,
     signals: Array.isArray(frame.signals) ? frame.signals.map(coerceSignal) : [],
     derivedSignals: Array.isArray(frame.derivedSignals) ? frame.derivedSignals.map(coerceDerivedSignal) : [],
     origin,

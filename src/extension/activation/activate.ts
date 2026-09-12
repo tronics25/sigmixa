@@ -47,7 +47,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       { webviewOptions: { retainContextWhenHidden: true } }
     ),
     vscode.commands.registerCommand('sigmixa.openLog', async () => {
-      const selected = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'CAN logs (ASC and experimental BLF)': ['asc', 'blf'] } });
+      const selected = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'CAN logs (ASC and BLF)': ['asc', 'blf'] } });
       if (!selected?.[0]) return;
       await vscode.commands.executeCommand('vscode.openWith', selected[0], 'sigmixa.rawLog');
       await logFiles.add(selected[0].fsPath);

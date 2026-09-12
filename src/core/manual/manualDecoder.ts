@@ -4,7 +4,7 @@ import type { CanFrame } from '../frame/canFrame';
 import type { SignalDefinition, SignalSample } from '../signal/signal';
 import { extractBits } from './bits';
 import type { ManualFrameDefinition, ManualSignalDefinition } from './manualDefinition';
-import { signalDefinitionFor } from './manualDefinition';
+import { isSignalActive, signalDefinitionFor } from './manualDefinition';
 import type { ManualDerivedSignalDefinition } from './manualDefinition';
 import { compileExpression, type CompiledExpression } from '../calculation/expression';
 
@@ -35,7 +35,14 @@ export function decodeManualFrame(frame: CanFrame, definition: ManualFrameDefini
   const diagnostics: Diagnostic[] = [];
   const values: Record<string, number> = {};
   if (!frameMatchesDefinition(frame, definition)) return { decoded, diagnostics };
+  const multiplexer = definition.multiplexing ? definition.signals.find((signal) => signal.multiplexing?.type === 'multiplexer') : undefined;
+  let multiplexerValue: number | undefined;
+  if (multiplexer) {
+    try { multiplexerValue = Number(extractBits(frame.data, multiplexer.byteOffset, multiplexer.bitOffset, multiplexer.lengthBits, multiplexer.byteOrder, 'unsigned')); }
+    catch { /* The normal Signal pass reports the short-frame diagnostic. */ }
+  }
   for (const signal of definition.signals) {
+    if (!isSignalActive(signal, multiplexerValue)) continue;
     const location = { sourceId: frame.sourceId, frameId: frame.id };
     let raw: bigint;
     try {

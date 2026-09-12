@@ -3,6 +3,7 @@ import type { SignalDefinition, SignalSample } from '../../core/signal/signal';
 import type { ExternalCsvPreviewDto, LogViewState, SignalSeriesDto, ToExtensionMessage, ToWebviewMessage } from '../../extension/editors/rawLogProtocol';
 import { SIGNAL_COLOR_PRESETS, SignalSelector } from '../shared/signalSelector';
 import type { TimelineController } from '../shared/timelineController';
+import { t } from '../shared/i18n';
 
 export class TimeSeriesView {
   private readonly selected: Set<string>;
@@ -40,7 +41,7 @@ export class TimeSeriesView {
     this.selected = new Set(initial?.chartSelectedIds ?? []);
     this.colors = new Map(Object.entries(initial?.chartColors ?? {}));
     this.mode = initial?.chartMode ?? 'raw'; this.paneWidth = initial?.chartPaneWidth ?? 250; this.paneCollapsed = initial?.chartPaneCollapsed ?? false;
-    host.innerHTML = `<div class="chart-layout"><aside class="signal-pane chart-pane"><div class="chart-source-actions"><button class="import-external-csv">+ External CSV…</button></div><div class="external-import-host"></div><div class="chart-selector"></div></aside><div class="pane-separator"></div><section class="signal-main chart-main"><div class="view-toolbar"><button class="pane-toggle">Signals</button><span>Display:</span><button class="mode-raw">Actual</button><button class="mode-normalized">Normalized 0–100%</button><span class="spacer"></span><span class="chart-status muted">Select Signals</span><button class="analysis-cancel" hidden>Cancel analysis</button></div><div class="view-toolbar"><div class="segmented"><button class="zoom-out">−</button><button class="zoom-in">+</button></div><button class="zoom-reset">Reset Zoom</button><span class="muted">Wheel / trackpad: pan</span></div><div class="chart-legend"></div><div class="chart-canvas-wrap"><canvas></canvas><div class="chart-tooltip" hidden></div></div></section></div>`;
+    host.innerHTML = `<div class="chart-layout"><aside class="signal-pane chart-pane"><div class="chart-source-actions"><button class="import-external-csv">+ ${t('External CSV…', '外部CSV…')}</button></div><div class="external-import-host"></div><div class="chart-selector"></div></aside><div class="pane-separator"></div><section class="signal-main chart-main"><div class="view-toolbar"><button class="pane-toggle">${t('Signals', 'Signal')}</button><span>${t('Display:', '表示:')}</span><button class="mode-raw">${t('Actual', '実値')}</button><button class="mode-normalized">${t('Normalized 0–100%', '正規化 0–100%')}</button><span class="spacer"></span><span class="chart-status muted">${t('Select Signals', 'Signalを選択')}</span><button class="analysis-cancel" hidden>${t('Cancel analysis', '解析を中止')}</button></div><div class="view-toolbar"><div class="segmented"><button class="zoom-out">−</button><button class="zoom-in">+</button></div><button class="zoom-reset">${t('Reset Zoom', 'ズームをリセット')}</button><span class="muted">${t('Wheel / trackpad: pan', 'ホイール／トラックパッド: 移動')}</span></div><div class="chart-legend"></div><div class="chart-canvas-wrap"><canvas></canvas><div class="chart-tooltip" hidden></div></div></section></div>`;
     this.canvas = host.querySelector('canvas')!; this.tooltip = host.querySelector('.chart-tooltip')!; this.pane = host.querySelector('.chart-pane')!; this.separator = host.querySelector('.pane-separator')!;
     this.selector = new SignalSelector({
       host: host.querySelector('.chart-selector')!, selected: this.selected, colors: this.colors,
@@ -75,12 +76,12 @@ export class TimeSeriesView {
     } else if (message.type === 'signalSeries' && message.requestId === this.latestSeriesRequest) {
       this.series = message.series; this.fullRange = message.fullRange;
       if (!this.viewRange || !this.fullRange || this.viewRange.end < this.fullRange.start || this.viewRange.start > this.fullRange.end) this.viewRange = this.fullRange;
-      this.host.querySelector('.chart-status')!.textContent = `${this.series.length} series · ${this.series.reduce((sum, item) => sum + item.totalSamplesInRange, 0).toLocaleString()} source samples`;
+      this.host.querySelector('.chart-status')!.textContent = `${this.series.length} ${t('series', '系列')} · ${this.series.reduce((sum, item) => sum + item.totalSamplesInRange, 0).toLocaleString()} ${t('source samples', '元サンプル')}`;
       this.draw();
     } else if (message.type === 'nearestSignals' && message.requestId === this.latestNearestRequest) {
       this.nearestValues = message.values; this.showTooltip(); this.draw();
     } else if (message.type === 'analysisProgress') {
-      const percent = message.total ? Math.floor(message.processed / message.total * 100) : 100; this.host.querySelector('.chart-status')!.textContent = `Analyzing ${percent}% · ${message.processed.toLocaleString()} frames`; (this.host.querySelector('.analysis-cancel') as HTMLButtonElement).hidden = false;
+      const percent = message.total ? Math.floor(message.processed / message.total * 100) : 100; this.host.querySelector('.chart-status')!.textContent = `${t('Analyzing', '解析中')} ${percent}% · ${message.processed.toLocaleString()} ${t('frames', 'フレーム')}`; (this.host.querySelector('.analysis-cancel') as HTMLButtonElement).hidden = false;
     } else if (message.type === 'analysisComplete') {
       (this.host.querySelector('.analysis-cancel') as HTMLButtonElement).hidden = true; if (!message.cancelled && this.visible && this.selected.size) this.requestSeries();
     } else if (message.type === 'definitionsChanged') {
@@ -99,18 +100,18 @@ export class TimeSeriesView {
     if (!pending) return;
     const box = document.createElement('section'); box.className = 'external-import-card';
     const title = document.createElement('strong'); title.textContent = pending.fileName; title.title = pending.fileName; box.appendChild(title);
-    box.appendChild(fieldLabel('Timestamp column'));
-    const timestamp = document.createElement('select'); timestamp.setAttribute('aria-label', 'CSV Timestamp column');
+    box.appendChild(fieldLabel(t('Timestamp column', '時刻列')));
+    const timestamp = document.createElement('select'); timestamp.setAttribute('aria-label', t('CSV Timestamp column', 'CSVの時刻列'));
     for (const header of pending.headers) { const option = document.createElement('option'); option.value = header; option.textContent = header || '(unnamed column)'; option.selected = header === pending.timestampColumn; timestamp.appendChild(option); }
     timestamp.addEventListener('change', () => { pending.timestampColumn = timestamp.value; pending.selectedColumns.delete(timestamp.value); this.renderImportWizard(); }); box.appendChild(timestamp);
-    box.appendChild(fieldLabel('Timestamp unit'));
-    const timestampUnit = document.createElement('select'); timestampUnit.setAttribute('aria-label', 'CSV Timestamp unit');
+    box.appendChild(fieldLabel(t('Timestamp unit', '時刻単位')));
+    const timestampUnit = document.createElement('select'); timestampUnit.setAttribute('aria-label', t('CSV Timestamp unit', 'CSVの時刻単位'));
     for (const [value, label] of [['seconds', 'seconds (s)'], ['milliseconds', 'milliseconds (ms)'], ['microseconds', 'microseconds (µs)']] as const) { const option = document.createElement('option'); option.value = value; option.textContent = label; option.selected = value === pending.timestampUnit; timestampUnit.appendChild(option); }
     timestampUnit.addEventListener('change', () => { pending.timestampUnit = timestampUnit.value as typeof pending.timestampUnit; }); box.appendChild(timestampUnit);
-    const columnsLabel = fieldLabel('Value columns and units'); columnsLabel.classList.add('external-columns-label'); box.appendChild(columnsLabel);
+    const columnsLabel = fieldLabel(t('Value columns and units', '値の列と単位')); columnsLabel.classList.add('external-columns-label'); box.appendChild(columnsLabel);
     const columns = document.createElement('div'); columns.className = 'external-column-list'; box.appendChild(columns);
     const actions = document.createElement('div'); actions.className = 'external-import-actions';
-    const add = document.createElement('button'); add.type = 'button'; add.className = 'primary'; add.textContent = 'Add to graph';
+    const add = document.createElement('button'); add.type = 'button'; add.className = 'primary'; add.textContent = t('Add to graph', 'グラフへ追加');
     const updateAdd = () => { add.disabled = pending.selectedColumns.size === 0 || !pending.timestampColumn; }; updateAdd();
     for (const header of pending.headers) {
       if (header === pending.timestampColumn) continue;
@@ -118,16 +119,16 @@ export class TimeSeriesView {
       const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = pending.selectedColumns.has(header);
       checkbox.addEventListener('change', () => { checkbox.checked ? pending.selectedColumns.add(header) : pending.selectedColumns.delete(header); updateAdd(); });
       const name = document.createElement('span'); name.textContent = header || '(unnamed column)'; name.title = name.textContent; label.append(checkbox, name);
-      const unit = document.createElement('input'); unit.type = 'text'; unit.placeholder = 'Unit'; unit.setAttribute('aria-label', `Unit for ${header}`); unit.value = pending.units.get(header) ?? '';
+      const unit = document.createElement('input'); unit.type = 'text'; unit.placeholder = t('Unit', '単位'); unit.setAttribute('aria-label', t(`Unit for ${header}`, `${header}の単位`)); unit.value = pending.units.get(header) ?? '';
       unit.addEventListener('input', () => pending.units.set(header, unit.value)); row.append(label, unit); columns.appendChild(row);
     }
     add.addEventListener('click', () => {
       this.post({ type: 'commitExternalCsv', importId: pending.importId, timestampColumn: pending.timestampColumn, timestampUnit: pending.timestampUnit, valueColumns: [...pending.selectedColumns].map((column) => ({ column, name: column, unit: pending.units.get(column)?.trim() || undefined })) });
       this.pendingImport = undefined; this.renderImportWizard();
     });
-    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancel'; cancel.addEventListener('click', () => { this.post({ type: 'cancelExternalCsvImport', importId: pending.importId }); this.pendingImport = undefined; this.renderImportWizard(); });
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = t('Cancel', 'キャンセル'); cancel.addEventListener('click', () => { this.post({ type: 'cancelExternalCsvImport', importId: pending.importId }); this.pendingImport = undefined; this.renderImportWizard(); });
     actions.append(add, cancel); box.appendChild(actions);
-    const note = document.createElement('p'); note.className = 'muted external-import-note'; note.textContent = 'Original timestamps are retained and normalized to seconds.'; box.appendChild(note); host.appendChild(box);
+    const note = document.createElement('p'); note.className = 'muted external-import-note'; note.textContent = t('Original timestamps are retained and normalized to seconds.', '元の時刻を保持し、秒単位へ正規化します。'); box.appendChild(note); host.appendChild(box);
   }
   private removeExternalSignal(definition: SignalDefinition, group: { readonly remove?: { readonly type: 'external-csv'; readonly sourceId: string } }): void {
     if (group.remove?.type !== 'external-csv' || definition.source.type !== 'external-csv') return;

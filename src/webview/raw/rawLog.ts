@@ -8,6 +8,7 @@ import { TimeSeriesView } from '../timeseries/timeSeriesView';
 import { TrajectoryView } from '../trajectory/trajectoryView';
 import { TimelineController } from '../shared/timelineController';
 import { computeVirtualRange } from '../shared/virtualization';
+import { t } from '../shared/i18n';
 
 declare function acquireVsCodeApi(): { postMessage(message: ToExtensionMessage): void; getState(): unknown; setState(value: unknown): void };
 
@@ -69,22 +70,22 @@ app.innerHTML = `
   .chart-source-actions{display:grid;gap:6px;padding:8px 8px 0}.chart-source-actions button{width:100%}
   .remove-source .codicon{font-size:16px}.external-import-host{padding:0 8px}.external-import-card{margin-top:6px;padding:8px;border:1px solid var(--vscode-panel-border);border-radius:4px;background:var(--vscode-sideBar-background,var(--vscode-editor-background));font-size:12px}.external-import-card>strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:7px}.external-field-label{display:block;margin:7px 0 3px;color:var(--vscode-descriptionForeground)}.external-import-card>select{width:100%}.external-columns-label{margin-top:9px}.external-column-list{max-height:170px;overflow:auto}.external-column-row{display:grid;grid-template-columns:minmax(0,1fr) 66px;gap:6px;align-items:center;padding:2px 0}.external-column-row label{display:flex;gap:5px;align-items:center;min-width:0;cursor:pointer}.external-column-row label span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.external-column-row input[type=text]{width:66px;min-width:0}.external-import-actions{display:flex;gap:6px;margin-top:8px}.external-import-actions button{flex:1}.external-import-actions button:disabled{opacity:.55;cursor:default}.external-import-note{margin:7px 0 0;line-height:1.3}
 </style>
-<nav class="tabs" aria-label="Log views"><button class="tab active" data-view="raw-view">Raw Log</button><button class="tab" data-view="table-view">Table</button><button class="tab" data-view="timeseries-view">Time Series</button><button class="tab" data-view="trajectory-view">Trajectory</button></nav>
+<nav class="tabs" aria-label="${t('Log views', 'ログ表示')}"><button class="tab active" data-view="raw-view">${t('Raw Log', 'RAWログ')}</button><button class="tab" data-view="table-view">${t('Table', 'テーブル')}</button><button class="tab" data-view="timeseries-view">${t('Time Series', '時系列')}</button><button class="tab" data-view="trajectory-view">${t('Trajectory', '軌跡')}</button></nav>
 <section id="raw-view" class="view"><div class="toolbar">
-  <input id="search" class="grow" type="search" placeholder="Search CAN ID or payload bytes" aria-label="Search raw log">
-  <input id="can-id" size="10" placeholder="CAN ID" aria-label="Filter by CAN ID">
-  <select id="direction" aria-label="Filter by direction"><option value="">Rx + Tx</option><option>Rx</option><option>Tx</option></select>
-  <select id="decoded" aria-label="Filter by decode status"><option value="">All frames</option><option value="true">Decoded</option><option value="false">Raw only</option></select>
-  <input id="channel" type="number" min="0" size="4" placeholder="CH" aria-label="Filter by channel">
-  <input id="time-start" type="number" step="any" size="8" placeholder="From (s)" aria-label="Filter start time">
-  <input id="time-end" type="number" step="any" size="8" placeholder="To (s)" aria-label="Filter end time">
-  <button id="auto-fit" title="Measure a bounded representative sample">Auto Fit</button>
-  <button id="fit-view">Fit to View</button>
-  <button id="cancel">Cancel parsing</button>
-  <span id="status" class="status">Opening…</span>
+  <input id="search" class="grow" type="search" placeholder="${t('Search CAN ID or payload bytes', 'CAN IDまたはデータを検索')}" aria-label="${t('Search raw log', 'RAWログを検索')}">
+  <input id="can-id" size="10" placeholder="CAN ID" aria-label="${t('Filter by CAN ID', 'CAN IDで絞り込み')}">
+  <select id="direction" aria-label="${t('Filter by direction', '送受信方向で絞り込み')}"><option value="">Rx + Tx</option><option>Rx</option><option>Tx</option></select>
+  <select id="decoded" aria-label="${t('Filter by decode status', 'デコード状態で絞り込み')}"><option value="">${t('All frames', 'すべてのフレーム')}</option><option value="true">${t('Decoded', 'デコード済み')}</option><option value="false">${t('Raw only', 'RAWのみ')}</option></select>
+  <input id="channel" type="number" min="0" size="4" placeholder="CH" aria-label="${t('Filter by channel', 'チャンネルで絞り込み')}">
+  <input id="time-start" type="number" step="any" size="8" placeholder="${t('From (s)', '開始 (秒)')}" aria-label="${t('Filter start time', '開始時刻で絞り込み')}">
+  <input id="time-end" type="number" step="any" size="8" placeholder="${t('To (s)', '終了 (秒)')}" aria-label="${t('Filter end time', '終了時刻で絞り込み')}">
+  <button id="auto-fit" title="${t('Measure a bounded representative sample', '代表データから列幅を調整')}">${t('Auto Fit', '自動調整')}</button>
+  <button id="fit-view">${t('Fit to View', '表示幅に合わせる')}</button>
+  <button id="cancel">${t('Cancel parsing', '解析を中止')}</button>
+  <span id="status" class="status">${t('Opening…', '読み込み中…')}</span>
 </div>
 <div id="grid" class="grid" role="table" aria-rowcount="0" aria-colcount="8"><div id="header" class="header" role="row"></div><div id="sizer" class="sizer"><div id="window" class="window"></div></div></div>
-<details id="diagnostics"><summary>Diagnostics (0)</summary><div id="diag-list"></div></details></section>
+<details id="diagnostics"><summary>${t('Diagnostics', '診断')} (0)</summary><div id="diag-list"></div></details></section>
 <section id="table-view" class="view" hidden></section><section id="timeseries-view" class="view" hidden></section><section id="trajectory-view" class="view" hidden></section><div id="context-menu" class="context-menu" hidden></div>`;
 
 const grid = document.getElementById('grid')!;
@@ -133,7 +134,7 @@ function draw(): void {
   windowEl.style.transform = `translateY(${range.start * ROW_HEIGHT}px)`; windowEl.replaceChildren();
   for (let index = range.start; index < range.end; index++) {
     const row = rows.get(index); const rowEl = document.createElement('div'); rowEl.className = `row${row?.diagnostics.length ? ' row-warning' : ''}`; rowEl.style.gridTemplateColumns = template(); rowEl.setAttribute('role', 'row');
-    const values = row ? displayValues(row) : ['', '', 'Loading…', '', '', '', '', ''];
+    const values = row ? displayValues(row) : ['', '', t('Loading…', '読み込み中…'), '', '', '', '', ''];
     values.forEach((value, columnIndex) => {
       const cell = document.createElement('div'); cell.className = `cell${columnIndex === 1 && row ? ` dir-${row.direction}` : ''}`; cell.title = columnIndex === 3 && row?.diagnostics.length ? `${value || 'Unnamed frame'} · ${row.diagnostics.map((item) => item.message).join(' · ')}` : value; cell.setAttribute('role', 'cell');
       if (columnIndex === 7 && row?.decoded) for (const tag of value.split('  ·  ')) { const chip = document.createElement('span'); chip.className = 'tag'; chip.textContent = tag; cell.appendChild(chip); }
@@ -190,7 +191,7 @@ function measure(text: string): number {
 let autoFitTarget: string | undefined;
 function requestAutoFit(target?: string): void { autoFitTarget = target; vscode.postMessage({ type: 'autoFitSampleRequest', requestId: ++requestId, filter }); }
 function showDiagnostics(): void {
-  document.querySelector('#diagnostics summary')!.textContent = `Diagnostics (${parserDiagnosticTotal + rowDiagnostics.size})`;
+  document.querySelector('#diagnostics summary')!.textContent = `${t('Diagnostics', '診断')} (${parserDiagnosticTotal + rowDiagnostics.size})`;
   const list = document.getElementById('diag-list')!; list.replaceChildren();
   const combined = [...latestDiagnostics, ...rowDiagnostics.values()].slice(-200);
   for (const item of combined) { const line = document.createElement('div'); line.className = `diag diag-${item.severity}`; line.textContent = `${item.severity.toUpperCase()} ${item.code}${item.location?.line ? ` · line ${item.location.line}` : ''}: ${item.message}`; list.appendChild(line); }
@@ -203,7 +204,7 @@ function openOrRegister(row: RawRowDto): void {
 
 function showContextMenu(row: RawRowDto, x: number, y: number): void {
   const menu = document.getElementById('context-menu')!; menu.replaceChildren(); menu.hidden = false; menu.style.left = `${x}px`; menu.style.top = `${y}px`;
-  const action = document.createElement('button'); action.textContent = row.definitionId ? 'Open Frame Definition' : 'Register CAN Frame'; action.addEventListener('click', () => { menu.hidden = true; openOrRegister(row); }); menu.appendChild(action);
+  const action = document.createElement('button'); action.textContent = row.definitionId ? t('Open Frame Definition', 'フレーム定義を開く') : t('Register CAN Frame', 'CANフレームを登録'); action.addEventListener('click', () => { menu.hidden = true; openOrRegister(row); }); menu.appendChild(action);
 }
 
 function saveLogViewState(partial: Partial<LogViewState>): void {
@@ -234,7 +235,7 @@ function activateView(id: string): void {
 window.addEventListener('message', (event: MessageEvent<ToWebviewMessage>) => {
   const message = event.data;
   tableView?.handle(message); timeSeriesView?.handle(message); trajectoryView?.handle(message);
-  if (message.type === 'init') { initializeSignalViews(message.viewState); parsing = message.parsing; cancelButton.hidden = !parsing; statusEl.textContent = parsing ? `${message.fileName} · parsing ${message.frames.toLocaleString()} frames` : `${message.frames.toLocaleString()} frames · ${message.diagnostics} diagnostics`; requestRange(0, PAGE_SIZE, true); }
+  if (message.type === 'init') { initializeSignalViews(message.viewState); parsing = message.parsing; cancelButton.hidden = !parsing; statusEl.textContent = parsing ? `${message.fileName} · ${t('parsing', '解析中')} ${message.frames.toLocaleString()} ${t('frames', 'フレーム')}` : `${message.frames.toLocaleString()} ${t('frames', 'フレーム')} · ${message.diagnostics} ${t('diagnostics', '件の診断')}`; requestRange(0, PAGE_SIZE, true); }
   else if (message.type === 'page') {
     if (message.requestId !== latestPageRequestId) return;
     total = message.total;
@@ -254,8 +255,8 @@ window.addEventListener('message', (event: MessageEvent<ToWebviewMessage>) => {
     draw();
     showDiagnostics();
   }
-  else if (message.type === 'progress') { parsing = true; cancelButton.hidden = false; const percent = message.totalBytes ? Math.floor(message.bytesRead / message.totalBytes * 100) : 0; statusEl.textContent = `Parsing ${percent}% · ${message.frames.toLocaleString()} frames`; requestRange(Math.floor(grid.scrollTop / ROW_HEIGHT), Math.floor(grid.scrollTop / ROW_HEIGHT) + PAGE_SIZE, true); }
-  else if (message.type === 'parseComplete') { parsing = false; cancelButton.hidden = true; statusEl.textContent = `${message.frames.toLocaleString()} frames${message.cancelled ? ' · cancelled' : ''} · ${message.diagnostics} diagnostics`; requestRange(0, PAGE_SIZE, true); }
+  else if (message.type === 'progress') { parsing = true; cancelButton.hidden = false; const percent = message.totalBytes ? Math.floor(message.bytesRead / message.totalBytes * 100) : 0; statusEl.textContent = `${t('Parsing', '解析中')} ${percent}% · ${message.frames.toLocaleString()} ${t('frames', 'フレーム')}`; requestRange(Math.floor(grid.scrollTop / ROW_HEIGHT), Math.floor(grid.scrollTop / ROW_HEIGHT) + PAGE_SIZE, true); }
+  else if (message.type === 'parseComplete') { parsing = false; cancelButton.hidden = true; statusEl.textContent = `${message.frames.toLocaleString()} ${t('frames', 'フレーム')}${message.cancelled ? ` · ${t('cancelled', '中止')}` : ''} · ${message.diagnostics} ${t('diagnostics', '件の診断')}`; requestRange(0, PAGE_SIZE, true); }
   else if (message.type === 'diagnostics') {
     parserDiagnosticTotal = message.total;
     latestDiagnostics.push(...message.diagnostics);
@@ -277,7 +278,7 @@ document.getElementById('time-start')!.addEventListener('input', updateFilter);
 document.getElementById('time-end')!.addEventListener('input', updateFilter);
 document.getElementById('auto-fit')!.addEventListener('click', () => requestAutoFit());
 document.getElementById('fit-view')!.addEventListener('click', () => { widths = { ...widths, ...fitColumnsToView(columns, widths, grid.clientWidth) }; applyWidths(); persist(); });
-cancelButton.addEventListener('click', () => { vscode.postMessage({ type: 'cancelParsing' }); cancelButton.disabled = true; statusEl.textContent = 'Cancelling…'; });
+cancelButton.addEventListener('click', () => { vscode.postMessage({ type: 'cancelParsing' }); cancelButton.disabled = true; statusEl.textContent = t('Cancelling…', '中止しています…'); });
 document.addEventListener('click', () => { (document.getElementById('context-menu') as HTMLElement).hidden = true; });
 document.querySelectorAll<HTMLElement>('.tab').forEach((tab) => tab.addEventListener('click', () => activateView(tab.dataset.view ?? 'raw-view')));
 

@@ -26,7 +26,10 @@ export interface ManualSignalDefinition {
   readonly conversion: ManualConversion;
   readonly minimum?: number;
   readonly maximum?: number;
+  readonly multiplexing?: { readonly type: 'multiplexer' } | { readonly type: 'conditional'; readonly ranges: readonly MultiplexerRange[] };
 }
+
+export interface MultiplexerRange { readonly from: number; readonly to: number }
 
 export interface ManualDerivedSignalDefinition {
   readonly id: string;
@@ -47,6 +50,7 @@ export interface ManualFrameDefinition {
   readonly extended: boolean;
   readonly name: string;
   readonly frameLength: number;
+  readonly multiplexing?: boolean;
   readonly signals: readonly ManualSignalDefinition[];
   readonly derivedSignals?: readonly ManualDerivedSignalDefinition[];
   readonly origin?: { readonly type: 'manual' } | { readonly type: 'plugin'; readonly pluginId: string };
@@ -80,6 +84,32 @@ export function occupiedBits(signal: Pick<ManualSignalDefinition, 'byteOffset' |
   return result;
 }
 
+export function formatMultiplexerActivation(signal: ManualSignalDefinition): string {
+  if (signal.multiplexing?.type === 'multiplexer') return 'Multiplexer';
+  if (signal.multiplexing?.type !== 'conditional') return 'Always';
+  return signal.multiplexing.ranges.map((range) => range.from === range.to ? String(range.from) : `${range.from}-${range.to}`).join(', ');
+}
+
+export function parseMultiplexerActivation(text: string): ManualSignalDefinition['multiplexing'] | undefined {
+  const value = text.trim();
+  if (!value || /^always$/i.test(value)) return undefined;
+  if (/^(multiplexer|mux)$/i.test(value)) return { type: 'multiplexer' };
+  const ranges: MultiplexerRange[] = [];
+  for (const part of value.split(',')) {
+    const match = /^\s*(\d+)\s*(?:[-–]\s*(\d+)\s*)?$/.exec(part);
+    if (!match) return undefined;
+    const from = Number(match[1]); const to = Number(match[2] ?? match[1]);
+    if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from > to) return undefined;
+    ranges.push({ from, to });
+  }
+  return ranges.length ? { type: 'conditional', ranges } : undefined;
+}
+
+export function isSignalActive(signal: ManualSignalDefinition, multiplexerValue: number | undefined): boolean {
+  if (signal.multiplexing?.type !== 'conditional') return true;
+  return multiplexerValue !== undefined && signal.multiplexing.ranges.some((range) => multiplexerValue >= range.from && multiplexerValue <= range.to);
+}
+
 export function normalizeFrameDefinition(frame: ManualFrameDefinition): ManualFrameDefinition {
   return {
     ...frame,
@@ -98,6 +128,20 @@ export function normalizeFrameDefinition(frame: ManualFrameDefinition): ManualFr
     })),
   };
 }
+
+export function orderSignalsByDataPosition(signals: readonly ManualSignalDefinition[]): ManualSignalDefinition[] {
+  return signals
+    .map((signal, index) => ({ signal, index }))
+    .sort((left, right) => {
+      const byteDifference = sortablePosition(left.signal.byteOffset) - sortablePosition(right.signal.byteOffset);
+      if (byteDifference !== 0) return byteDifference;
+      const bitDifference = sortablePosition(left.signal.bitOffset) - sortablePosition(right.signal.bitOffset);
+      return bitDifference !== 0 ? bitDifference : left.index - right.index;
+    })
+    .map(({ signal }) => signal);
+}
+
+function sortablePosition(value: number): number { return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER; }
 
 export function createManualSignal(
   id: string,
@@ -136,8 +180,12 @@ export function validateFrameDefinition(frame: ManualFrameDefinition): Validatio
   if (!Number.isInteger(frame.frameLength) || !VALID_FRAME_LENGTHS.has(frame.frameLength)) add('FRAME_LENGTH_RANGE', 'Frame length must be a valid Classic CAN or CAN FD payload length.');
 
   const ids = new Set<string>(); const names = new Set<string>();
-  const bits = new Map<number, string>();
+  const bits = new Map<number, ManualSignalDefinition[]>();
   const overlapPairs = new Set<string>();
+  const multiplexers = frame.signals.filter((signal) => signal.multiplexing?.type === 'multiplexer');
+  if (frame.multiplexing && multiplexers.length !== 1) add('FRAME_MULTIPLEXER_REQUIRED', 'A multiplexed Frame must have exactly one Multiplexer Signal.');
+  if (!frame.multiplexing && frame.signals.some((signal) => signal.multiplexing)) add('FRAME_MULTIPLEXING_DISABLED', 'Signal multiplexing requires Multiplexing to be enabled for the Frame.');
+  const multiplexerMaximum = multiplexers.length === 1 && multiplexers[0].lengthBits <= 32 ? 2 ** multiplexers[0].lengthBits - 1 : undefined;
   for (const signal of frame.signals) {
     const detail = { signalId: signal.id };
     if (!signal.id.trim()) add('SIGNAL_ID_REQUIRED', 'Signal ID is required.', detail);
@@ -151,16 +199,18 @@ export function validateFrameDefinition(frame: ManualFrameDefinition): Validatio
     if (!Number.isInteger(signal.lengthBits) || signal.lengthBits < 1 || signal.lengthBits > 64) add('SIGNAL_LENGTH_RANGE', `${signal.name || signal.id}: length must be between 1 and 64 bits.`, detail);
     const occupied = occupiedBits(signal);
     if (occupied.some((bit) => bit < 0 || bit >= frame.frameLength * 8)) add('SIGNAL_OUTSIDE_FRAME', `${signal.name || signal.id}: bit range exceeds the frame length.`, detail);
+    if (signal.multiplexing?.type === 'multiplexer' && (signal.signedness !== 'unsigned' || signal.lengthBits > 32)) add('SIGNAL_MULTIPLEXER_FORMAT', `${signal.name || signal.id}: Multiplexer must be an unsigned Signal of 1 to 32 bits.`, detail);
+    if (signal.multiplexing?.type === 'conditional') {
+      if (!signal.multiplexing.ranges.length) add('SIGNAL_MULTIPLEXER_RANGE_REQUIRED', `${signal.name || signal.id}: ACTIVE WHEN requires at least one value.`, detail);
+      for (const range of signal.multiplexing.ranges) if (range.from < 0 || range.to < range.from || !Number.isSafeInteger(range.from) || !Number.isSafeInteger(range.to) || (multiplexerMaximum !== undefined && range.to > multiplexerMaximum)) add('SIGNAL_MULTIPLEXER_RANGE_INVALID', `${signal.name || signal.id}: ACTIVE WHEN range is outside the Multiplexer value range.`, detail);
+    }
     for (const bit of occupied) {
-      const previous = bits.get(bit);
-      if (previous && previous !== signal.id) {
-        const pair = [previous, signal.id].sort().join(':');
-        if (!overlapPairs.has(pair)) {
-          overlapPairs.add(pair);
-          add('SIGNAL_OVERLAP', `${signal.name || signal.id} overlaps another signal at byte ${Math.floor(bit / 8)}, bit ${bit % 8}.`, detail);
-        }
+      const previousSignals = bits.get(bit) ?? [];
+      for (const previous of previousSignals) if (!multiplexingIsDisjoint(previous, signal)) {
+        const pair = [previous.id, signal.id].sort().join(':');
+        if (!overlapPairs.has(pair)) { overlapPairs.add(pair); add('SIGNAL_OVERLAP', `${signal.name || signal.id} overlaps another signal at byte ${Math.floor(bit / 8)}, bit ${bit % 8}.`, detail); }
       }
-      else bits.set(bit, signal.id);
+      previousSignals.push(signal); bits.set(bit, previousSignals);
     }
     if (!Number.isFinite(signal.conversion.lsb) || signal.conversion.lsb <= 0) add('SIGNAL_LSB_INVALID', `${signal.name || signal.id}: Scale must be a positive finite number.`, detail);
     const parsed = parseResolution(signal.conversion.lsbText);
@@ -208,4 +258,9 @@ export function validateFrameDefinition(frame: ManualFrameDefinition): Validatio
     if (name) availableNames.add(name);
   }
   return { valid: diagnostics.length === 0, diagnostics };
+}
+
+function multiplexingIsDisjoint(left: ManualSignalDefinition, right: ManualSignalDefinition): boolean {
+  if (left.multiplexing?.type !== 'conditional' || right.multiplexing?.type !== 'conditional') return false;
+  return !left.multiplexing.ranges.some((a) => right.multiplexing?.type === 'conditional' && right.multiplexing.ranges.some((b) => a.from <= b.to && b.from <= a.to));
 }

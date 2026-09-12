@@ -1,8 +1,8 @@
 {
   "name": "sigmixa",
   "displayName": "SigMixa",
-  "description": "Signal-centered CAN log analysis and visualization for Visual Studio Code",
-  "version": "0.8.1",
+  "description": "%sigmixa.description%",
+  "version": "0.9.0",
   "publisher": "tronics25",
   "license": "MIT",
   "private": true,
@@ -57,68 +57,68 @@
       "sigmixa": [
         {
           "id": "sigmixa.logFiles",
-          "name": "LOG FILES"
+          "name": "%sigmixa.views.logFiles%"
         },
         {
           "id": "sigmixa.frames",
-          "name": "CAN FRAMES"
+          "name": "%sigmixa.views.frames%"
         },
         {
           "id": "sigmixa.plugins",
-          "name": "PLUGINS"
+          "name": "%sigmixa.views.plugins%"
         }
       ]
     },
     "commands": [
       {
         "command": "sigmixa.openLog",
-        "title": "Open CAN Log",
+        "title": "%sigmixa.command.openLog%",
         "category": "SigMixa",
         "icon": "$(folder-opened)"
       },
       {
         "command": "sigmixa.addFrame",
-        "title": "Register CAN Frame",
+        "title": "%sigmixa.command.addFrame%",
         "category": "SigMixa",
         "icon": "$(add)"
       },
       {
         "command": "sigmixa.importDbc",
-        "title": "Import Frame Definitions from DBC",
+        "title": "%sigmixa.command.importDbc%",
         "category": "SigMixa",
         "icon": "$(database)"
       },
       {
         "command": "sigmixa.exportDbc",
-        "title": "Export Frame Definitions to DBC",
+        "title": "%sigmixa.command.exportDbc%",
         "category": "SigMixa",
         "icon": "$(export)"
       },
       {
         "command": "sigmixa.openFrame",
-        "title": "Open CAN Frame Definition",
+        "title": "%sigmixa.command.openFrame%",
         "category": "SigMixa"
       },
       {
         "command": "sigmixa.deleteFrame",
-        "title": "Delete CAN Frame",
+        "title": "%sigmixa.command.deleteFrame%",
         "category": "SigMixa",
         "icon": "$(trash)"
       },
       {
         "command": "sigmixa.addPlugin",
-        "title": "Register Plugin",
+        "title": "%sigmixa.command.addPlugin%",
         "category": "SigMixa",
         "icon": "$(add)"
       },
       {
         "command": "sigmixa.openPlugin",
-        "title": "Open Plugin Configuration",
+        "title": "%sigmixa.command.openPlugin%",
         "category": "SigMixa"
       },
       {
         "command": "sigmixa.refresh",
-        "title": "Refresh",
+        "title": "%sigmixa.command.refresh%",
         "category": "SigMixa",
         "icon": "$(refresh)"
       }

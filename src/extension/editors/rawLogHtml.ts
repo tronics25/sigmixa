@@ -5,13 +5,13 @@ function nonce(): string {
   return Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 }
 
-export function rawLogHtml(webview: vscode.Webview, extensionUri: vscode.Uri, title: string): string {
+export function rawLogHtml(webview: vscode.Webview, extensionUri: vscode.Uri, title: string, locale: string): string {
   const script = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'out', 'webview', 'rawLog.js'));
   const codicons = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'codicons', 'codicon.css'));
   const token = nonce();
   const escapedTitle = title.replace(/[&<>"']/g, (value) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[value]!));
   return `<!doctype html>
-<html lang="en">
+<html lang="${locale.toLowerCase().startsWith('ja') ? 'ja' : 'en'}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">

@@ -3,6 +3,7 @@ import type { LogViewState, SignalTableRowDto, ToExtensionMessage, ToWebviewMess
 import { autoFitColumns, fitColumnsToView, type SizingColumn } from '../shared/columnSizing';
 import { SignalSelector } from '../shared/signalSelector';
 import { computeVirtualRange } from '../shared/virtualization';
+import { t } from '../shared/i18n';
 
 const ROW_HEIGHT = 28;
 const PAGE_SIZE = 240;
@@ -36,7 +37,7 @@ export class SignalTableView {
     this.selected = new Set(initial?.tableSelectedIds ?? []);
     this.widths = { time: 118, ...(initial?.tableWidths ?? {}) };
     this.fittedWidths = new Set(Object.keys(initial?.tableWidths ?? {}));
-    host.innerHTML = `<div class="signal-layout"><aside class="signal-pane"><div class="table-selector"></div></aside><section class="signal-main"><div class="view-toolbar"><button class="table-auto-fit">Auto Fit</button><button class="table-fit-view">Fit to View</button><button class="table-export">Export CSV</button><span class="spacer"></span><span class="table-status muted">Select Signals</span></div><div class="signal-grid" role="table"><div class="signal-grid-header" role="row"></div><div class="signal-grid-sizer"><div class="signal-grid-window"></div></div></div></section></div>`;
+    host.innerHTML = `<div class="signal-layout"><aside class="signal-pane"><div class="table-selector"></div></aside><section class="signal-main"><div class="view-toolbar"><button class="table-auto-fit">${t('Auto Fit', '自動調整')}</button><button class="table-fit-view">${t('Fit to View', '表示幅に合わせる')}</button><button class="table-export">${t('Export CSV', 'CSVへ出力')}</button><span class="spacer"></span><span class="table-status muted">${t('Select Signals', 'Signalを選択')}</span></div><div class="signal-grid" role="table"><div class="signal-grid-header" role="row"></div><div class="signal-grid-sizer"><div class="signal-grid-window"></div></div></div></section></div>`;
     this.grid = host.querySelector('.signal-grid')!; this.header = host.querySelector('.signal-grid-header')!; this.sizer = host.querySelector('.signal-grid-sizer')!; this.rowWindow = host.querySelector('.signal-grid-window')!;
     this.selector = new SignalSelector({ host: host.querySelector('.table-selector')!, selected: this.selected, onSelectionChange: () => this.selectionChanged() });
     this.grid.addEventListener('scroll', () => requestAnimationFrame(() => this.draw()));
@@ -96,14 +97,14 @@ export class SignalTableView {
 
   private draw(): void {
     if (!this.visible) return;
-    const status = this.host.querySelector('.table-status')!; status.textContent = this.selected.size ? `${this.total.toLocaleString()} event rows` : 'Select Signals';
+    const status = this.host.querySelector('.table-status')!; status.textContent = this.selected.size ? `${this.total.toLocaleString()} ${t('event rows', 'イベント行')}` : t('Select Signals', 'Signalを選択');
     this.sizer.style.height = `${this.total * ROW_HEIGHT}px`; this.sizer.style.width = `${this.totalWidth()}px`;
     const range = computeVirtualRange(this.total, this.grid.scrollTop, this.grid.clientHeight - this.header.clientHeight, ROW_HEIGHT);
     this.rowWindow.style.transform = `translateY(${range.start * ROW_HEIGHT}px)`; this.rowWindow.style.width = `${this.totalWidth()}px`; this.rowWindow.replaceChildren();
     const columns = this.columns();
     for (let index = range.start; index < range.end; index++) {
       const data = this.rows.get(index); const row = document.createElement('div'); row.className = 'signal-grid-row'; row.style.gridTemplateColumns = this.template();
-      columns.forEach((column) => { const cell = document.createElement('div'); cell.className = `signal-cell${column.id === 'time' ? ' sticky-time' : ''}`; const value = !data ? 'Loading…' : column.id === 'time' ? formatNumber(data.timestamp, 6) : data.values[column.id] === undefined ? '—' : formatNumber(data.values[column.id]); cell.textContent = value; cell.title = value; row.appendChild(cell); });
+      columns.forEach((column) => { const cell = document.createElement('div'); cell.className = `signal-cell${column.id === 'time' ? ' sticky-time' : ''}`; const value = !data ? t('Loading…', '読み込み中…') : column.id === 'time' ? formatNumber(data.timestamp, 6) : data.values[column.id] === undefined ? '—' : formatNumber(data.values[column.id]); cell.textContent = value; cell.title = value; row.appendChild(cell); });
       this.rowWindow.appendChild(row);
     }
     this.requestPage(false, range.start, range.end);

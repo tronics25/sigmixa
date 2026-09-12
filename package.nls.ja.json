@@ -1,0 +1,15 @@
+{
+  "sigmixa.description": "CANログをSignal中心に解析・可視化するVisual Studio Code拡張機能",
+  "sigmixa.views.logFiles": "ログファイル",
+  "sigmixa.views.frames": "CANフレーム",
+  "sigmixa.views.plugins": "プラグイン",
+  "sigmixa.command.openLog": "CANログを開く",
+  "sigmixa.command.addFrame": "CANフレームを登録",
+  "sigmixa.command.importDbc": "DBCからフレーム定義をインポート",
+  "sigmixa.command.exportDbc": "フレーム定義をDBCへエクスポート",
+  "sigmixa.command.openFrame": "CANフレーム定義を開く",
+  "sigmixa.command.deleteFrame": "CANフレームを削除",
+  "sigmixa.command.addPlugin": "プラグインを登録",
+  "sigmixa.command.openPlugin": "プラグイン設定を開く",
+  "sigmixa.command.refresh": "更新"
+}

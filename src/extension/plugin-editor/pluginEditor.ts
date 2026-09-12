@@ -20,7 +20,7 @@ export class PluginEditor implements vscode.Disposable {
     const existing = this.panels.get(id);
     if (existing) { existing.reveal(); void this.sendModel(id, existing); return; }
     const panel = vscode.window.createWebviewPanel('sigmixa.pluginConfiguration', `Plugin: ${id}`, vscode.ViewColumn.One, { enableScripts: true, retainContextWhenHidden: true });
-    panel.webview.html = pluginEditorHtml(panel.webview, this.extensionUri, id);
+    panel.webview.html = pluginEditorHtml(panel.webview, this.extensionUri, id, vscode.env.language);
     this.panels.set(id, panel);
     panel.onDidDispose(() => this.panels.delete(id));
     panel.webview.onDidReceiveMessage((message: PluginEditorToExtension) => void this.receive(id, panel, message));

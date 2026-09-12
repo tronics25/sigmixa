@@ -10,10 +10,10 @@ SigMixa imports CAN logs, decodes them into Signals, and provides searchable tab
 ## Features
 
 - Vector ASC import for Classic CAN and CAN FD
-- Experimental BLF import for Classic CAN and CAN FD
+- Vector BLF import for Classic CAN and CAN FD
 - Virtualized RAW Log with search, filters, progress, cancellation and diagnostics
 - Resizable columns with Auto Fit and Fit to View
-- Configurable Signal Definitions with Intel/Motorola byte order, signed values, Scale and Offset
+- Configurable Signal Definitions with Intel/Motorola byte order, signed values, Scale/Offset and Multiplexing
 - DBC import/export for CAN Frame and Signal definitions
 - Derived Signals using expressions, lookup tables, low-pass filters and moving averages
 - Signal Table with virtual rows and CSV export
@@ -85,7 +85,6 @@ Open the [`sample`](sample) directory as a VS Code workspace and load `sigmixa-s
 
 ## Current limitations
 
-- BLF support is verified with python-can compatibility fixtures but remains experimental until files produced by multiple CANoe/CANalyzer versions have been tested.
 - External CSV Signals are available in Time Series, but are not merged into the event-row Table.
 - Trajectory axes must come from one source and have exactly matching timestamps.
 - Plugin configuration uses SigMixa's standard schema editor; Plugin-specific custom views are not supported.

@@ -29,7 +29,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
 
   resolveCustomEditor(document: RawLogDocument, panel: vscode.WebviewPanel): void {
     panel.webview.options = { enableScripts: true };
-    panel.webview.html = rawLogHtml(panel.webview, this.extensionUri, document.fileName);
+    panel.webview.html = rawLogHtml(panel.webview, this.extensionUri, document.fileName, vscode.env.language);
     const send = (message: ToWebviewMessage) => panel.webview.postMessage(message);
     const viewStateKey = `log-view:${createHash('sha256').update(document.uri.toString()).digest('hex').slice(0, 20)}`;
     const subscription = document.onDidUpdate((update) => {

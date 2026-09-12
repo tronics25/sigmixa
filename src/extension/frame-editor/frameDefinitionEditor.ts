@@ -47,14 +47,17 @@ export class FrameDefinitionEditor implements vscode.Disposable {
     const frame = this.store.current.frames.find((item) => item.id === frameId);
     if (!frame) { void vscode.window.showErrorMessage('CAN frame definition was not found.'); return; }
     const existing = this.panels.get(frameId);
-    if (existing) { existing.reveal(); void this.send(existing, { type: 'init', frame, widths: this.savedWidths() }); return; }
+    if (existing) { existing.reveal(); return; }
     const panel = vscode.window.createWebviewPanel('sigmixa.frameDefinition', frame.name, vscode.ViewColumn.One, { enableScripts: true, retainContextWhenHidden: true });
-    panel.webview.html = frameDefinitionHtml(panel.webview, this.extensionUri, frame.name);
+    panel.webview.html = frameDefinitionHtml(panel.webview, this.extensionUri, frame.name, vscode.env.language);
     this.panels.set(frameId, panel);
     panel.onDidDispose(() => this.panels.delete(frameId));
+    panel.onDidChangeViewState(({ webviewPanel }) => {
+      if (webviewPanel.active) void this.send(webviewPanel, { type: 'sortSignals' });
+    });
     panel.webview.onDidReceiveMessage((message: FrameEditorToExtension) => {
       if (message.type === 'ready') void this.send(panel, { type: 'init', frame: this.store.current.frames.find((item) => item.id === frameId) ?? frame, widths: this.savedWidths() });
-      else if (message.type === 'save') void this.save(panel, frameId, message.frame);
+      else if (message.type === 'save') void this.save(panel, frameId, message.revision, message.frame);
       else if (message.type === 'saveViewState') void this.saveWidths(message.widths);
     });
     void focusSignalId;
@@ -64,7 +67,7 @@ export class FrameDefinitionEditor implements vscode.Disposable {
 
   dispose(): void { for (const panel of this.panels.values()) panel.dispose(); this.panels.clear(); }
 
-  private async save(panel: vscode.WebviewPanel, frameId: string, candidate: ManualFrameDefinition): Promise<void> {
+  private async save(panel: vscode.WebviewPanel, frameId: string, revision: number, candidate: ManualFrameDefinition): Promise<void> {
     const current = this.store.current.frames.find((frame) => frame.id === frameId);
     if (!current) return;
     const frame = normalizeFrameDefinition({ ...candidate, id: frameId, origin: current.origin });
@@ -74,13 +77,13 @@ export class FrameDefinitionEditor implements vscode.Disposable {
     if (duplicate) diagnostics.push({ id: `definition:FRAME_CAN_ID_DUPLICATE:${frameId}`, source: 'definition', code: 'FRAME_CAN_ID_DUPLICATE', severity: 'error', message: `CAN ID is already registered as “${duplicate.name}”.` });
     const otherSignalIds = new Set(this.store.current.frames.filter((item) => item.id !== frameId).flatMap((item) => [...item.signals, ...(item.derivedSignals ?? [])].map((signal) => signal.id)));
     for (const signal of [...frame.signals, ...(frame.derivedSignals ?? [])]) if (otherSignalIds.has(signal.id)) diagnostics.push({ id: `definition:SIGNAL_ID_PROJECT_DUPLICATE:${signal.id}`, source: 'definition', code: 'SIGNAL_ID_PROJECT_DUPLICATE', severity: 'error', message: `Signal ID “${signal.id}” is already used by another frame.`, details: { signalId: signal.id } });
-    if (diagnostics.length) { await this.send(panel, { type: 'saveResult', saved: false, diagnostics }); return; }
+    if (diagnostics.length) { await this.send(panel, { type: 'saveResult', revision, saved: false, diagnostics }); return; }
     try {
       await this.store.update((project) => ({ ...project, frames: project.frames.map((item) => item.id === frameId ? frame : item) }));
       panel.title = frame.name;
-      await this.send(panel, { type: 'saveResult', saved: true, diagnostics: [], frame });
+      await this.send(panel, { type: 'saveResult', revision, saved: true, diagnostics: [], frame });
     } catch (error) {
-      await this.send(panel, { type: 'saveResult', saved: false, diagnostics: [{ id: `storage:save:${frameId}`, source: 'storage', code: 'PROJECT_SAVE_FAILED', severity: 'error', message: (error as Error).message }] });
+      await this.send(panel, { type: 'saveResult', revision, saved: false, diagnostics: [{ id: `storage:save:${frameId}`, source: 'storage', code: 'PROJECT_SAVE_FAILED', severity: 'error', message: (error as Error).message }] });
     }
   }
 

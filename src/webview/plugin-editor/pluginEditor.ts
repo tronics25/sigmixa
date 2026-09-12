@@ -1,12 +1,13 @@
 import type { ConfigPropertySchema, ConfigScalarPropertySchema } from '../../plugin-sdk';
 import type { PluginEditorModel, PluginEditorToExtension, PluginEditorToWebview } from '../../extension/plugin-editor/pluginEditorProtocol';
+import { t } from '../shared/i18n';
 
 declare function acquireVsCodeApi(): { postMessage(message: PluginEditorToExtension): void };
 const vscode = acquireVsCodeApi();
 const app = document.getElementById('app')!;
 
 app.innerHTML = `<style>
-*{box-sizing:border-box}body{margin:0;padding:20px;color:var(--vscode-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family)}main{max-width:1200px}h1{font-size:20px}h2{font-size:15px;margin-top:24px;border-bottom:1px solid var(--vscode-panel-border);padding-bottom:6px}.card{padding:12px;border:1px solid var(--vscode-panel-border);border-radius:5px;margin:8px 0}.meta{display:grid;grid-template-columns:110px 1fr;gap:5px;font-size:12px}.status-ok{color:var(--vscode-testing-iconPassed)}.status-error,.diag-error{color:var(--vscode-errorForeground)}label.field{display:grid;grid-template-columns:180px minmax(180px,1fr);gap:12px;align-items:center;margin:9px 0}input,select,button{font:inherit;color:inherit;background:var(--vscode-input-background);border:1px solid var(--vscode-input-border,transparent);padding:6px 8px;border-radius:3px}button{background:var(--vscode-button-secondaryBackground);cursor:pointer;margin-right:6px}button.primary{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}button.danger{color:var(--vscode-errorForeground)}button.icon{padding:5px;margin:0;background:transparent;border-color:transparent}.binding{display:flex;gap:8px;align-items:center;margin:7px 0}.muted{color:var(--vscode-descriptionForeground);font-size:12px}.diagnostics{margin-top:10px;font-size:12px}.diagnostics div{margin:4px 0}.table-field,.hierarchy-field{margin:16px 0}.table-title,.hierarchy-title{display:flex;align-items:baseline;gap:8px;margin-bottom:7px}.table-scroll{overflow:auto;border:1px solid var(--vscode-panel-border)}table{border-collapse:collapse;width:max-content;min-width:100%}th,td{padding:5px;border-right:1px solid var(--vscode-panel-border);border-bottom:1px solid var(--vscode-panel-border);text-align:left;white-space:nowrap}th{background:var(--vscode-editorGroupHeader-tabsBackground);font-size:12px}td input:not([type=checkbox]),td select{min-width:100px;width:100%}td.actions{width:38px;text-align:center}.add-row{margin-top:8px}.hierarchy-toolbar{display:flex;gap:6px;align-items:center;margin:8px 0}.hierarchy-toolbar input[type=search]{min-width:240px;margin-right:auto}.hierarchy-list{display:grid;gap:8px}.hierarchy-row{border:1px solid var(--vscode-panel-border);border-radius:4px;background:var(--vscode-sideBar-background)}.hierarchy-row>summary{display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;font-weight:600;background:var(--vscode-editorGroupHeader-tabsBackground)}.hierarchy-row>summary::marker{color:var(--vscode-descriptionForeground)}.hierarchy-summary-title{flex:1}.hierarchy-body{padding:8px 12px 12px 24px;background:var(--vscode-editor-background)}.hierarchy-body>.hierarchy-field{border-left:2px solid var(--vscode-panel-border);padding-left:12px}.hierarchy-empty{padding:10px;border:1px dashed var(--vscode-panel-border)}</style><div id="content">Loading Plugin…</div>`;
+*{box-sizing:border-box}body{margin:0;padding:20px;color:var(--vscode-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family)}main{max-width:1200px}h1{font-size:20px}h2{font-size:15px;margin-top:24px;border-bottom:1px solid var(--vscode-panel-border);padding-bottom:6px}.card{padding:12px;border:1px solid var(--vscode-panel-border);border-radius:5px;margin:8px 0}.meta{display:grid;grid-template-columns:110px 1fr;gap:5px;font-size:12px}.status-ok{color:var(--vscode-testing-iconPassed)}.status-error,.diag-error{color:var(--vscode-errorForeground)}label.field{display:grid;grid-template-columns:180px minmax(180px,1fr);gap:12px;align-items:center;margin:9px 0}input,select,button{font:inherit;color:inherit;background:var(--vscode-input-background);border:1px solid var(--vscode-input-border,transparent);padding:6px 8px;border-radius:3px}button{background:var(--vscode-button-secondaryBackground);cursor:pointer;margin-right:6px}button.primary{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}button.danger{color:var(--vscode-errorForeground)}button.icon{padding:5px;margin:0;background:transparent;border-color:transparent}.binding{display:flex;gap:8px;align-items:center;margin:7px 0}.muted{color:var(--vscode-descriptionForeground);font-size:12px}.diagnostics{margin-top:10px;font-size:12px}.diagnostics div{margin:4px 0}.table-field,.hierarchy-field{margin:16px 0}.table-title,.hierarchy-title{display:flex;align-items:baseline;gap:8px;margin-bottom:7px}.table-scroll{overflow:auto;border:1px solid var(--vscode-panel-border)}table{border-collapse:collapse;width:max-content;min-width:100%}th,td{padding:5px;border-right:1px solid var(--vscode-panel-border);border-bottom:1px solid var(--vscode-panel-border);text-align:left;white-space:nowrap}th{background:var(--vscode-editorGroupHeader-tabsBackground);font-size:12px}td input:not([type=checkbox]),td select{min-width:100px;width:100%}td.actions{width:38px;text-align:center}.add-row{margin-top:8px}.hierarchy-toolbar{display:flex;gap:6px;align-items:center;margin:8px 0}.hierarchy-toolbar input[type=search]{min-width:240px;margin-right:auto}.hierarchy-list{display:grid;gap:8px}.hierarchy-row{border:1px solid var(--vscode-panel-border);border-radius:4px;background:var(--vscode-sideBar-background)}.hierarchy-row>summary{display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;font-weight:600;background:var(--vscode-editorGroupHeader-tabsBackground)}.hierarchy-row>summary::marker{color:var(--vscode-descriptionForeground)}.hierarchy-summary-title{flex:1}.hierarchy-body{padding:8px 12px 12px 24px;background:var(--vscode-editor-background)}.hierarchy-body>.hierarchy-field{border-left:2px solid var(--vscode-panel-border);padding-left:12px}.hierarchy-empty{padding:10px;border:1px dashed var(--vscode-panel-border)}</style><div id="content">${t('Loading Plugin…', 'プラグインを読み込み中…')}</div>`;
 const content = document.getElementById('content')!;
 
 window.addEventListener('message', (event: MessageEvent<PluginEditorToWebview>) => {
@@ -21,43 +22,43 @@ function render(model: PluginEditorModel): void {
   const card = document.createElement('div'); card.className = 'card';
   const enable = document.createElement('input'); enable.type = 'checkbox'; enable.checked = model.registration.enabled;
   enable.addEventListener('change', () => vscode.postMessage({ type: 'setEnabled', enabled: enable.checked }));
-  const enabledLabel = document.createElement('label'); enabledLabel.append(enable, ' Enabled'); card.appendChild(enabledLabel);
+  const enabledLabel = document.createElement('label'); enabledLabel.append(enable, ` ${t('Enabled', '有効')}`); card.appendChild(enabledLabel);
   const meta = document.createElement('div'); meta.className = 'meta';
-  addMeta(meta, 'Version', model.registration.version); addMeta(meta, 'Source', model.registration.source);
-  addMeta(meta, 'Load state', model.loaded ? 'Loaded' : `Failed: ${model.loadMessage ?? 'Unknown error'}`, model.loaded ? 'status-ok' : 'status-error');
+  addMeta(meta, t('Version', 'バージョン'), model.registration.version); addMeta(meta, t('Source', '参照元'), model.registration.source);
+  addMeta(meta, t('Load state', '読み込み状態'), model.loaded ? t('Loaded', '読み込み済み') : `${t('Failed', '失敗')}: ${model.loadMessage ?? t('Unknown error', '不明なエラー')}`, model.loaded ? 'status-ok' : 'status-error');
   card.appendChild(meta); content.appendChild(card);
 
-  heading('Frame Bindings');
+  heading(t('Frame Bindings', 'フレーム割り当て'));
   const bindings = document.createElement('div'); bindings.className = 'card';
   if (!model.bindings.length) {
-    const empty = document.createElement('p'); empty.className = 'muted'; empty.textContent = 'No Frame Binding. Any-frame Plugins do not run until a Binding is added.'; bindings.appendChild(empty);
+    const empty = document.createElement('p'); empty.className = 'muted'; empty.textContent = t('No Frame Binding. Any-frame Plugins do not run until a Binding is added.', 'フレーム割り当てがありません。割り当てを追加するまでプラグインは実行されません。'); bindings.appendChild(empty);
   }
   for (const binding of model.bindings) {
     const row = document.createElement('label'); row.className = 'binding';
     const check = document.createElement('input'); check.type = 'checkbox'; check.checked = binding.enabled;
     check.addEventListener('change', () => vscode.postMessage({ type: 'setBindingEnabled', bindingId: binding.id, enabled: check.checked }));
     const text = document.createElement('span'); text.textContent = binding.frameLabel;
-    const kind = document.createElement('small'); kind.className = 'muted'; kind.textContent = binding.automatic ? 'Specific · automatic' : 'manual';
+    const kind = document.createElement('small'); kind.className = 'muted'; kind.textContent = binding.automatic ? t('Specific · automatic', '固定 · 自動') : t('manual', '手動');
     row.append(check, text, kind); bindings.appendChild(row);
   }
-  bindings.appendChild(button('Add Binding…', () => vscode.postMessage({ type: 'addBinding' }))); content.appendChild(bindings);
+  bindings.appendChild(button(t('Add Binding…', '割り当てを追加…'), () => vscode.postMessage({ type: 'addBinding' }))); content.appendChild(bindings);
 
-  heading('Configuration');
+  heading(t('Configuration', '設定'));
   const form = document.createElement('form'); form.className = 'card'; const config = objectValue(model.registration.config);
   if (!model.schema || !Object.keys(model.schema.properties).length) {
-    const empty = document.createElement('p'); empty.className = 'muted'; empty.textContent = 'This Plugin does not expose configuration fields.'; form.appendChild(empty);
+    const empty = document.createElement('p'); empty.className = 'muted'; empty.textContent = t('This Plugin does not expose configuration fields.', 'このプラグインには設定項目がありません。'); form.appendChild(empty);
   } else {
     for (const [key, schema] of Object.entries(model.schema.properties)) form.appendChild(field(key, schema, config[key]));
   }
-  const save = button('Save Configuration', () => undefined); save.classList.add('primary'); save.type = 'submit'; form.appendChild(save);
+  const save = button(t('Save Configuration', '設定を保存'), () => undefined); save.classList.add('primary'); save.type = 'submit'; form.appendChild(save);
   form.addEventListener('submit', (event) => { event.preventDefault(); vscode.postMessage({ type: 'saveConfig', config: readForm(form, model.schema?.properties ?? {}) }); });
   content.appendChild(form);
 
-  heading('Diagnostics');
+  heading(t('Diagnostics', '診断'));
   const diagnostics = document.createElement('div'); diagnostics.id = 'diagnostics'; diagnostics.className = 'card diagnostics'; content.appendChild(diagnostics); showDiagnostics(model.diagnostics);
   const actions = document.createElement('div'); actions.className = 'card';
-  actions.append(button('Reload Plugin', () => vscode.postMessage({ type: 'reload' })));
-  const remove = button('Unregister', () => vscode.postMessage({ type: 'unregister' })); remove.classList.add('danger'); actions.append(remove); content.appendChild(actions);
+  actions.append(button(t('Reload Plugin', 'プラグインを再読み込み'), () => vscode.postMessage({ type: 'reload' })));
+  const remove = button(t('Unregister', '登録解除'), () => vscode.postMessage({ type: 'unregister' })); remove.classList.add('danger'); actions.append(remove); content.appendChild(actions);
 }
 
 function heading(text: string): void { const element = document.createElement('h2'); element.textContent = text; content.appendChild(element); }
@@ -126,7 +127,7 @@ function hierarchyField(key: string, schema: Extract<ConfigPropertySchema, { rea
     }
   };
   search.addEventListener('input', applySearch); if (schema.searchable !== false) toolbar.appendChild(search);
-  toolbar.append(button('Expand all', () => list.querySelectorAll<HTMLDetailsElement>('details').forEach((item) => item.open = true)), button('Collapse all', () => list.querySelectorAll<HTMLDetailsElement>('details').forEach((item) => item.open = false)));
+  toolbar.append(button(t('Expand all', 'すべて展開'), () => list.querySelectorAll<HTMLDetailsElement>('details').forEach((item) => item.open = true)), button(t('Collapse all', 'すべて折りたたむ'), () => list.querySelectorAll<HTMLDetailsElement>('details').forEach((item) => item.open = false)));
   host.append(toolbar, list);
   const addItem = (itemValue: unknown) => {
     const record = objectValue(itemValue); const details = document.createElement('details'); details.className = 'hierarchy-row'; details.open = true; details.dataset.hierarchyRow = 'true';
@@ -194,7 +195,7 @@ function readScalar(control: HTMLInputElement | HTMLSelectElement): string | num
 
 function showDiagnostics(items: readonly { severity: string; code: string; message: string }[]): void {
   const host = document.getElementById('diagnostics'); if (!host) return; host.replaceChildren();
-  if (!items.length) { host.textContent = 'No Plugin diagnostics.'; host.className = 'card diagnostics muted'; return; }
+  if (!items.length) { host.textContent = t('No Plugin diagnostics.', 'プラグインの診断はありません。'); host.className = 'card diagnostics muted'; return; }
   host.className = 'card diagnostics';
   for (const item of items) { const row = document.createElement('div'); row.className = 'diag-' + item.severity; row.textContent = item.severity.toUpperCase() + ' · ' + item.code + ': ' + item.message; host.appendChild(row); }
 }

@@ -38,7 +38,6 @@ export interface BlfParseSummary {
   readonly framesParsed: number;
   readonly diagnostics: number;
   readonly cancelled: boolean;
-  readonly experimental: true;
 }
 
 export interface BlfParseOptions {
@@ -49,11 +48,7 @@ export interface BlfParseOptions {
   onProgress?(progress: BlfParseProgress): void;
 }
 
-/**
- * Experimental Vector BLF reader based on the public object layouts used by
- * interoperable OSS readers. Compatibility tests include python-can fixtures;
- * validation against a broader set of production files remains ongoing.
- */
+/** Vector BLF reader for Classic CAN and CAN FD objects. */
 export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfParseSummary {
   let framesParsed = 0;
   let diagnosticCount = 0;
@@ -71,8 +66,6 @@ export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfPar
       details: { ...(offset === undefined ? {} : { byteOffset: offset }), ...details },
     }]);
   };
-
-  report('BLF_EXPERIMENTAL', 'info', 'BLF support is validated with python-can compatibility fixtures; verification against a broader set of CANoe/CANalyzer files is still ongoing.');
 
   if (buffer.length < 8 || buffer.toString('ascii', 0, 4) !== 'LOGG') {
     report('BLF_SIGNATURE', 'error', 'The file does not contain a Vector BLF LOGG signature.', 0);
@@ -275,5 +268,5 @@ function fileStartTimestamp(buffer: Buffer): number {
 }
 
 function summary(totalBytes: number, bytesRead: number, framesParsed: number, diagnostics: number, cancelled: boolean): BlfParseSummary {
-  return { totalBytes, bytesRead, linesRead: 0, framesParsed, diagnostics, cancelled, experimental: true };
+  return { totalBytes, bytesRead, linesRead: 0, framesParsed, diagnostics, cancelled };
 }

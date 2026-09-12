@@ -30,6 +30,17 @@ test('unmatched CAN frames are ignored without diagnostics', () => {
   assert.deepEqual(result, { decoded: [], diagnostics: [] });
 });
 
+test('multiplexed decoder emits only Signals active for the raw Multiplexer value', () => {
+  const multiplexed: ManualFrameDefinition = { ...definition, multiplexing: true, derivedSignals: [], signals: [
+    { ...definition.signals[0], id: 'mode', name: 'Mode', lengthBits: 4, conversion: { type: 'scale-offset', lsb: 10, lsbText: '10', offset: 100 }, multiplexing: { type: 'multiplexer' } },
+    { ...definition.signals[1], id: 'one', name: 'One', byteOffset: 1, multiplexing: { type: 'conditional', ranges: [{ from: 1, to: 1 }] } },
+    { ...definition.signals[1], id: 'two-four', name: 'TwoFour', byteOffset: 2, multiplexing: { type: 'conditional', ranges: [{ from: 2, to: 4 }] } },
+    { ...definition.signals[1], id: 'always', name: 'Always', byteOffset: 3 },
+  ] };
+  assert.deepEqual(decodeManualFrame(frame([1, 11, 22, 33]), multiplexed).decoded.map((item) => item.signal.id), ['mode', 'one', 'always']);
+  assert.deepEqual(decodeManualFrame(frame([3, 11, 22, 33]), multiplexed).decoded.map((item) => item.signal.id), ['mode', 'two-four', 'always']);
+});
+
 test('Lookup Table interpolates linearly and Filter keeps state within an analysis context', () => {
   const derivedDefinition: ManualFrameDefinition = { ...definition, derivedSignals: [
     { id: 'lookup', name: 'Lookup', unit: '', operation: { type: 'lookup', input: 'Speed', outOfRange: 'clamp', points: [{ input: 0, output: 0 }, { input: 10, output: 100 }] } },

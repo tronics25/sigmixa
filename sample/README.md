@@ -30,7 +30,7 @@ The vehicle accelerates, cruises, turns, brakes and stops. Mixed-rate frames pro
 
 The `.sigmixa/project.json` file already contains useful Signal definitions and view selections. The Plugin settings use fictional data.
 
-`sigmixa-showcase.blf` contains the same supported CAN data as the ASC showcase for checking the experimental BLF importer. ASC-only malformed rows and remote frames are not represented in BLF.
+`sigmixa-showcase.blf` contains the same supported CAN data as the ASC showcase. ASC-only malformed rows and remote frames are not represented in BLF.
 
 `sigmixa-showcase.dbc` can be imported from the **CAN FRAMES** database button.
 It contains standard and extended Frames plus Intel/Little Endian and

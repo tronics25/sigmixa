@@ -51,10 +51,18 @@ test('exports canonical DBC and round-trips supported Frame fields', () => {
   assert.deepEqual(roundTrip.frames[0].signals.map((signal) => [signal.name, signal.byteOffset, signal.bitOffset, signal.byteOrder]), imported[0].signals.map((signal) => [signal.name, signal.byteOffset, signal.bitOffset, signal.byteOrder]));
 });
 
-test('reports multiplexing and invalid rows without creating broken definitions', () => {
+test('imports and exports multiplexed Signals', () => {
   const result = importDbc(`BO_ 100 Multiplexed: 8 ECU\n SG_ Mode M : 0|4@1+ (1,0) [0|15] "" ECU\n SG_ Value m1 : 8|8@1+ (1,0) [0|255] "" ECU\n SG_ Plain : 16|8@1+ (1,0) [0|255] "" ECU\n`);
-  assert.deepEqual(result.frames[0].signals.map((signal) => signal.name), ['Plain']);
-  assert.deepEqual(result.diagnostics.map((item) => item.code), ['DBC_MULTIPLEXING_UNSUPPORTED', 'DBC_MULTIPLEXING_UNSUPPORTED']);
+  assert.deepEqual(result.diagnostics, []); assert.equal(result.frames[0].multiplexing, true);
+  assert.deepEqual(result.frames[0].signals.map((signal) => signal.multiplexing), [{ type: 'multiplexer' }, { type: 'conditional', ranges: [{ from: 1, to: 1 }] }, undefined]);
+  const exported = exportDbc(result.frames); assert.match(exported.text, /SG_ Mode M :/); assert.match(exported.text, /SG_ Value m1 :/);
+});
+
+test('round-trips extended multiplexing ranges', () => {
+  const source = `BO_ 100 Multiplexed: 8 ECU\n SG_ Mode M : 0|4@1+ (1,0) [0|15] "" ECU\n SG_ Value m1 : 8|8@1+ (1,0) [0|255] "" ECU\nSG_MUL_VAL_ 100 Value Mode 1-2, 4-6;\n`;
+  const imported = importDbc(source); assert.deepEqual(imported.diagnostics, []);
+  assert.deepEqual(imported.frames[0].signals[1].multiplexing, { type: 'conditional', ranges: [{ from: 1, to: 2 }, { from: 4, to: 6 }] });
+  assert.match(exportDbc(imported.frames).text, /SG_MUL_VAL_ 100 Value Mode 1-2, 4-6;/);
 });
 
 test('normalizes names on export and reports skipped Derived Signals', () => {
