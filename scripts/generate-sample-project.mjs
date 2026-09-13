@@ -131,6 +131,10 @@ const project = {
       { column: 'Ambient Temperature', name: 'Ambient Temperature', unit: '°C' },
     ],
   }],
+  clips: [
+    { id: 'clip-acceleration', name: 'Acceleration', sourcePath: 'sigmixa-showcase.asc', sourceFileName: 'sigmixa-showcase.asc', startTimestamp: 2, endTimestamp: 8, signalIds: ['sig-speed', 'sig-engine-speed', 'sig-accelerator'] },
+    { id: 'clip-braking', name: 'Braking', sourcePath: 'sigmixa-showcase.asc', sourceFileName: 'sigmixa-showcase.asc', startTimestamp: 18, endTimestamp: 24, signalIds: ['sig-speed', 'sig-brake-pressure', 'sig-pedal'] },
+  ],
   lookupTables: [],
   calculations: [],
   viewStates: {
@@ -150,4 +154,4 @@ const project = {
 
 const persistedProject = { ...project, frames: project.frames.map(({ canId, extended, ...frame }) => ({ ...frame, canId: formatCanId(canId, extended) })) };
 writeFileSync(output, `${JSON.stringify(persistedProject, null, 2)}\n`, 'utf8');
-console.log(`Generated ${output}: ${frames.length} frames / ${frames.reduce((sum, frame) => sum + frame.signals.length, 0)} extracted Signals / ${frames.reduce((sum, frame) => sum + frame.derivedSignals.length, 0)} Derived Signals / 2 Plugins / 1 External CSV`);
+console.log(`Generated ${output}: ${frames.length} frames / ${frames.reduce((sum, frame) => sum + frame.signals.length, 0)} extracted Signals / ${frames.reduce((sum, frame) => sum + frame.derivedSignals.length, 0)} Derived Signals / 2 Clips / 2 Plugins / 1 External CSV`);

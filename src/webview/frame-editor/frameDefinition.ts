@@ -69,7 +69,7 @@ let widths: Record<string, number> = {
 
 function derivedSummary(signal: ManualDerivedSignalDefinition): string {
   if (signal.operation.type === 'expression') return signal.operation.expression;
-  if (signal.operation.type === 'lookup') return `${signal.operation.input} · ${t('Linear interpolation', '線形補間')} · ${signal.operation.points.length} points · ${signal.operation.outOfRange}`;
+  if (signal.operation.type === 'lookup') return `${signal.operation.input} · ${t('Linear interpolation', '線形補間')} · ${signal.operation.points.length} ${t('points', '点')} · ${signal.operation.outOfRange}`;
   return `${signal.operation.input} · ${signal.operation.filter} · ${signal.operation.timeSeconds}s`;
 }
 
@@ -147,7 +147,7 @@ function render(): void {
   const multiplexingText = document.createElement('span'); multiplexingText.textContent = multiplexing.checked ? 'ON' : 'OFF';
   multiplexing.addEventListener('change', () => { updateFrame({ multiplexing: multiplexing.checked || undefined, ...(!multiplexing.checked ? { signals: frame?.signals.map((signal) => ({ ...signal, multiplexing: undefined })) } : {}) }); multiplexerPreview = 0; render(); });
   multiplexingControl.append(multiplexing, multiplexingText); multiplexingField.append(multiplexingCaption, multiplexingControl); fields.appendChild(multiplexingField);
-  if (pluginOwned) { const ownership = document.createElement('div'); ownership.className = 'muted'; ownership.textContent = `Provided by ${frame.origin?.type === 'plugin' ? frame.origin.pluginId : ''} · CAN ID is read-only`; fields.appendChild(ownership); }
+  if (pluginOwned) { const ownership = document.createElement('div'); ownership.className = 'muted'; const pluginId = frame.origin?.type === 'plugin' ? frame.origin.pluginId : ''; ownership.textContent = t(`Provided by ${pluginId} · CAN ID is read-only`, `${pluginId} が提供 · CAN IDは読み取り専用`); fields.appendChild(ownership); }
   content.append(title, fields);
 
   const bitHeading = document.createElement('div'); bitHeading.className = 'bit-heading'; const bitTitle = document.createElement('h2'); bitTitle.textContent = t('Bit Layout', 'ビット配置'); bitHeading.appendChild(bitTitle);
@@ -320,7 +320,7 @@ function filterInput(signal: ManualDerivedSignalDefinition, available: readonly 
     signalNameSelect(available, operation.input, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, operation: current.operation.type === 'filter' ? { ...current.operation, input: next } : current.operation }))),
     selectInput([['low-pass',t('Low-pass','ローパス')],['moving-average',t('Moving average','移動平均')]], operation.filter, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, operation: current.operation.type === 'filter' ? { ...current.operation, filter: next as 'low-pass' | 'moving-average' } : current.operation })))
   );
-  const time = document.createElement('label'); time.className = 'field'; const caption = document.createElement('span'); caption.textContent = operation.filter === 'low-pass' ? 'Time constant (seconds)' : 'Window (seconds)';
+  const time = document.createElement('label'); time.className = 'field'; const caption = document.createElement('span'); caption.textContent = operation.filter === 'low-pass' ? t('Time constant (seconds)', '時定数（秒）') : t('Window (seconds)', '時間窓（秒）');
   time.append(caption, numberInput(operation.timeSeconds, 0.000001, Number.MAX_VALUE, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, operation: current.operation.type === 'filter' ? { ...current.operation, timeSeconds: next } : current.operation }))));
   wrap.append(controls, time); return wrap;
 }

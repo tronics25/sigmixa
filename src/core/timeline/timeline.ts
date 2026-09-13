@@ -23,15 +23,18 @@ export function normalizeValue(value: number, minimum: number, maximum: number):
   return (value - minimum) / (maximum - minimum) * 100;
 }
 
-export function nearestSample(samples: readonly SignalSample[], timestamp: number): SignalSample | undefined {
+export function nearestSample(samples: readonly SignalSample[], timestamp: number, range?: TimeRange): SignalSample | undefined {
   if (!samples.length || !Number.isFinite(timestamp)) return undefined;
-  let low = 0; let high = samples.length - 1;
+  let low = range ? lowerBound(samples, Math.min(range.start, range.end)) : 0;
+  const end = range ? upperBound(samples, Math.max(range.start, range.end)) : samples.length;
+  if (low >= end) return undefined;
+  let high = end - 1; const first = low;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
     if (samples[middle].timestamp < timestamp) low = middle + 1;
     else high = middle;
   }
-  if (low === 0) return samples[0];
+  if (low === first) return samples[first];
   const before = samples[low - 1]; const after = samples[low];
   return Math.abs(before.timestamp - timestamp) <= Math.abs(after.timestamp - timestamp) ? before : after;
 }
@@ -41,6 +44,14 @@ export function samplesInRange(samples: readonly SignalSample[], range?: TimeRan
   const start = lowerBound(samples, Math.min(range.start, range.end));
   const end = upperBound(samples, Math.max(range.start, range.end));
   return samples.slice(start, end);
+}
+
+/** Includes one adjacent sample on each side so a continuous line reaches the viewport edge. */
+export function samplesInRangeWithContext(samples: readonly SignalSample[], range?: TimeRange): readonly SignalSample[] {
+  if (!range) return samples;
+  const start = lowerBound(samples, Math.min(range.start, range.end));
+  const end = upperBound(samples, Math.max(range.start, range.end));
+  return samples.slice(Math.max(0, start - 1), Math.min(samples.length, end + 1));
 }
 
 function lowerBound(samples: readonly SignalSample[], timestamp: number): number {

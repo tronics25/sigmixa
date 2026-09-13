@@ -35,6 +35,28 @@ test('query context extends search and decoded/raw filtering without adding defi
   const context = { cacheKey: 'definitions:1', additionalSearchText: (item: CanFrame) => item.canId === 1 ? 'Vehicle Speed' : '', isDecoded: (item: CanFrame) => item.canId === 1 };
   assert.equal(store.query({ offset: 0, limit: 10, filter: { search: 'speed' } }, context).total, 1);
   assert.equal(store.query({ offset: 0, limit: 10, filter: { decoded: false } }, context).rows[0].canId, 2);
+  const changed = { cacheKey: 'definitions:2', isDecoded: (item: CanFrame) => item.canId === 2 };
+  assert.equal(store.query({ offset: 0, limit: 10, filter: { decoded: false } }, changed).rows[0].canId, 1);
+});
+
+test('unified keyword filtering supports VS Code-style regular expressions across individual fields', () => {
+  const store = new ChunkedFrameStore(); store.append([{ ...frame(0, 0x123), data: Uint8Array.from([0xaa, 0x55]) }, frame(1, 0x1234)]);
+  const context = { cacheKey: 'names:1', additionalSearchText: (item: CanFrame) => item.canId === 0x123 ? 'Vehicle Speed' : 'Engine' };
+  assert.equal(store.query({ offset: 0, limit: 10, filter: { search: 'speed' } }, context).total, 1);
+  assert.deepEqual(store.query({ offset: 0, limit: 10, filter: { search: '^123$', searchRegex: true } }, context).rows.map((item) => item.canId), [0x123]);
+  assert.equal(store.query({ offset: 0, limit: 10, filter: { search: 'AA\\s+55', searchRegex: true } }, context).total, 1);
+  assert.equal(store.query({ offset: 0, limit: 10, filter: { search: '[', searchRegex: true } }, context).total, 0);
+});
+
+test('keyword payload matching follows the visible RAW or Decoded content mode', () => {
+  const store = new ChunkedFrameStore(); store.append([
+    { ...frame(0, 0x123), data: Uint8Array.from([0xaa, 0x55]) },
+    { ...frame(1, 0x124), data: Uint8Array.from([0xaa, 0x55]) },
+  ]);
+  const decodedContext = { cacheKey: 'decoded-content', additionalSearchText: (item: CanFrame) => item.canId === 0x123 ? 'Vehicle Speed' : '', isDecoded: (item: CanFrame) => item.canId === 0x123 };
+  assert.deepEqual(store.query({ offset: 0, limit: 10, filter: { search: 'AA', searchContent: 'decoded' } }, decodedContext).rows.map((item) => item.canId), [0x124]);
+  assert.deepEqual(store.query({ offset: 0, limit: 10, filter: { search: 'AA', searchContent: 'raw' } }, { ...decodedContext, cacheKey: 'raw-content', additionalSearchText: () => '' }).rows.map((item) => item.canId), [0x123, 0x124]);
+  assert.deepEqual(store.query({ offset: 0, limit: 10, filter: { search: 'speed', searchContent: 'decoded' } }, decodedContext).rows.map((item) => item.canId), [0x123]);
 });
 
 test('representative width sample is bounded, spans time, and includes longest payload per CAN ID', () => {
@@ -42,4 +64,29 @@ test('representative width sample is bounded, spans time, and includes longest p
   const sample = store.representativeSample(undefined, 20);
   assert.ok(sample.length <= 20); assert.ok(sample.some((item) => item.id === 's:999'));
   for (const id of [0, 1, 2]) assert.equal(Math.max(...sample.filter((item) => item.canId === id).map((item) => item.dataLength)), 15);
+});
+
+test('adjacent Timestamp navigation snaps within the Clip range', () => {
+  const store = new ChunkedFrameStore(); store.append(Array.from({ length: 8 }, (_, index) => frame(index)));
+  assert.equal(store.adjacentTimestamp(100.35, -1, { start: 100.2, end: 100.6 }), 100.3);
+  assert.equal(store.adjacentTimestamp(100.35, 1, { start: 100.2, end: 100.6 }), 100.4);
+  assert.equal(store.adjacentTimestamp(100.2, -1, { start: 100.2, end: 100.6 }), undefined);
+  assert.equal(store.adjacentTimestamp(99, 1, { start: 100.2, end: 100.6 }), 100.2);
+  assert.equal(store.adjacentTimestamp(101, -1, { start: 100.2, end: 100.6 }), 100.6);
+});
+
+test('nearest Timestamp snapping keeps exact matches and respects the Clip range', () => {
+  const store = new ChunkedFrameStore(); store.append(Array.from({ length: 8 }, (_, index) => frame(index)));
+  assert.equal(store.nearestTimestamp(100.36), 100.4);
+  assert.equal(store.nearestTimestamp(100.3), 100.3);
+  assert.equal(store.nearestTimestamp(99, { start: 100.2, end: 100.6 }), 100.2);
+  assert.equal(store.nearestTimestamp(101, { start: 100.2, end: 100.6 }), 100.6);
+});
+
+test('adjacent Timestamp cache stays correct after unsorted appends', () => {
+  const store = new ChunkedFrameStore();
+  store.append([{ ...frame(5), timestamp: 5 }, { ...frame(1), timestamp: 1 }, { ...frame(3), timestamp: 3 }]);
+  assert.equal(store.adjacentTimestamp(2, 1), 3);
+  store.append([{ ...frame(2), timestamp: 2 }]);
+  assert.equal(store.adjacentTimestamp(1, 1), 2);
 });

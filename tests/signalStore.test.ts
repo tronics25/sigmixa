@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { InMemorySignalStore } from '../src/core/signal/signalStore';
 import type { ManualDecodedSignal } from '../src/core/manual/manualDecoder';
 import type { SignalDefinition } from '../src/core/signal/signal';
-import { downsampleEven, nearestSample, normalizeValue, samplesInRange } from '../src/core/timeline/timeline';
+import { downsampleEven, nearestSample, normalizeValue, samplesInRange, samplesInRangeWithContext } from '../src/core/timeline/timeline';
 
 const speed: SignalDefinition = { id: 'frame-a:speed', name: 'Value', unit: 'km/h', source: { type: 'manual-can', frameDefinitionId: 'frame-a' } };
 const temperature: SignalDefinition = { id: 'frame-b:temperature', name: 'Value', unit: '°C', source: { type: 'manual-can', frameDefinitionId: 'frame-b' } };
@@ -45,6 +45,28 @@ test('Signal Table creates event rows only and never forward-fills unrelated Sig
   assert.equal(page.rows[2].values.size, 2);
 });
 
+test('Signal Table Clip range excludes rows outside its Timestamp boundaries', () => {
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed]);
+  store.appendFrame('a:0', 0, [decoded(speed, 0, 10)]); store.appendFrame('a:1', 1, [decoded(speed, 1, 20)]); store.appendFrame('a:2', 2, [decoded(speed, 2, 30)]);
+  assert.deepEqual(store.tablePage([speed.id], 0, 100, { start: 0.5, end: 1.5 }).rows.map((row) => row.timestamp), [1]);
+});
+
+test('active Signal Table Clip cache rejects later frames outside its range', () => {
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed]);
+  store.appendFrame('a:1', 1, [decoded(speed, 1, 20)]);
+  assert.equal(store.tablePage([speed.id], 0, 100, { start: 0.5, end: 1.5 }).total, 1);
+  store.appendFrame('a:2', 2, [decoded(speed, 2, 30)]);
+  store.appendFrame('a:1.25', 1.25, [decoded(speed, 1.25, 25)]);
+  assert.deepEqual(store.tablePage([speed.id], 0, 100, { start: 0.5, end: 1.5 }).rows.map((row) => row.timestamp), [1, 1.25]);
+});
+
+test('Clip range also bounds nearest values and exported event rows', () => {
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed]);
+  store.appendFrame('a:0', 0, [decoded(speed, 0, 10)]); store.appendFrame('a:1', 1, [decoded(speed, 1, 20)]); store.appendFrame('a:2', 2, [decoded(speed, 2, 30)]);
+  assert.equal(store.nearest([speed.id], 0, { start: 0.5, end: 1.5 })[0]?.sample.timestamp, 1);
+  assert.deepEqual([...store.eventRows([speed.id], { start: 0.5, end: 1.5 })].map((row) => row.timestamp), [1]);
+});
+
 test('bounded sampling preserves the true first and last items and exact hover uses original samples', () => {
   const samples = Array.from({ length: 10_001 }, (_, index) => ({ timestamp: index / 10, value: index }));
   const bounded = downsampleEven(samples, 4000);
@@ -54,6 +76,15 @@ test('bounded sampling preserves the true first and last items and exact hover u
   assert.equal(nearestSample(samples, 123.44)?.timestamp, 123.4);
   assert.equal(samplesInRange(samples, { start: 100, end: 101 }).length, 11);
   assert.equal(samplesInRange(samples, { start: 2000, end: 3000 }).length, 0);
+  assert.deepEqual(samplesInRangeWithContext(samples, { start: 100, end: 101 }).map((sample) => sample.timestamp), [99.9, ...samples.slice(1000, 1011).map((sample) => sample.timestamp), 101.1]);
+});
+
+test('viewport series retains adjacent samples while reporting only samples inside the range', () => {
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed]);
+  for (let timestamp = 0; timestamp <= 4; timestamp++) store.appendFrame(`a:${timestamp}`, timestamp, [decoded(speed, timestamp, timestamp * 10)]);
+  const [series] = store.seriesSlice([speed.id], { start: 1.25, end: 2.75 }, 100);
+  assert.equal(series.totalSamplesInRange, 1);
+  assert.deepEqual(series.samples.map((sample) => sample.timestamp), [1, 2, 3]);
 });
 
 test('normalization uses global extrema and handles constant and invalid series', () => {
@@ -68,4 +99,26 @@ test('Signal events retain source-neutral interval semantics', () => {
   store.appendEvents(speed.id, [{ timestamp: 0.5, endTimestamp: 1.5, kind: 'threshold', severity: 'warning', label: 'High' }]);
   const [series] = store.seriesSlice([speed.id], { start: 0, end: 1 }, 100);
   assert.deepEqual(series.events, [{ timestamp: 0.5, endTimestamp: 1.5, kind: 'threshold', severity: 'warning', label: 'High' }]);
+});
+
+test('Signal series identifies real gaps before display downsampling', () => {
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed]);
+  for (let index = 0; index < 100; index++) store.appendFrame(`a:${index}`, index * 0.01, [decoded(speed, index * 0.01, index)]);
+  for (let index = 0; index < 100; index++) store.appendFrame(`b:${index}`, 2 + index * 0.01, [decoded(speed, 2 + index * 0.01, index)]);
+  const [series] = store.seriesSlice([speed.id], undefined, 12);
+  assert.equal(series.samples.length, 12);
+  assert.deepEqual(series.gaps, [{ startTimestamp: 0.99, endTimestamp: 2 }]);
+});
+
+test('Signal series treats missing-quality samples as a gap boundary', () => {
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed]);
+  store.appendSeries(speed, [
+    { timestamp: 0, value: 1, quality: 'valid' },
+    { timestamp: 1, value: 2, quality: 'missing' },
+    { timestamp: 2, value: 3, quality: 'valid' },
+  ]);
+  const [series] = store.seriesSlice([speed.id], undefined, 10);
+  assert.deepEqual(series.gaps, [{ startTimestamp: 0, endTimestamp: 2 }]);
+  assert.equal(series.globalMinimum, 1);
+  assert.equal(series.globalMaximum, 3);
 });

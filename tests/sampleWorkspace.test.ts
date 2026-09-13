@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { migrateProject } from '../src/core/project/schema';
 import { validateFrameDefinition } from '../src/core/manual/manualDefinition';
@@ -14,8 +14,22 @@ import { InMemorySignalStore } from '../src/core/signal/signalStore';
 import { signalDefinitionFor } from '../src/core/manual/manualDefinition';
 import { importExternalCsvText } from '../src/core/external/csv';
 import { buildTrajectoryPoints } from '../src/core/trajectory/trajectory';
+import { externalSignalId } from '../src/core/external/csv';
 
 const workspace = path.resolve('sample');
+
+test('showcase Clips reference available log ranges and Signals', () => {
+  const project = migrateProject(JSON.parse(readFileSync(path.join(workspace, '.sigmixa/project.json'), 'utf8')));
+  assert.equal(project.clips.length, 2);
+  const signalIds = new Set(project.frames.flatMap((frame) => [...frame.signals, ...(frame.derivedSignals ?? [])].map((signal) => signal.id)));
+  for (const source of project.externalCsvSources) for (const column of source.valueColumns) signalIds.add(externalSignalId(source.id, column.column));
+  const pluginPrefixes = project.pluginBindings.map((binding) => `plugin:${encodeURIComponent(binding.pluginId)}:${encodeURIComponent(binding.id)}:`);
+  for (const clip of project.clips) {
+    assert.ok(existsSync(path.join(workspace, clip.sourcePath)));
+    assert.ok(clip.endTimestamp > clip.startTimestamp);
+    assert.ok(clip.signalIds.length > 0 && clip.signalIds.every((id) => signalIds.has(id) || pluginPrefixes.some((prefix) => id.startsWith(prefix))));
+  }
+});
 
 test('sample workspace persists six valid automotive Manual Frames', () => {
   const persisted = JSON.parse(readFileSync(path.join(workspace, '.sigmixa/project.json'), 'utf8')) as { schemaVersion: number; frames: Array<Record<string, unknown>> };

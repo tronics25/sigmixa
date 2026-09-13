@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { RawLogDocument } from './rawLogDocument';
 import { rawLogHtml } from './rawLogHtml';
-import type { ToExtensionMessage, ToWebviewMessage } from './rawLogProtocol';
+import type { LogViewState, ToExtensionMessage, ToWebviewMessage } from './rawLogProtocol';
 import type { LogFilesProvider } from '../sidebar/logFilesProvider';
 import type { ProjectStore } from '../storage/projectStore';
 import type { FrameDefinitionEditor } from '../frame-editor/frameDefinitionEditor';
@@ -9,8 +9,9 @@ import { createHash, randomUUID } from 'crypto';
 import type { PluginManager } from '../plugins/pluginManager';
 import * as path from 'path';
 import { readExternalCsvHeader } from '../external/externalCsvLoader';
-import { removeExternalCsvSignal, type ExternalCsvValueColumn } from '../../core/project/schema';
+import { removeExternalCsvSignal, updateClipSignals, type ExternalCsvValueColumn } from '../../core/project/schema';
 import { formatCanId } from '../../core/frame/canId';
+import { clipIdFromUri, portableClipPath } from '../clips/clipPaths';
 
 export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider<RawLogDocument> {
   private readonly pendingExternalCsv = new Map<string, { readonly uri: vscode.Uri; readonly headers: readonly string[] }>();
@@ -24,23 +25,27 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
 
   openCustomDocument(uri: vscode.Uri): RawLogDocument {
     void this.logFiles.add(uri.fsPath);
-    return new RawLogDocument(uri, this.projectStore.current, this.projectStore.analysisRevision, this.pluginManager.registry);
+    const clipId = clipIdFromUri(uri); const clip = clipId ? this.projectStore.current.clips.find((item) => item.id === clipId) : undefined;
+    return new RawLogDocument(uri, this.projectStore.current, this.projectStore.analysisRevision, this.pluginManager.registry, clip ? { start: clip.startTimestamp, end: clip.endTimestamp } : undefined);
   }
 
   resolveCustomEditor(document: RawLogDocument, panel: vscode.WebviewPanel): void {
     panel.webview.options = { enableScripts: true };
     panel.webview.html = rawLogHtml(panel.webview, this.extensionUri, document.fileName, vscode.env.language);
     const send = (message: ToWebviewMessage) => panel.webview.postMessage(message);
+    const clipId = clipIdFromUri(document.uri); const clip = clipId ? this.projectStore.current.clips.find((item) => item.id === clipId) : undefined;
+    let viewStateSaveErrorShown = false;
+    if (clip) panel.title = clip.name;
     const viewStateKey = `log-view:${createHash('sha256').update(document.uri.toString()).digest('hex').slice(0, 20)}`;
     const subscription = document.onDidUpdate((update) => {
       if (update.type === 'progress') void send({
-        type: 'progress', frames: update.frames, bytesRead: update.bytesRead, totalBytes: update.totalBytes,
+        type: 'progress', frames: update.frames, bytesRead: update.bytesRead, totalBytes: update.totalBytes, channels: document.channelValues,
       });
       else if (update.type === 'diagnostics') void send({ type: 'diagnostics', diagnostics: update.diagnostics, total: update.total });
       else if (update.type === 'analysisProgress') void send({ type: 'analysisProgress', processed: update.processed, total: update.total });
       else if (update.type === 'analysisComplete') void send({ type: 'analysisComplete', processed: update.processed, cancelled: update.cancelled });
       else {
-        void send({ type: 'parseComplete', cancelled: update.summary.cancelled, frames: update.summary.framesParsed, diagnostics: update.summary.diagnostics });
+        void send({ type: 'parseComplete', cancelled: update.summary.cancelled, frames: update.summary.framesParsed, diagnostics: update.summary.diagnostics, channels: document.channelValues });
         void send({ type: 'definitionsChanged' });
       }
     });
@@ -57,7 +62,9 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     panel.webview.onDidReceiveMessage((message: ToExtensionMessage) => {
       if (message.type === 'ready') {
         const state = this.projectStore.current.viewStates[viewStateKey] ?? this.projectStore.current.viewStates['log-view-default'];
-        void send({ type: 'init', fileName: document.fileName, parsing: document.isParsing, frames: document.store.size, diagnostics: document.diagnosticCount, viewState: state && typeof state === 'object' ? state : undefined });
+        const viewState = state && typeof state === 'object' ? state as LogViewState : undefined;
+        const initialViewState = clip ? { ...viewState, chartSelectedIds: clip.signalIds } : viewState;
+        void send({ type: 'init', fileName: document.fileName, parsing: document.isParsing, frames: document.store.size, diagnostics: document.diagnosticCount, channels: document.channelValues, viewState: initialViewState, clip: clip ? { name: clip.name, startTimestamp: clip.startTimestamp, endTimestamp: clip.endTimestamp } : undefined });
         if (document.diagnostics.length) void send({ type: 'diagnostics', diagnostics: document.diagnostics.slice(-200), total: document.diagnosticCount });
       } else if (message.type === 'pageRequest') {
         const page = document.query({ offset: message.offset, limit: message.limit, filter: message.filter }, this.projectStore.current, this.projectStore.analysisRevision);
@@ -70,6 +77,8 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         this.frameEditor.open(message.definitionId);
       } else if (message.type === 'registerFrame') {
         void this.frameEditor.create({ canId: message.canId, extended: message.extended, frameLength: message.frameLength });
+      } else if (message.type === 'selectedRowsRequest') {
+        void this.transferSelectedRows(document, message, send);
       } else if (message.type === 'signalCatalogRequest') {
         const allDefinitions = document.signalCatalog();
         const definitions = message.view === 'table'
@@ -107,11 +116,11 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       } else if (message.type === 'signalTableSampleRequest') {
         const rows = document.signalTableSample(message.selectedIds);
         void send({ type: 'signalTableSample', requestId: message.requestId, rows: rows.map((row) => ({ id: row.id, timestamp: row.timestamp, values: Object.fromEntries(Array.from(row.values, ([id, sample]) => [id, sample.value])) })) });
+      } else if (message.type === 'signalTableRowsRequest') {
+        void this.transferSignalTableRows(document, message, send);
       } else if (message.type === 'signalSeriesRequest') {
         const result = document.signalSeries(message.selectedIds, message.range, message.maxPoints);
         void send({ type: 'signalSeries', requestId: message.requestId, fullRange: result.range, series: result.series.map((series) => ({ ...series, events: series.events ?? [] })) });
-      } else if (message.type === 'nearestSignalsRequest') {
-        void send({ type: 'nearestSignals', requestId: message.requestId, timestamp: message.timestamp, values: document.nearestSignals(message.selectedIds, message.timestamp) });
       } else if (message.type === 'cancelAnalysis') {
         document.cancelAnalysis();
       } else if (message.type === 'importExternalCsv') {
@@ -124,10 +133,63 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         void this.removeExternalCsvSignal(message.sourceId, message.column);
       } else if (message.type === 'exportSignalCsv') {
         void this.exportSignals(document, message.selectedIds);
+      } else if (message.type === 'saveTimeSeriesImage') {
+        void this.saveTimeSeriesImage(document, message.dataUrl);
+      } else if (message.type === 'saveTrajectoryImage') {
+        void this.saveTrajectoryImage(document, message.dataUrl);
+      } else if (message.type === 'snapTimeRangeRequest') {
+        const startTimestamp = document.nearestFrameTimestamp(message.startTimestamp) ?? message.startTimestamp; const endTimestamp = document.nearestFrameTimestamp(message.endTimestamp) ?? message.endTimestamp;
+        void send({ type: 'timeRangeAdjusted', requestId: message.requestId, startTimestamp: Math.min(startTimestamp, endTimestamp), endTimestamp: Math.max(startTimestamp, endTimestamp) });
+      } else if (message.type === 'adjustTimeRangeRequest') {
+        const current = message.edge === 'start' ? message.startTimestamp : message.endTimestamp; const next = document.adjacentFrameTimestamp(current, message.direction);
+        const startTimestamp = message.edge === 'start' && next !== undefined ? Math.min(next, message.endTimestamp) : message.startTimestamp; const endTimestamp = message.edge === 'end' && next !== undefined ? Math.max(next, message.startTimestamp) : message.endTimestamp;
+        void send({ type: 'timeRangeAdjusted', requestId: message.requestId, startTimestamp, endTimestamp });
+      } else if (message.type === 'createClip') {
+        void this.createClip(document, message, send);
       } else if (message.type === 'saveLogViewState') {
-        void this.projectStore.update((project) => ({ ...project, viewStates: { ...project.viewStates, [viewStateKey]: message.state } })).catch(() => undefined);
+        void this.projectStore.update((project) => {
+          const next = { ...project, viewStates: { ...project.viewStates, [viewStateKey]: message.state } };
+          return clip && message.state.chartSelectedIds ? updateClipSignals(next, clip.id, message.state.chartSelectedIds) : next;
+        }).then(() => { viewStateSaveErrorShown = false; }).catch((error) => {
+          if (viewStateSaveErrorShown) return; viewStateSaveErrorShown = true;
+          void vscode.window.showErrorMessage(`Could not save the current SigMixa view settings: ${(error as Error).message}`);
+        });
       }
     });
+  }
+
+  private async transferSelectedRows(document: RawLogDocument, message: Extract<ToExtensionMessage, { type: 'selectedRowsRequest' }>, send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {
+    try {
+      const result = document.selectedRowsText(message.ranges, message.filter, this.projectStore.current, this.projectStore.analysisRevision, message.contentMode, message.action === 'open');
+      if (message.action === 'copy') { await vscode.env.clipboard.writeText(result.text); void send({ type: 'rowsCopied', count: result.count }); }
+      else { const textDocument = await vscode.workspace.openTextDocument({ content: result.text, language: 'plaintext' }); await vscode.window.showTextDocument(textDocument, { viewColumn: vscode.ViewColumn.Beside, preview: false }); }
+    } catch (error) { void vscode.window.showErrorMessage(`Could not ${message.action === 'copy' ? 'copy' : 'open'} RAW Log rows: ${(error as Error).message}`); }
+  }
+
+  private async transferSignalTableRows(document: RawLogDocument, message: Extract<ToExtensionMessage, { type: 'signalTableRowsRequest' }>, send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {
+    try {
+      const result = document.selectedSignalRowsText(message.ranges, message.selectedIds, message.action === 'open');
+      if (message.action === 'copy') { await vscode.env.clipboard.writeText(result.text); void send({ type: 'signalTableRowsCopied', count: result.count }); }
+      else { const textDocument = await vscode.workspace.openTextDocument({ content: result.text, language: 'plaintext' }); await vscode.window.showTextDocument(textDocument, { viewColumn: vscode.ViewColumn.Beside, preview: false }); }
+    } catch (error) { void vscode.window.showErrorMessage(`Could not ${message.action === 'copy' ? 'copy' : 'open'} Signal Table rows: ${(error as Error).message}`); }
+  }
+
+  private async createClip(document: RawLogDocument, message: Extract<ToExtensionMessage, { type: 'createClip' }>, send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {
+    const root = this.projectStore.requireWorkspace(); if (!root) return;
+    const startTimestamp = Math.min(message.startTimestamp, message.endTimestamp); const endTimestamp = Math.max(message.startTimestamp, message.endTimestamp);
+    if (!Number.isFinite(startTimestamp) || !Number.isFinite(endTimestamp) || endTimestamp <= startTimestamp) return;
+    const suggested = `${document.fileName} ${startTimestamp.toFixed(3)}–${endTimestamp.toFixed(3)} s`;
+    const name = await vscode.window.showInputBox({ title: 'Create Clip', prompt: 'Clip name', value: suggested, validateInput: (value) => value.trim() ? undefined : 'Clip name is required.' });
+    if (!name) return;
+    const id = `clip-${randomUUID()}`;
+    try {
+      await this.projectStore.update((project) => ({ ...project, clips: [...project.clips, {
+        id, name: name.trim(), sourcePath: portableClipPath(document.uri.fsPath, root.fsPath), sourceFileName: document.fileName,
+        startTimestamp, endTimestamp, signalIds: [...new Set(message.signalIds)],
+      }] }));
+      void send({ type: 'clipCreated', clipId: id });
+      void vscode.window.showInformationMessage(`Clip created: ${name.trim()}`);
+    } catch (error) { void vscode.window.showErrorMessage(`Could not create Clip: ${(error as Error).message}`); }
   }
 
   private async exportSignals(document: RawLogDocument, selectedIds: readonly string[]): Promise<void> {
@@ -137,6 +199,22 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     if (target.scheme !== 'file') { void vscode.window.showErrorMessage('Signal CSV export currently requires a local file target.'); return; }
     try { await document.exportSignalCsv(target.fsPath, selectedIds); void vscode.window.showInformationMessage(`Signal CSV exported: ${target.fsPath}`); }
     catch (error) { void vscode.window.showErrorMessage(`Signal CSV export failed: ${(error as Error).message}`); }
+  }
+
+  private async saveTimeSeriesImage(document: RawLogDocument, dataUrl: string): Promise<void> {
+    const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl); if (!match) { void vscode.window.showErrorMessage('Could not save the Time Series image because the generated PNG was invalid.'); return; }
+    const bytes = Buffer.from(match[1], 'base64'); if (!bytes.length || bytes.length > 25_000_000) { void vscode.window.showErrorMessage('The generated Time Series image is empty or too large.'); return; }
+    const base = document.fileName.replace(/\.(?:asc|blf)$/i, ''); const target = await vscode.window.showSaveDialog({ title: 'Save Time Series Image', filters: { PNG: ['png'] }, defaultUri: vscode.Uri.file(path.join(path.dirname(document.uri.fsPath), `${base}-time-series.png`)) }); if (!target) return;
+    try { await vscode.workspace.fs.writeFile(target, bytes); void vscode.window.showInformationMessage(`Time Series image saved: ${target.fsPath || target.toString()}`); }
+    catch (error) { void vscode.window.showErrorMessage(`Could not save the Time Series image: ${(error as Error).message}`); }
+  }
+
+  private async saveTrajectoryImage(document: RawLogDocument, dataUrl: string): Promise<void> {
+    const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl); if (!match) { void vscode.window.showErrorMessage('Could not save the Trajectory image because the generated PNG was invalid.'); return; }
+    const bytes = Buffer.from(match[1], 'base64'); if (!bytes.length || bytes.length > 25_000_000) { void vscode.window.showErrorMessage('The generated Trajectory image is empty or too large.'); return; }
+    const base = document.fileName.replace(/\.(?:asc|blf)$/i, ''); const target = await vscode.window.showSaveDialog({ title: 'Save Trajectory Image', filters: { PNG: ['png'] }, defaultUri: vscode.Uri.file(path.join(path.dirname(document.uri.fsPath), `${base}-trajectory.png`)) }); if (!target) return;
+    try { await vscode.workspace.fs.writeFile(target, bytes); void vscode.window.showInformationMessage(`Trajectory image saved: ${target.fsPath || target.toString()}`); }
+    catch (error) { void vscode.window.showErrorMessage(`Could not save the Trajectory image: ${(error as Error).message}`); }
   }
 
   private async selectExternalCsv(send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {

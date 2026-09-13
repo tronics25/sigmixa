@@ -2,7 +2,7 @@
   "name": "sigmixa",
   "displayName": "SigMixa",
   "description": "%sigmixa.description%",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "publisher": "tronics25",
   "license": "MIT",
   "private": true,
@@ -24,6 +24,7 @@
   "activationEvents": [
     "onCustomEditor:sigmixa.rawLog",
     "onView:sigmixa.logFiles",
+    "onView:sigmixa.clips",
     "onView:sigmixa.frames",
     "onView:sigmixa.plugins"
   ],
@@ -60,6 +61,10 @@
           "name": "%sigmixa.views.logFiles%"
         },
         {
+          "id": "sigmixa.clips",
+          "name": "%sigmixa.views.clips%"
+        },
+        {
           "id": "sigmixa.frames",
           "name": "%sigmixa.views.frames%"
         },
@@ -81,6 +86,29 @@
         "title": "%sigmixa.command.addFrame%",
         "category": "SigMixa",
         "icon": "$(add)"
+      },
+      {
+        "command": "sigmixa.openClip",
+        "title": "%sigmixa.command.openClip%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.openClipSource",
+        "title": "%sigmixa.command.openClipSource%",
+        "category": "SigMixa",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "sigmixa.compareClips",
+        "title": "%sigmixa.command.compareClips%",
+        "category": "SigMixa",
+        "icon": "$(graph-line)"
+      },
+      {
+        "command": "sigmixa.deleteClip",
+        "title": "%sigmixa.command.deleteClip%",
+        "category": "SigMixa",
+        "icon": "$(trash)"
       },
       {
         "command": "sigmixa.importDbc",
@@ -126,6 +154,11 @@
     "menus": {
       "view/title": [
         {
+          "command": "sigmixa.compareClips",
+          "when": "view == sigmixa.clips",
+          "group": "navigation"
+        },
+        {
           "command": "sigmixa.openLog",
           "when": "view == sigmixa.logFiles",
           "group": "navigation"
@@ -152,6 +185,21 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "sigmixa.openClipSource",
+          "when": "view == sigmixa.clips",
+          "group": "navigation@1"
+        },
+        {
+          "command": "sigmixa.compareClips",
+          "when": "view == sigmixa.clips && viewItem == sigmixa.clip",
+          "group": "navigation@2"
+        },
+        {
+          "command": "sigmixa.deleteClip",
+          "when": "view == sigmixa.clips",
+          "group": "inline"
+        },
         {
           "command": "sigmixa.deleteFrame",
           "when": "view == sigmixa.frames && viewItem == sigmixa.manualFrame",

@@ -1,5 +1,22 @@
 # Change Log
 
+## 0.10.0
+
+- Added persistent Clips with scoped RAW Log, Table, Time Series and Trajectory views, source navigation, deletion and multi-Clip comparison.
+- Added Signal selection and CAN Timestamp alignment to Clip comparison, plus exact hover values and multiple removable capture markers in both chart views.
+- Improved large-log responsiveness with virtualized views, bounded series payloads and indexed Clip alignment navigation.
+- Added standard RAW Log row selection, Excel-compatible HTML/TSV clipboard copy and opening selected rows in a VS Code text editor.
+- Completed RAW Log usability with accurate filtered-result counts and empty states, unloaded-row range selection, selection/copy feedback, sticky identity columns, keyboard navigation, viewport-aware column growth and display-mode-aware keyword matching.
+- Completed Signal Table usability with explicit loading and empty states, resizable Signal selection, group-aware search, result-scoped bulk actions, reorderable columns, multi-row selection, Excel-compatible copy and opening rows in a text editor.
+- Simplified Signal Table sizing with automatic content and viewport fitting, responsive resizing and double-click content sizing instead of manual sizing buttons.
+- Fixed Clip-range table caching, stale decoded search results after Plugin reload and silent view-setting save failures.
+- Cleaned binary floating-point tails from exported CSV Timestamps and Signal values while preserving useful precision.
+- Unified RAW Log filtering into one keyword field with a VS Code-style regular-expression toggle and removable active-filter chips, added RAW/Decoded CONTENT modes with RAW fallback for undecoded Frames, replaced manual column-sizing actions with automatic initial sizing and double-click fitting, and improved filter validation, empty-state actions, responsive toolbars, Signal selector state retention, localization and keyboard accessibility.
+- Refined Time Series and Clip Comparison with broad engineering-unit conversion and notation aliases, stable physical-quantity ordering independent of Signal selection order, paired left/right Y axes for up to two unit families per graph, visible/whole-file/manual Y-axis ranges with optional zero inclusion, gap-connection controls backed by pre-downsampling discontinuity detection, exact sample-time offsets in hover and marker values, per-graph expanding legends, fixed-height scrollable graph panels, clearer loading states, stable zoom during Signal changes, smoother wheel and trackpad navigation, CAN Timestamp-snapped Clip ranges, collision-aware capture markers and screen-size-independent PNG export.
+- Added drag-and-drop graph composition, timestamp/value labels and fixed-resolution image export to Time Series and Clip Comparison.
+- Improved Trajectory with X-forward/Y-right/Z-up camera presets, correctly inverted axes and grid values, optional data points and gap connection, coordinate inspection, two-point measurements and fixed-resolution PNG export.
+- Replaced all five workflow screenshots and added a Clip Comparison screenshot; refreshed the README for the new analysis workflows.
+
 ## 0.9.1
 
 - Renamed the Derived Signal Lookup Table type to Linear interpolation and removed the redundant single-option interpolation selector.

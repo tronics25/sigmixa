@@ -1,12 +1,15 @@
 import * as vscode from 'vscode';
 import { RawLogEditorProvider } from '../editors/rawLogEditor';
 import { LogFilesProvider } from '../sidebar/logFilesProvider';
-import { FrameDefinitionsProvider, PluginsProvider } from '../sidebar/projectProviders';
+import { ClipsProvider, FrameDefinitionsProvider, PluginsProvider } from '../sidebar/projectProviders';
 import { ProjectStore } from '../storage/projectStore';
 import { FrameDefinitionEditor, type NewFramePrefill } from '../frame-editor/frameDefinitionEditor';
 import { PluginManager } from '../plugins/pluginManager';
 import { PluginEditor } from '../plugin-editor/pluginEditor';
 import { exportDbc, importDbc } from '../../core/dbc/dbc';
+import type { ClipDefinition } from '../../core/project/schema';
+import { clipResourceUri, resolveClipPath } from '../clips/clipPaths';
+import { ClipComparisonEditor } from '../clips/clipComparisonEditor';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const logFiles = new LogFilesProvider(context.workspaceState);
@@ -14,6 +17,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const plugins = new PluginsProvider();
   const projectStore = new ProjectStore();
   await projectStore.load();
+  const workspacePath = () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const clips = new ClipsProvider((clip) => resolveClipPath(clip, workspacePath()));
+  const clipTree = vscode.window.createTreeView('sigmixa.clips', { treeDataProvider: clips, canSelectMany: true });
   const pluginManager = new PluginManager(projectStore);
   await pluginManager.sync();
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0];
@@ -22,9 +28,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   projectWatcher?.onDidCreate(() => void projectStore.load());
   const frameEditor = new FrameDefinitionEditor(context.extensionUri, projectStore);
   const pluginEditor = new PluginEditor(context.extensionUri, projectStore, pluginManager);
+  const comparisonEditor = new ClipComparisonEditor(context.extensionUri, projectStore, pluginManager);
   const dbcOutput = vscode.window.createOutputChannel('SigMixa DBC');
   const refreshProjectViews = () => {
     frames.setItems(projectStore.current.frames);
+    clips.setItems(projectStore.current.clips);
     plugins.setItems(projectStore.current.plugins);
   };
   refreshProjectViews();
@@ -35,6 +43,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     frameEditor,
     pluginManager,
     pluginEditor,
+    comparisonEditor,
+    clipTree,
     dbcOutput,
     projectStore.onDidChange(() => void pluginManager.sync()),
     projectStore.onDidChange(refreshProjectViews),
@@ -51,6 +61,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!selected?.[0]) return;
       await vscode.commands.executeCommand('vscode.openWith', selected[0], 'sigmixa.rawLog');
       await logFiles.add(selected[0].fsPath);
+    }),
+    vscode.commands.registerCommand('sigmixa.openClip', async (value: ClipDefinition | string) => {
+      const clip = typeof value === 'string' ? projectStore.current.clips.find((item) => item.id === value) : value;
+      if (!clip) return; const filePath = resolveClipPath(clip, workspacePath());
+      try { await vscode.workspace.fs.stat(vscode.Uri.file(filePath)); await vscode.commands.executeCommand('vscode.openWith', clipResourceUri(clip, workspacePath()), 'sigmixa.rawLog'); }
+      catch { void vscode.window.showErrorMessage(`Clip source file was not found: ${filePath}`); }
+    }),
+    vscode.commands.registerCommand('sigmixa.openClipSource', async (value?: ClipDefinition) => {
+      const clip = value ?? clipTree.selection[0]; if (!clip) return; const filePath = resolveClipPath(clip, workspacePath());
+      try { await vscode.workspace.fs.stat(vscode.Uri.file(filePath)); await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(filePath), 'sigmixa.rawLog'); }
+      catch { void vscode.window.showErrorMessage(`Clip source file was not found: ${filePath}`); }
+    }),
+    vscode.commands.registerCommand('sigmixa.compareClips', (value?: ClipDefinition) => {
+      const selected = clipTree.selection.length > 1 ? clipTree.selection : value ? [value] : clipTree.selection;
+      comparisonEditor.open(selected);
+    }),
+    vscode.commands.registerCommand('sigmixa.deleteClip', async (value?: ClipDefinition) => {
+      const clip = value ?? clipTree.selection[0]; if (!clip) return;
+      const answer = await vscode.window.showWarningMessage(`Delete Clip “${clip.name}”? The source log will not be deleted.`, { modal: true }, 'Delete'); if (answer !== 'Delete') return;
+      await projectStore.update((project) => ({ ...project, clips: project.clips.filter((item) => item.id !== clip.id) }));
     }),
     vscode.commands.registerCommand('sigmixa.addFrame', (prefill?: NewFramePrefill) => frameEditor.create(prefill)),
     vscode.commands.registerCommand('sigmixa.importDbc', async () => {

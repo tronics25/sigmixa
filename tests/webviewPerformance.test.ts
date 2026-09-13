@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 import { computeVirtualRange } from '../src/webview/shared/virtualization';
-import { autoFitColumns } from '../src/webview/shared/columnSizing';
+import { autoFitColumns, fitColumnsToView } from '../src/webview/shared/columnSizing';
 import { ChunkedFrameStore } from '../src/core/frame/frameStore';
 import type { CanFrame } from '../src/core/frame/canFrame';
 import { decodeManualFrame } from '../src/core/manual/manualDecoder';
@@ -22,9 +22,27 @@ test('100k-frame paging smoke remains bounded and viewport DOM range stays small
   assert.equal(page.rows.length, 240); assert.ok(range.end - range.start < 60); assert.ok(performance.now() - started < 5000);
 });
 
+test('100k-frame Clip alignment navigation builds once and then remains responsive', { timeout: 10_000 }, () => {
+  const store = new ChunkedFrameStore(); const batch: CanFrame[] = [];
+  for (let index = 0; index < 100_000; index++) batch.push({ id: `a:${index}`, sourceId: 'a', timestamp: index / 1000, canId: 1, extended: false, direction: 'Rx', channel: 1, dlcCode: 0, dataLength: 0, data: new Uint8Array() });
+  store.append(batch); const started = performance.now(); let timestamp = 50;
+  for (let index = 0; index < 1000; index++) timestamp = store.adjacentTimestamp(timestamp, 1, { start: 50, end: 60 }) ?? timestamp;
+  assert.equal(timestamp, 51); assert.ok(performance.now() - started < 1000);
+});
+
 test('column auto fit clamps measured content to stable limits', () => {
   const result = autoFitColumns([{ id: 'content', label: 'CONTENT', minWidth: 100, maxWidth: 300, value: (row: string) => row }], ['x'.repeat(1000)], (text) => text.length * 8);
   assert.equal(result.content, 300);
+});
+
+test('RAW Log viewport growth is assigned to descriptive columns', () => {
+  const columns = [
+    { id: 'time', label: 'TIME', minWidth: 50, maxWidth: 100, value: () => '', flex: 0 },
+    { id: 'name', label: 'NAME', minWidth: 50, maxWidth: 200, value: () => '', flex: 1 },
+    { id: 'content', label: 'CONTENT', minWidth: 100, maxWidth: 500, value: () => '', flex: 5 },
+  ];
+  const result = fitColumnsToView(columns, { time: 50, name: 50, content: 100 }, 500);
+  assert.equal(result.time, 50); assert.ok(result.content > result.name); assert.equal(Math.round(Object.values(result).reduce((sum, value) => sum + value, 0)), 500);
 });
 
 test('100k-frame manual decode smoke stays within the regression guard', { timeout: 10_000 }, () => {

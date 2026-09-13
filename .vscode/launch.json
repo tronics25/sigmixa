@@ -5,7 +5,13 @@
       "name": "Run SigMixa (F5)",
       "type": "extensionHost",
       "request": "launch",
-      "args": ["--extensionDevelopmentPath=${workspaceFolder}", "${workspaceFolder}/sample"],
+      "args": [
+        "--disable-extension=github.copilot-chat",
+        "--disable-extension=openai.chatgpt",
+        "--disable-extension=fill-labs.dependi",
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "${workspaceFolder}/sample"
+      ],
       "outFiles": ["${workspaceFolder}/out/**/*.js"],
       "preLaunchTask": "npm: watch"
     }

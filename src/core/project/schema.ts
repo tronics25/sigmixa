@@ -39,6 +39,16 @@ export interface ExternalCsvSourceDefinition {
   readonly valueColumns: readonly ExternalCsvValueColumn[];
 }
 
+export interface ClipDefinition {
+  readonly id: string;
+  readonly name: string;
+  readonly sourcePath: string;
+  readonly sourceFileName: string;
+  readonly startTimestamp: number;
+  readonly endTimestamp: number;
+  readonly signalIds: readonly string[];
+}
+
 export interface LookupTableDefinition {
   readonly id: string;
   readonly name: string;
@@ -67,6 +77,7 @@ export interface SigMixaProjectV1 {
   readonly plugins: readonly PluginRegistration[];
   readonly pluginBindings: readonly PluginBinding[];
   readonly externalCsvSources: readonly ExternalCsvSourceDefinition[];
+  readonly clips: readonly ClipDefinition[];
   readonly lookupTables: readonly LookupTableDefinition[];
   readonly calculations: readonly CalculationDefinition[];
   readonly viewStates: Readonly<Record<string, unknown>>;
@@ -75,7 +86,7 @@ export interface SigMixaProjectV1 {
 export type SigMixaProject = SigMixaProjectV1;
 
 export function emptyProject(): SigMixaProject {
-  return { schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION, frames: [], plugins: [], pluginBindings: [], externalCsvSources: [], lookupTables: [], calculations: [], viewStates: {} };
+  return { schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION, frames: [], plugins: [], pluginBindings: [], externalCsvSources: [], clips: [], lookupTables: [], calculations: [], viewStates: {} };
 }
 
 /** Converts the runtime model into the source-neutral on-disk representation. */
@@ -104,6 +115,12 @@ export function removeExternalCsvSignal(project: SigMixaProject, sourceId: strin
   };
 }
 
+/** Updates the graph/comparison Signal selection stored by one Clip. */
+export function updateClipSignals(project: SigMixaProject, clipId: string, signalIds: readonly string[]): SigMixaProject {
+  const selected = [...new Set(signalIds.filter((id) => id.trim()))];
+  return { ...project, clips: project.clips.map((clip) => clip.id === clipId ? { ...clip, signalIds: selected } : clip) };
+}
+
 export function upsertCalculation(project: SigMixaProject, calculation: CalculationDefinition): SigMixaProject {
   return { ...project, calculations: [...project.calculations.filter((item) => item.id !== calculation.id), calculation] };
 }
@@ -125,9 +142,19 @@ export function migrateProject(value: unknown): SigMixaProject {
     plugins: Array.isArray(candidate.plugins) ? candidate.plugins.map(coercePlugin) : [],
     pluginBindings: Array.isArray(candidate.pluginBindings) ? candidate.pluginBindings.map(coerceBinding) : [],
     externalCsvSources: Array.isArray(candidate.externalCsvSources) ? candidate.externalCsvSources.map(coerceExternalSource) : [],
+    clips: Array.isArray(candidate.clips) ? candidate.clips.map(coerceClip).filter((clip) => clip.id && clip.sourcePath && clip.endTimestamp >= clip.startTimestamp) : [],
     lookupTables: Array.isArray(candidate.lookupTables) ? candidate.lookupTables.map(coerceLookupTable) : [],
     calculations: Array.isArray(candidate.calculations) ? candidate.calculations.map(coerceCalculation) : [],
     viewStates: candidate.viewStates && typeof candidate.viewStates === 'object' ? candidate.viewStates as Readonly<Record<string, unknown>> : {},
+  };
+}
+
+function coerceClip(value: unknown): ClipDefinition {
+  const clip = record(value); const start = Number(clip.startTimestamp); const end = Number(clip.endTimestamp);
+  return {
+    id: String(clip.id ?? ''), name: String(clip.name ?? ''), sourcePath: String(clip.sourcePath ?? ''), sourceFileName: String(clip.sourceFileName ?? ''),
+    startTimestamp: Math.min(start, end), endTimestamp: Math.max(start, end),
+    signalIds: Array.isArray(clip.signalIds) ? [...new Set(clip.signalIds.map(String).filter(Boolean))] : [],
   };
 }
 

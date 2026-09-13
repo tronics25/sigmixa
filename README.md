@@ -5,57 +5,65 @@
   <img src="media/sigmixa-logo.png" alt="SigMixa" width="620">
 </picture>
 
-SigMixa imports CAN logs, decodes them into Signals, and provides searchable tables and interactive charts directly in VS Code.
+SigMixa turns CAN logs into Signals, tables and interactive charts directly in VS Code. Inspect ASC or BLF captures, define decoding rules, replay motion and compare selected intervals across recordings.
 
 ## Features
 
-- Vector ASC import for Classic CAN and CAN FD
-- Vector BLF import for Classic CAN and CAN FD
-- Virtualized RAW Log with search, filters, progress, cancellation and diagnostics
-- Resizable columns with Auto Fit and Fit to View
-- Configurable Signal Definitions with Intel/Motorola byte order, signed values, Scale/Offset and Multiplexing
-- DBC import/export for CAN Frame and Signal definitions
-- Derived Signals using expressions, linear interpolation, low-pass filters and moving averages
-- Signal Table with virtual rows and CSV export
-- Time Series with independent timestamps, colors, zoom, pan and CSV overlays
-- Synchronized 2D/3D Trajectory with axis controls, trails, camera presets and playback
-- Extensible Plugins with configurable Frame bindings and schema-generated settings
+- Import Vector ASC and BLF for Classic CAN and CAN FD, with progress, cancellation and diagnostics.
+- Define Signals visually with Intel/Motorola byte order, signed values, Scale/Offset and Multiplexing; import or export DBC definitions.
+- Create Derived Signals with expressions, linear interpolation, low-pass filters and moving averages.
+- Inspect virtualized RAW Logs and Signal Tables with filtering, automatic column sizing, multi-row copy, VS Code text-editor integration and CSV export.
+- Analyze Time Series with compatible-unit conversion, dual Y axes, drag-and-drop graph layout, zoom, CSV overlays, pinned value markers and fixed-resolution PNG export.
+- Save intervals as Clips and compare the same or different recordings with Signal selection and CAN Timestamp alignment.
+- Replay synchronized 2D/3D Trajectories with coordinate axes, grid values, point inspection, two-point measurements and PNG export.
+- Extend decoding through local Plugins with schema-generated settings.
+- Use English or Japanese UI according to your VS Code display language.
 
 ## See SigMixa in action
 
 ### Define Frames and Signals visually
 
-Configure CAN IDs, frame lengths, bit layouts and Signal decoding rules in one editor, or import the definitions from DBC.
+Configure CAN IDs, frame lengths, bit layouts and Signal decoding rules in one editor, or import the definitions from DBC. Changes apply automatically. Multiplexed Frames show per-Signal activation rules and a switchable bit-layout preview.
 
 [![SigMixa Frame Definition editor showing a CAN FD bit layout and Signal definitions](media/screenshots/frame-definition.png)](media/screenshots/frame-definition.png)
 
 ### Inspect and decode every frame
 
-Search and filter virtualized Classic CAN and CAN FD logs while decoded Signal values remain visible beside the original payload.
+Filter Classic CAN and CAN FD Frames by keyword or regular expression, direction, channel and time. Switch CONTENT between RAW bytes and decoded Signals; undefined Frames retain their RAW payload. Select or drag across rows to copy into Excel or open them in a VS Code text editor.
 
 [![SigMixa RAW Log showing decoded CAN frames](media/screenshots/raw-log.png)](media/screenshots/raw-log.png)
 
 ### Compare decoded Signals as a table
 
-Choose Signals by Frame, inspect their values on independent timestamps and export the visible event rows to CSV.
+Choose Signals by Frame and inspect their values at the original event timestamps. Reorder or resize columns, copy selected rows, or export the displayed Signals to CSV.
 
 [![SigMixa Signal Table showing decoded vehicle data](media/screenshots/signal-table.png)](media/screenshots/signal-table.png)
 
 ### Explore behavior over time
 
-Plot multiple Signals with distinct colors, switch between actual and normalized scales, then zoom or pan through the capture.
+Plot multiple Signals with distinct colors, switch between actual and normalized scales, then zoom or pan through the capture. Drag unit families between graphs and left/right axes in **Graph Layout**. Hover or pin markers to inspect values and timestamps, then save every graph and legend as a fixed-resolution PNG.
+
+Compatible units share a scale, with the original unit retained when all Signals use it. Mixed units are converted to a common display unit. Up to two unit families share one fixed-height graph; additional graphs scroll vertically. Engineering units include `km/h`, `mph`, `degree`, `rad`, `Nm`, pressure units and both `m/s²` and `m/s^2`. Unknown units stay separate. Gap connection and Y-axis range settings apply across the graphs.
 
 [![SigMixa Time Series chart showing vehicle Signals](media/screenshots/time-series.png)](media/screenshots/time-series.png)
 
+### Save intervals and compare recordings
+
+Drag a time range in Time Series and create a Clip. Saved Clips appear under **CLIPS**, where you can reopen their RAW Log, Table, Time Series or Trajectory, navigate to the source file, or remove a Clip without changing the recording.
+
+Compare Clips from one or several files. The initial Signal selection follows each Clip's graph selection; adjust it in the comparison pane. Align starts one CAN Timestamp at a time, distinguish Clips by line style, customize graph layout, pin values and save the comparison as PNG.
+
+[![SigMixa Clip Comparison with aligned recordings and dual-axis graphs](media/screenshots/clip-comparison.png)](media/screenshots/clip-comparison.png)
+
 ### Replay synchronized trajectories
 
-Map synchronized Signals such as vehicle Position X, Y and Z onto 2D or 3D axes, adjust the camera and trail, and replay the path against log time.
+Map synchronized Position X, Y and Z Signals onto 2D or 3D axes and replay the path against log time. Top, Front and Side presets use X as forward, Y as right and Z as up. Show grid values and data points, inspect coordinates, or select two points to measure elapsed time, coordinate differences, straight distance, path length and average speed. Save the current view as a fixed-resolution PNG.
 
 [![SigMixa 3D Trajectory view with playback controls](media/screenshots/trajectory.png)](media/screenshots/trajectory.png)
 
 ## Getting started
 
-1. Install the SigMixa VSIX from **Extensions → … → Install from VSIX…**.
+1. Install **SigMixa** from the VS Code Marketplace. A downloaded VSIX can also be installed from **Extensions → … → Install from VSIX…**.
 2. Open the folder containing your log files in VS Code.
 3. Open the SigMixa icon in the Activity Bar.
 4. Select **LOG FILES → Open CAN Log** and choose an ASC or BLF file.
@@ -65,7 +73,7 @@ Use the database button in **CAN FRAMES** to import `BO_`/`SG_` definitions from
 a DBC file. The export button writes one selected Frame or all registered Frames
 back to DBC. Existing CAN IDs are never overwritten without confirmation.
 
-Project settings are saved in `.sigmixa/project.json` inside the workspace. This file contains Frame and Signal definitions, Plugin registrations, CSV sources and saved view selections.
+Project settings are saved in `.sigmixa/project.json` inside the workspace. This file contains Frame and Signal definitions, Plugin registrations, CSV sources, Clips and saved view selections.
 
 ## CAN ID notation
 
@@ -88,7 +96,7 @@ Open the [`sample`](sample) directory as a VS Code workspace and load `sigmixa-s
 - External CSV Signals are available in Time Series, but are not merged into the event-row Table.
 - Trajectory axes must come from one source and have exactly matching timestamps.
 - Plugin configuration uses SigMixa's standard schema editor; Plugin-specific custom views are not supported.
-- DBC multiplexing, negative Scale, value tables, comments and attributes are not yet modeled. Unsupported Signal rows and Derived Signal exports are reported in the **SigMixa DBC** output.
+- DBC value tables, comments, attributes and negative Scale are not yet modeled. Unsupported Signal rows and Derived Signal exports are reported in the **SigMixa DBC** output.
 
 ## License
 

@@ -29,9 +29,11 @@ export class SignalSelector {
   constructor(private readonly options: SignalSelectorOptions) {}
 
   setCatalog(definitions: readonly SignalDefinition[], groups: readonly SignalGroupDto[]): void {
+    const previousGroups = new Set(this.groups.map((group) => group.id));
     this.definitions = new Map(definitions.map((definition) => [definition.id, definition]));
     this.groups = groups;
-    for (const group of groups) this.expanded.add(group.id);
+    for (const id of [...this.expanded]) if (!groups.some((group) => group.id === id)) this.expanded.delete(id);
+    for (const group of groups) if (!previousGroups.has(group.id)) this.expanded.add(group.id);
     this.render();
   }
 
@@ -48,7 +50,9 @@ export class SignalSelector {
     const search = document.createElement('input'); search.type = 'search'; search.placeholder = t('Search Signals…', 'Signalを検索…'); search.value = this.search; search.setAttribute('aria-label', t('Search Signals', 'Signalを検索'));
     search.addEventListener('input', () => { this.search = search.value; this.render(); requestAnimationFrame(() => { const next = host.querySelector<HTMLInputElement>('input[type=search]'); next?.focus(); next?.setSelectionRange(this.search.length, this.search.length); }); });
     const actions = document.createElement('div'); actions.className = 'selector-actions';
-    const selectAll = button(t('Select all', 'すべて選択'), () => this.toggleAll(true)); const clear = button(t('Clear all', 'すべて解除'), () => this.toggleAll(false)); actions.append(selectAll, clear); host.append(search, actions);
+    const filtering = Boolean(this.search.trim());
+    const selectAll = button(filtering ? t('Select results', '検索結果を選択') : t('Select all', 'すべて選択'), () => this.toggleAll(true));
+    const clear = button(filtering ? t('Clear results', '検索結果を解除') : t('Clear all', 'すべて解除'), () => this.toggleAll(false)); actions.append(selectAll, clear); host.append(search, actions);
     const visible = this.visibleGroups();
     if (!visible.length) { const empty = document.createElement('p'); empty.className = 'muted'; empty.textContent = t('No matching Signals.', '一致するSignalはありません。'); host.appendChild(empty); restoreScroll(); return; }
     const nameCounts = new Map<string, number>();
@@ -56,10 +60,11 @@ export class SignalSelector {
     for (const group of visible) {
       const section = document.createElement('div'); section.className = 'selector-group';
       const header = document.createElement('div'); header.className = 'selector-group-head';
-      const expand = button(this.expanded.has(group.id) ? '▾' : '▸', () => { this.expanded.has(group.id) ? this.expanded.delete(group.id) : this.expanded.add(group.id); this.render(); }); expand.className = 'selector-expand';
+      const expanded = this.expanded.has(group.id); const expand = button(expanded ? '▾' : '▸', () => { this.expanded.has(group.id) ? this.expanded.delete(group.id) : this.expanded.add(group.id); this.render(); }); expand.className = 'selector-expand'; expand.title = expanded ? t(`Collapse ${group.label}`, `${group.label}を折りたたむ`) : t(`Expand ${group.label}`, `${group.label}を展開`); expand.setAttribute('aria-label', expand.title); expand.setAttribute('aria-expanded', String(expanded));
       const checkbox = document.createElement('input'); checkbox.type = 'checkbox';
       const signalIds = group.signalIds.filter((id) => this.matches(this.definitions.get(id)));
       const selectedCount = signalIds.filter((id) => selected.has(id)).length; checkbox.checked = signalIds.length > 0 && selectedCount === signalIds.length; checkbox.indeterminate = selectedCount > 0 && selectedCount < signalIds.length;
+      checkbox.setAttribute('aria-label', t(`Select Signals in ${group.label}`, `${group.label}内のSignalを選択`));
       checkbox.addEventListener('change', () => { const next = new Set(selected); const turnOn = signalIds.some((id) => !next.has(id)); for (const id of signalIds) turnOn ? next.add(id) : next.delete(id); this.replaceSelection(next); });
       const label = document.createElement('span'); label.textContent = group.label; label.title = group.label; header.append(expand, checkbox, label);
       section.appendChild(header);
@@ -79,7 +84,11 @@ export class SignalSelector {
   }
 
   private visibleGroups(): readonly SignalGroupDto[] {
-    return this.groups.map((group) => ({ ...group, signalIds: group.signalIds.filter((id) => this.matches(this.definitions.get(id))) })).filter((group) => group.signalIds.length > 0);
+    const query = this.search.trim().toLowerCase();
+    return this.groups.map((group) => ({
+      ...group,
+      signalIds: !query || group.label.toLowerCase().includes(query) ? group.signalIds : group.signalIds.filter((id) => this.matches(this.definitions.get(id))),
+    })).filter((group) => group.signalIds.length > 0);
   }
 
   private matches(definition: SignalDefinition | undefined): boolean {

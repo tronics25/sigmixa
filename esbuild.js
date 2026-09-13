@@ -36,6 +36,7 @@ const webviewEntries = [
   { name: 'rawLog', source: 'webview/raw/rawLog' },
   { name: 'frameDefinition', source: 'webview/frame-editor/frameDefinition' },
   { name: 'pluginEditor', source: 'webview/plugin-editor/pluginEditor' },
+  { name: 'clipComparison', source: 'webview/clips/clipComparison' },
 ];
 
 /** @type {import('esbuild').BuildOptions[]} */

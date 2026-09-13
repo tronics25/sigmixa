@@ -30,6 +30,8 @@ The vehicle accelerates, cruises, turns, brakes and stops. Mixed-rate frames pro
 
 The `.sigmixa/project.json` file already contains useful Signal definitions and view selections. The Plugin settings use fictional data.
 
+The generated project also includes Acceleration and Braking Clips. Select both in the **CLIPS** view and run **Compare Clips** to choose Signals, compare relative time, and adjust CAN Timestamp alignment.
+
 `sigmixa-showcase.blf` contains the same supported CAN data as the ASC showcase. ASC-only malformed rows and remote frames are not represented in BLF.
 
 `sigmixa-showcase.dbc` can be imported from the **CAN FRAMES** database button.

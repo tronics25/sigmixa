@@ -3,6 +3,8 @@ import { formatCanId } from './canId';
 
 export interface FrameFilter {
   readonly search?: string;
+  readonly searchRegex?: boolean;
+  readonly searchContent?: 'raw' | 'decoded';
   readonly canIds?: readonly number[];
   readonly canIdRefs?: readonly { readonly canId: number; readonly extended: boolean }[];
   readonly direction?: 'Rx' | 'Tx';
@@ -42,7 +44,7 @@ export interface FrameStore {
 
 const bytesToHex = (data: Uint8Array): string => Array.from(data, (byte) => byte.toString(16).padStart(2, '0')).join(' ');
 
-function matches(frame: CanFrame, filter: FrameFilter | undefined, context?: FrameQueryContext): boolean {
+function matches(frame: CanFrame, filter: FrameFilter | undefined, context?: FrameQueryContext, searchPattern?: RegExp | null): boolean {
   if (!filter) return true;
   if (filter.canIds?.length && !filter.canIds.includes(frame.canId)) return false;
   if (filter.canIdRefs?.length && !filter.canIdRefs.some((item) => item.canId === frame.canId && item.extended === frame.extended)) return false;
@@ -54,8 +56,11 @@ function matches(frame: CanFrame, filter: FrameFilter | undefined, context?: Fra
   const search = filter.search?.trim().toLowerCase();
   if (search) {
     const idHex = formatCanId(frame.canId, frame.extended);
-    const haystack = `${idHex} 0x${idHex} ${frame.canId.toString(16)} ${bytesToHex(frame.data)} ${context?.additionalSearchText?.(frame) ?? ''}`.toLowerCase();
-    if (!haystack.includes(search)) return false;
+    const decoded = context?.isDecoded?.(frame) ?? false;
+    const fields = [idHex, `0x${idHex}`, frame.canId.toString(16), ...(filter.searchContent !== 'decoded' || !decoded ? [bytesToHex(frame.data)] : []), context?.additionalSearchText?.(frame) ?? ''];
+    if (filter.searchRegex) {
+      if (!searchPattern || !fields.some((field) => searchPattern.test(field))) return false;
+    } else if (!fields.some((field) => field.toLowerCase().includes(search))) return false;
   }
   return true;
 }
@@ -68,6 +73,9 @@ export class ChunkedFrameStore implements FrameStore {
   private cachedFilter: FrameFilter | undefined;
   private cachedContext: FrameQueryContext | undefined;
   private cachedMatches: CanFrame[] = [];
+  private cachedSearchPattern: RegExp | null | undefined;
+  private timestampCacheGeneration = -1;
+  private timestampCache: number[] = [];
 
   constructor(private readonly chunkSize = 4096) {
     if (!Number.isInteger(chunkSize) || chunkSize < 1) throw new Error('chunkSize must be a positive integer.');
@@ -85,7 +93,7 @@ export class ChunkedFrameStore implements FrameStore {
       }
       chunk.push(frame);
       this.count++;
-      if (this.cachedFilterKey !== undefined && matches(frame, this.cachedFilter, this.cachedContext)) this.cachedMatches.push(frame);
+      if (this.cachedFilterKey !== undefined && matches(frame, this.cachedFilter, this.cachedContext, this.cachedSearchPattern)) this.cachedMatches.push(frame);
     }
     if (frames.length) this.version++;
   }
@@ -113,8 +121,9 @@ export class ChunkedFrameStore implements FrameStore {
       this.cachedFilterKey = filterKey;
       this.cachedFilter = query.filter;
       this.cachedContext = activeContext;
+      this.cachedSearchPattern = compileSearchPattern(query.filter);
       this.cachedMatches = [];
-      for (const chunk of this.chunks) for (const frame of chunk) if (matches(frame, query.filter, activeContext)) this.cachedMatches.push(frame);
+      for (const chunk of this.chunks) for (const frame of chunk) if (matches(frame, query.filter, activeContext, this.cachedSearchPattern)) this.cachedMatches.push(frame);
     }
     return {
       rows: this.cachedMatches.slice(offset, offset + limit), offset,
@@ -124,11 +133,12 @@ export class ChunkedFrameStore implements FrameStore {
 
   representativeSample(filter: FrameFilter | undefined, maxRows: number, context?: FrameQueryContext): readonly CanFrame[] {
     const limit = Math.max(1, Math.floor(maxRows));
+    const searchPattern = compileSearchPattern(filter);
     let total = 0;
     const longestById = new Map<string, CanFrame>();
     for (const chunk of this.chunks) {
       for (const frame of chunk) {
-        if (!matches(frame, filter, context)) continue;
+        if (!matches(frame, filter, context, searchPattern)) continue;
         total++;
         const key = `${frame.extended ? 'e' : 's'}:${frame.canId}`;
         const current = longestById.get(key);
@@ -149,7 +159,7 @@ export class ChunkedFrameStore implements FrameStore {
       let matched = 0;
       outer: for (const chunk of this.chunks) {
         for (const frame of chunk) {
-          if (!matches(frame, filter, context)) continue;
+          if (!matches(frame, filter, context, searchPattern)) continue;
           if (targets.has(matched)) chosen.set(frame.id, frame);
           matched++;
           if (chosen.size >= limit) break outer;
@@ -157,6 +167,34 @@ export class ChunkedFrameStore implements FrameStore {
       }
     }
     return Array.from(chosen.values()).slice(0, limit);
+  }
+
+  adjacentTimestamp(timestamp: number, direction: -1 | 1, range?: { readonly start: number; readonly end: number }): number | undefined {
+    if (this.timestampCacheGeneration !== this.version) {
+      this.timestampCache = this.chunks.flatMap((chunk) => chunk.map((frame) => frame.timestamp)).sort((left, right) => left - right);
+      this.timestampCacheGeneration = this.version;
+    }
+    const timestamps = this.timestampCache;
+    let index = direction < 0 ? lowerBound(timestamps, timestamp) - 1 : upperBound(timestamps, timestamp);
+    if (range && direction < 0 && timestamps[index] > range.end) index = upperBound(timestamps, range.end) - 1;
+    if (range && direction > 0 && timestamps[index] < range.start) index = lowerBound(timestamps, range.start);
+    const candidate = timestamps[index];
+    if (candidate === undefined || (range && (candidate < range.start || candidate > range.end))) return undefined;
+    return candidate;
+  }
+
+  nearestTimestamp(timestamp: number, range?: { readonly start: number; readonly end: number }): number | undefined {
+    if (!Number.isFinite(timestamp)) return undefined;
+    if (this.timestampCacheGeneration !== this.version) {
+      this.timestampCache = this.chunks.flatMap((chunk) => chunk.map((frame) => frame.timestamp)).sort((left, right) => left - right);
+      this.timestampCacheGeneration = this.version;
+    }
+    const start = range ? lowerBound(this.timestampCache, range.start) : 0;
+    const end = range ? upperBound(this.timestampCache, range.end) : this.timestampCache.length;
+    if (start >= end) return undefined;
+    const afterIndex = Math.min(end - 1, Math.max(start, lowerBound(this.timestampCache, timestamp)));
+    const beforeIndex = Math.max(start, afterIndex - 1); const before = this.timestampCache[beforeIndex]; const after = this.timestampCache[afterIndex];
+    return Math.abs(timestamp - before) <= Math.abs(after - timestamp) ? before : after;
   }
 
   clear(): void {
@@ -167,5 +205,12 @@ export class ChunkedFrameStore implements FrameStore {
     this.cachedFilter = undefined;
     this.cachedContext = undefined;
     this.cachedMatches = [];
+    this.cachedSearchPattern = undefined;
+    this.timestampCacheGeneration = -1;
+    this.timestampCache = [];
   }
 }
+
+function lowerBound(values: readonly number[], target: number): number { let low = 0; let high = values.length; while (low < high) { const middle = (low + high) >>> 1; if (values[middle] < target) low = middle + 1; else high = middle; } return low; }
+function upperBound(values: readonly number[], target: number): number { let low = 0; let high = values.length; while (low < high) { const middle = (low + high) >>> 1; if (values[middle] <= target) low = middle + 1; else high = middle; } return low; }
+function compileSearchPattern(filter: FrameFilter | undefined): RegExp | null | undefined { if (!filter?.searchRegex || !filter.search?.trim()) return undefined; try { return new RegExp(filter.search, 'i'); } catch { return null; } }
