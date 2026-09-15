@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { dbcStartToManual, exportDbc, importDbc, manualStartToDbc } from '../src/core/dbc/dbc';
+import { decodeManualFrame } from '../src/core/manual/manualDecoder';
+import { parseProjectJson, serializeProject, migrateProject, CURRENT_PROJECT_SCHEMA_VERSION } from '../src/core/project/schema';
 
 const sample = `VERSION "1.0"
 NS_ :
@@ -29,6 +31,28 @@ test('imports standard/extended Frames and Intel/Motorola Signals', () => {
   ]);
   assert.deepEqual([standard.signals[0].conversion.lsb, standard.signals[0].minimum, standard.signals[0].maximum], [0.01, 0, 250]);
   assert.deepEqual([extended.canId, extended.extended, extended.frameLength], [0x18ff50e5, true, 12]);
+});
+
+test('DBC-imported Scale selects shifts or ordinary conversion automatically', () => {
+  const result = importDbc('BO_ 291 ScaleTest: 2 ECU\n SG_ Binary : 0|8@1+ (0.0625,0.9) [0|16] "" ECU\n SG_ Decimal : 8|8@1+ (0.01,0) [0|3] "" ECU\n');
+  assert.deepEqual(result.diagnostics, []);
+  const decoded = decodeManualFrame({ id: 'log:1', sourceId: 'log', timestamp: 1, canId: 291, extended: false, direction: 'Rx', channel: 1, dlcCode: 2, dataLength: 2, data: Uint8Array.from([36, 225]) }, result.frames[0]);
+  assert.deepEqual(decoded.diagnostics, []);
+  assert.deepEqual(decoded.decoded.map((entry) => entry.sample.value), [2.9, 2.25]);
+  assert.deepEqual(exportDbc(result.frames).diagnostics, []);
+});
+
+test('negative DBC Scale survives project persistence, decoding and export with correct physical bounds', () => {
+  const imported = importDbc('BO_ 291 NegativeScale: 1 ECU\n SG_ Temperature : 0|8@1+ (-0.1,20) [-5.5|20] "degC" ECU\n');
+  assert.deepEqual(imported.diagnostics, []);
+  const project = migrateProject({ schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION, frames: imported.frames });
+  const restored = parseProjectJson(JSON.stringify(serializeProject(project))).frames[0];
+  const result = decodeManualFrame({ id: 'negative:1', sourceId: 'negative', timestamp: 1, canId: 291, extended: false, direction: 'Rx', channel: 1, dlcCode: 1, dataLength: 1, data: Uint8Array.of(225) }, restored);
+  assert.deepEqual(result.diagnostics, []); assert.equal(result.decoded[0].sample.value, -2.5);
+  const withoutBounds = { ...restored, signals: restored.signals.map((signal) => ({ ...signal, minimum: undefined, maximum: undefined })) };
+  const exported = exportDbc([withoutBounds]); assert.deepEqual(exported.diagnostics, []);
+  assert.match(exported.text, /\(-0\.1,20\) \[-5\.5\|20\]/);
+  assert.deepEqual(importDbc(exported.text).frames[0].signals[0].conversion, restored.signals[0].conversion);
 });
 
 test('converts DBC Motorola sawtooth start bits both ways', () => {
@@ -77,6 +101,8 @@ test('bundled DBC showcase imports as valid standard and extended definitions', 
   assert.deepEqual(result.diagnostics, []);
   assert.deepEqual(result.frames.map((frame) => [frame.canId, frame.extended, frame.frameLength, frame.signals.length]), [
     [0x2a0, false, 8, 4],
+    [0x310, false, 8, 4],
+    [0x320, false, 8, 5],
     [0x18ff50e5, true, 12, 3],
   ]);
 });

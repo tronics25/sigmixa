@@ -15,6 +15,7 @@ import { signalDefinitionFor } from '../src/core/manual/manualDefinition';
 import { importExternalCsvText } from '../src/core/external/csv';
 import { buildTrajectoryPoints } from '../src/core/trajectory/trajectory';
 import { externalSignalId } from '../src/core/external/csv';
+import { importDbc } from '../src/core/dbc/dbc';
 
 const workspace = path.resolve('sample');
 
@@ -31,17 +32,36 @@ test('showcase Clips reference available log ranges and Signals', () => {
   }
 });
 
-test('sample workspace persists six valid automotive Manual Frames', () => {
+test('sample workspace persists seven valid automotive Manual Frames', () => {
   const persisted = JSON.parse(readFileSync(path.join(workspace, '.sigmixa/project.json'), 'utf8')) as { schemaVersion: number; frames: Array<Record<string, unknown>> };
   assert.equal(persisted.schemaVersion, 2);
-  assert.equal(persisted.frames.filter((frame) => (frame.origin as { type?: string } | undefined)?.type === 'manual').length, 6);
+  assert.equal(persisted.frames.filter((frame) => (frame.origin as { type?: string } | undefined)?.type === 'manual').length, 7);
   assert.ok(persisted.frames.every((frame) => typeof frame.canId === 'string' && !('extended' in frame)));
   const project = migrateProject(persisted);
   for (const frame of project.frames.filter((candidate) => candidate.origin?.type === 'manual')) {
     assert.deepEqual(validateFrameDefinition(frame).diagnostics, []);
   }
-  assert.deepEqual(project.frames.filter((frame) => frame.origin?.type === 'manual').map((frame) => frame.id), ['ff-2a0', 'ff-300', 'ff-310', 'ff-184', 'ff-18ff50e5', 'ff-5a0x']);
+  assert.deepEqual(project.frames.filter((frame) => frame.origin?.type === 'manual').map((frame) => frame.id), ['ff-2a0', 'ff-300', 'ff-310', 'ff-320', 'ff-184', 'ff-18ff50e5', 'ff-5a0x']);
+  const multiplexed = project.frames.find((frame) => frame.id === 'ff-320');
+  assert.equal(multiplexed?.multiplexing, true);
+  assert.deepEqual(multiplexed?.signals[0].valueLabels, { 0: 'Torque', 1: 'Power', 2: 'Regeneration' });
+  assert.deepEqual(project.frames.find((frame) => frame.id === 'ff-310')?.signals.find((signal) => signal.id === 'sig-gear-position')?.valueLabels, { 0: 'Park', 1: 'Neutral', 3: 'Drive' });
   assert.ok(project.viewStates['log-view-default']);
+});
+
+test('showcase DBC imports value labels and Multiplexing without errors', () => {
+  const result = importDbc(readFileSync(path.join(workspace, 'sigmixa-showcase.dbc'), 'utf8'), 'sigmixa-showcase.dbc');
+  assert.deepEqual(result.diagnostics.filter((item) => item.severity === 'error'), []);
+  const body = result.frames.find((frame) => frame.canId === 0x310);
+  assert.deepEqual(body?.signals.find((signal) => signal.name === 'GearPosition')?.valueLabels, { 0: 'Park', 1: 'Neutral', 3: 'Drive' });
+  const multiplexed = result.frames.find((frame) => frame.canId === 0x320);
+  assert.equal(multiplexed?.multiplexing, true);
+  assert.deepEqual(multiplexed?.signals.map((signal) => signal.multiplexing), [
+    { type: 'multiplexer' }, undefined,
+    { type: 'conditional', ranges: [{ from: 0, to: 0 }] },
+    { type: 'conditional', ranges: [{ from: 1, to: 1 }] },
+    { type: 'conditional', ranges: [{ from: 2, to: 2 }] },
+  ]);
 });
 
 test('showcase ASC exercises parser boundaries and visible Signal ranges', async () => {
@@ -95,6 +115,10 @@ test('showcase ASC exercises parser boundaries and visible Signal ranges', async
   assert.ok(Math.max(...values.get('sig-barometric-pressure')!) > 100);
   assert.deepEqual(new Set(values.get('sig-headlight')), new Set([0, 1]));
   assert.deepEqual(new Set(values.get('sig-turn-left')), new Set([0, 1]));
+  assert.deepEqual(new Set(values.get('sig-mux-mode')), new Set([0, 1, 2]));
+  assert.ok((values.get('sig-requested-torque')?.length ?? 0) > 0);
+  assert.ok((values.get('sig-dc-link-power')?.length ?? 0) > 0);
+  assert.ok((values.get('sig-regen-limit')?.length ?? 0) > 0);
 });
 
 test('showcase runs two public Plugins on one Frame and isolates the deliberate failure marker', async () => {

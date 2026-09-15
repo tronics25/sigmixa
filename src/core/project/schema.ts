@@ -237,6 +237,7 @@ function coerceSignal(value: unknown): ManualSignalDefinition {
     signedness: signal.signedness === 'signed' ? 'signed' : 'unsigned',
     byteOrder: signal.byteOrder === 'big' ? 'big' : 'little',
     conversion,
+    ...(signal.valueLabels === undefined ? {} : { valueLabels: Object.fromEntries(Object.entries(record(signal.valueLabels)).map(([key, label]) => [key, String(label)])) }),
     minimum: signal.minimum === undefined ? undefined : Number(signal.minimum),
     maximum: signal.maximum === undefined ? undefined : Number(signal.maximum),
     multiplexing,

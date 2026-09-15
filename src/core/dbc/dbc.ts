@@ -43,7 +43,7 @@ export function importDbc(text: string, sourceId = 'database.dbc'): DbcImportRes
     const marker = signal[2];
     const startBit = Number(signal[3]); const lengthBits = Number(signal[4]); const byteOrder = signal[5] === '1' ? 'little' : 'big';
     const scale = Number(signal[7]); const offset = Number(signal[8]); const minimum = Number(signal[9]); const maximum = Number(signal[10]);
-    if (!(scale > 0) || ![offset, minimum, maximum].every(Number.isFinite)) { diagnostics.push(diagnostic(sourceId, lineNumber, 'DBC_SIGNAL_CONVERSION', `Signal ${signal[1]} has a conversion unsupported by SigMixa. Scale must be positive and all values finite.`)); return; }
+    if (scale === 0 || ![scale, offset, minimum, maximum].every(Number.isFinite)) { diagnostics.push(diagnostic(sourceId, lineNumber, 'DBC_SIGNAL_CONVERSION', `Signal ${signal[1]} has an invalid conversion. Scale must be non-zero and all values finite.`)); return; }
     const position = dbcStartToManual(startBit, byteOrder);
     const idBase = `dbc-${current.frame.extended ? 'e' : 's'}-${current.frame.canId.toString(16)}-${slug(signal[1])}`;
     const usedIds = new Set(current.frame.signals.map((item) => item.id)); let id = idBase; let suffix = 2; while (usedIds.has(id)) id = `${idBase}-${suffix++}`;
@@ -56,6 +56,32 @@ export function importDbc(text: string, sourceId = 'database.dbc'): DbcImportRes
     current.frame = { ...current.frame, multiplexing: current.frame.multiplexing || Boolean(marker), signals: [...current.frame.signals, definition] };
   });
   finish();
+  // VAL_ records may span lines; a semicolon inside a quoted label is not a terminator.
+  const valueRecords = /^[ \t]*VAL_[ \t]+(\d+|0x[0-9a-f]+)[ \t]+([A-Za-z_][A-Za-z0-9_]*)\s+((?:"(?:\\.|[^"\\])*"|[^";])*);/gmi;
+  const records = [...text.matchAll(valueRecords)];
+  let recordIndex = 0;
+  for (const start of text.matchAll(/^[ \t]*VAL_[ \t]+(?=\d)/gm)) {
+    while (recordIndex < records.length && records[recordIndex].index! + records[recordIndex][0].length <= start.index!) recordIndex++;
+    const record = records[recordIndex];
+    if (!record || start.index! < record.index!) diagnostics.push(diagnostic(sourceId, text.slice(0, start.index).split('\n').length, 'DBC_VALUE_LABEL_SYNTAX', 'Invalid or unterminated VAL_ record.'));
+  }
+  for (const match of records) {
+    const line = text.slice(0, match.index).split('\n').length;
+    const decoded = decodeDbcMessageId(Number(match[1]));
+    const frameIndex = decoded ? frames.findIndex((frame) => frame.canId === decoded.canId && frame.extended === decoded.extended) : -1;
+    const target = frames[frameIndex]?.signals.find((signal) => signal.name === match[2]);
+    if (!target) { diagnostics.push(diagnostic(sourceId, line, 'DBC_VALUE_LABEL_REFERENCE', `Value labels reference an unknown Signal ${match[2]}.`, 'warning')); continue; }
+    const values: Record<string, string> = { ...target.valueLabels }; let rest = match[3].trim(); let valid = true;
+    while (rest) {
+      const pair = /^([+-]?\d+)\s+"((?:\\.|[^"\\])*)"\s*/.exec(rest);
+      if (!pair) { valid = false; break; }
+      const key = BigInt(pair[1]).toString();
+      if (Object.prototype.hasOwnProperty.call(values, key)) { valid = false; break; }
+      values[key] = unescapeDbc(pair[2]); rest = rest.slice(pair[0].length);
+    }
+    if (!valid) { diagnostics.push(diagnostic(sourceId, line, 'DBC_VALUE_LABEL_SYNTAX', `${target.name}: invalid or duplicate RAW value in VAL_.`)); continue; }
+    frames[frameIndex] = { ...frames[frameIndex], signals: frames[frameIndex].signals.map((signal) => signal.id === target.id ? { ...signal, valueLabels: values } : signal) };
+  }
   lines.forEach((line, index) => {
     const match = EXTENDED_MULTIPLEXING.exec(line); if (!match) return;
     const decoded = decodeDbcMessageId(Number(match[1])); const frameIndex = decoded ? frames.findIndex((frame) => frame.canId === decoded.canId && frame.extended === decoded.extended) : -1;
@@ -99,6 +125,10 @@ export function exportDbc(frames: readonly ManualFrameDefinition[]): DbcExportRe
       if (signal.multiplexing?.type === 'conditional' && selector && (signal.multiplexing.ranges.length !== 1 || signal.multiplexing.ranges[0].from !== signal.multiplexing.ranges[0].to)) extendedMuxLines.push(`${signalName}\t${signal.multiplexing.ranges.map((range) => `${range.from}-${range.to}`).join(', ')}`);
     }
     const selectorName = selector ? signalNames.get(selector.id) : undefined;
+    for (const signal of frame.signals) {
+      const values = Object.entries(signal.valueLabels ?? {});
+      if (values.length) lines.push(`VAL_ ${dbcId} ${signalNames.get(signal.id)} ${values.map(([raw, label]) => `${raw} "${escapeDbc(label)}"`).join(' ')};`);
+    }
     if (selectorName) for (const entry of extendedMuxLines) { const [signalName, ranges] = entry.split('\t'); lines.push(`SG_MUL_VAL_ ${dbcId} ${signalName} ${selectorName} ${ranges};`); }
     if (frame.derivedSignals?.length) diagnostics.push(diagnostic('export.dbc', undefined, 'DBC_DERIVED_SIGNALS_SKIPPED', `${frame.name}: ${frame.derivedSignals.length} Derived Signal definition(s) were not exported because standard DBC SG_ entries cannot preserve their operations.`, 'warning'));
     lines.push('');
@@ -130,7 +160,8 @@ function decodeDbcMessageId(rawId: number): { canId: number; extended: boolean }
 function physicalRange(signal: ManualSignalDefinition): readonly [number, number] {
   if (signal.minimum !== undefined && signal.maximum !== undefined) return [signal.minimum, signal.maximum];
   const signed = signal.signedness === 'signed'; const rawMinimum = signed ? -(2 ** (signal.lengthBits - 1)) : 0; const rawMaximum = signed ? 2 ** (signal.lengthBits - 1) - 1 : 2 ** signal.lengthBits - 1;
-  return [signal.minimum ?? rawMinimum * signal.conversion.lsb + signal.conversion.offset, signal.maximum ?? rawMaximum * signal.conversion.lsb + signal.conversion.offset];
+  const first = rawMinimum * signal.conversion.lsb + signal.conversion.offset; const last = rawMaximum * signal.conversion.lsb + signal.conversion.offset;
+  return [signal.minimum ?? Math.min(first, last), signal.maximum ?? Math.max(first, last)];
 }
 
 function frameId(canId: number, extended: boolean): string { return `dbc-${extended ? 'e' : 's'}-${canId.toString(16)}`; }

@@ -39,6 +39,15 @@ export function nearestSample(samples: readonly SignalSample[], timestamp: numbe
   return Math.abs(before.timestamp - timestamp) <= Math.abs(after.timestamp - timestamp) ? before : after;
 }
 
+/** Original sample only: never interpolate, extrapolate or skip over an invalid sample. */
+export function nearestMeasuredSample(samples: readonly SignalSample[], timestamp: number, range?: TimeRange): SignalSample | undefined {
+  const first = range ? lowerBound(samples, Math.min(range.start, range.end)) : 0;
+  const end = range ? upperBound(samples, Math.max(range.start, range.end)) : samples.length;
+  if (first >= end || timestamp < samples[first].timestamp || timestamp > samples[end - 1].timestamp) return undefined;
+  const sample = nearestSample(samples, timestamp, range);
+  return sample && Number.isFinite(sample.value) && (sample.quality === undefined || sample.quality === 'valid') ? sample : undefined;
+}
+
 export function samplesInRange(samples: readonly SignalSample[], range?: TimeRange): readonly SignalSample[] {
   if (!range) return samples;
   const start = lowerBound(samples, Math.min(range.start, range.end));

@@ -84,6 +84,8 @@ export class ChunkedFrameStore implements FrameStore {
   get size(): number { return this.count; }
   get generation(): number { return this.version; }
 
+  *frames(): IterableIterator<CanFrame> { for (const chunk of this.chunks) yield* chunk; }
+
   append(frames: readonly CanFrame[]): void {
     for (const frame of frames) {
       let chunk = this.chunks[this.chunks.length - 1];

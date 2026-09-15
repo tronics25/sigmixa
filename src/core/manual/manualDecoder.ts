@@ -7,6 +7,7 @@ import type { ManualFrameDefinition, ManualSignalDefinition } from './manualDefi
 import { isSignalActive, signalDefinitionFor } from './manualDefinition';
 import type { ManualDerivedSignalDefinition } from './manualDefinition';
 import { compileExpression, type CompiledExpression } from '../calculation/expression';
+import { convertScaleOffset } from './scaleOffset';
 
 const derivedExpressionCache = new WeakMap<ManualDerivedSignalDefinition, { readonly source: string; readonly compiled: CompiledExpression }>();
 
@@ -64,7 +65,7 @@ export function decodeManualFrame(frame: CanFrame, definition: ManualFrameDefini
       }));
       continue;
     }
-    const value = rawNumber * signal.conversion.lsb + signal.conversion.offset;
+    const value = convertScaleOffset(raw, signal.conversion);
     if (!Number.isFinite(value)) {
       diagnostics.push(createDiagnostic({
         source: 'definition', code: 'SIGNAL_VALUE_NONFINITE', severity: 'warning',
@@ -76,7 +77,7 @@ export function decodeManualFrame(frame: CanFrame, definition: ManualFrameDefini
     decoded.push({
       signal,
       definition: signalDefinitionFor(definition, signal),
-      sample: { timestamp: frame.timestamp, value, quality: 'valid' },
+      sample: { timestamp: frame.timestamp, value, quality: 'valid', ...(signal.valueLabels && Object.hasOwn(signal.valueLabels, raw.toString()) ? { valueLabel: signal.valueLabels[raw.toString()] } : {}) },
       raw,
     });
     values[signal.name] = value;
@@ -139,5 +140,5 @@ function lookup(pointsValue: readonly { readonly input: number; readonly output:
 
 export function formatDecodedSignal(decoded: ManualDecodedSignal): string {
   const value = Number.isInteger(decoded.sample.value) ? String(decoded.sample.value) : Number(decoded.sample.value.toPrecision(12)).toString();
-  return `${decoded.definition.name}=${value}${decoded.definition.unit ? ` ${decoded.definition.unit}` : ''}`;
+  return `${decoded.definition.name}=${value}${decoded.definition.unit ? ` ${decoded.definition.unit}` : ''}${decoded.sample.valueLabel ? ` (${decoded.sample.valueLabel})` : ''}`;
 }

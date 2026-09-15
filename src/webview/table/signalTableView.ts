@@ -3,6 +3,7 @@ import type { LogViewState, SignalTableRowDto, ToExtensionMessage, ToWebviewMess
 import { autoFitColumns, fitColumnsToView, type SizingColumn } from '../shared/columnSizing';
 import { SignalSelector } from '../shared/signalSelector';
 import { computeVirtualRange } from '../shared/virtualization';
+import { emphasizeSignal } from '../shared/signalEmphasis';
 import { t } from '../shared/i18n';
 import { addSelectionRange, removeSelectionIndex, selectionContains, selectionCount, type SelectionRange } from '../raw/selectionRanges';
 
@@ -63,8 +64,10 @@ export class SignalTableView {
     host.innerHTML = `<div class="signal-layout"><aside class="signal-pane table-pane"><div class="table-selector"></div></aside><div class="pane-separator table-pane-separator"></div><section class="signal-main"><div class="view-toolbar"><button class="table-pane-toggle">${t('Signals', 'Signal')}</button><button class="table-export">${t('Export CSV…', 'CSVへ出力…')}</button><span class="spacer"></span><span class="table-selection-status status selection-status" hidden></span><span class="table-status muted">${t('Select Signals', 'Signalを選択')}</span><button class="table-analysis-cancel" hidden>${t('Cancel analysis', '解析を中止')}</button></div><div class="signal-grid" role="table" aria-multiselectable="true" tabindex="0"><div class="signal-grid-header" role="row"></div><div class="signal-grid-sizer"><div class="signal-grid-window"></div></div><div class="table-empty raw-empty" hidden><span></span></div></div></section></div><div class="context-menu table-context-menu" hidden></div>`;
     this.grid = host.querySelector('.signal-grid')!; this.header = host.querySelector('.signal-grid-header')!; this.sizer = host.querySelector('.signal-grid-sizer')!; this.rowWindow = host.querySelector('.signal-grid-window')!;
     this.exportButton = host.querySelector('.table-export')!; this.status = host.querySelector('.table-status')!; this.selectionStatus = host.querySelector('.table-selection-status')!; this.empty = host.querySelector('.table-empty')!; this.pane = host.querySelector('.table-pane')!; this.separator = host.querySelector('.table-pane-separator')!; this.contextMenu = host.querySelector('.table-context-menu')!; this.analysisCancel = host.querySelector('.table-analysis-cancel')!;
-    this.selector = new SignalSelector({ host: host.querySelector('.table-selector')!, selected: this.selected, onSelectionChange: () => this.selectionChanged() });
-    this.grid.addEventListener('scroll', () => requestAnimationFrame(() => this.draw()));
+    this.selector = new SignalSelector({ host: host.querySelector('.table-selector')!, selected: this.selected, grouping: initial?.tableSignalGrouping, onGroupingChange: () => this.persist(), onSelectionChange: () => this.selectionChanged(), onHighlightChange: (id) => this.highlightColumn(id) });
+    this.grid.addEventListener('scroll', () => { this.highlightColumn(undefined); requestAnimationFrame(() => this.draw()); });
+    this.grid.addEventListener('mouseover', (event) => { const cell = (event.target as HTMLElement).closest<HTMLElement>('[data-column-id]'); this.highlightColumn(cell?.dataset.columnId); });
+    this.grid.addEventListener('mouseleave', () => this.highlightColumn(undefined));
     window.addEventListener('resize', () => { if (this.visible) { this.applyWidths(); this.draw(); } });
     this.exportButton.addEventListener('click', () => this.post({ type: 'exportSignalCsv', selectedIds: this.columnOrder.filter((id) => this.selected.has(id)) }));
     host.querySelector('.table-pane-toggle')!.addEventListener('click', () => { this.paneCollapsed = !this.paneCollapsed; this.applyPane(); this.persist(); });
@@ -125,13 +128,20 @@ export class SignalTableView {
   private sizingColumns(): readonly SizingColumn<SignalTableRowDto>[] {
     return this.columns().map((column) => column.id === 'time'
       ? { id: 'time', label: 'TIME(S)', minWidth: 96, maxWidth: 180, value: (row) => formatNumber(row.timestamp, 6) }
-      : { id: column.id, label: `${column.definition!.name}${column.definition!.unit ? ` (${column.definition!.unit})` : ''}`, minWidth: 90, maxWidth: 320, flex: 1, value: (row) => row.values[column.id] === undefined ? '' : formatNumber(row.values[column.id]) });
+      : { id: column.id, label: `${column.definition!.name}${column.definition!.unit ? ` (${column.definition!.unit})` : ''}`, minWidth: 90, maxWidth: 320, flex: 1, value: (row) => row.values[column.id] === undefined ? '' : `${formatNumber(row.values[column.id])}${row.valueLabels?.[column.id] ? ` (${row.valueLabels[column.id]})` : ''}` });
+  }
+
+
+  private highlightColumn(id: string | undefined): void {
+    this.host.querySelectorAll<HTMLElement>('.signal-head,.selector-signal').forEach((element) => {
+      emphasizeSignal(element, !!id && id !== 'time' && (element.dataset.columnId === id || element.dataset.signalId === id), 'var(--vscode-focusBorder)');
+    });
   }
 
   private buildHeader(): void {
     this.header.replaceChildren(); this.header.style.gridTemplateColumns = this.template(); this.header.style.width = `${this.totalWidth()}px`;
     for (const column of this.columns()) {
-      const cell = document.createElement('div'); cell.className = `signal-head${column.id === 'time' ? ' sticky-time' : ''}`; cell.setAttribute('role', 'columnheader');
+      const cell = document.createElement('div'); cell.className = `signal-head${column.id === 'time' ? ' sticky-time' : ''}`; cell.setAttribute('role', 'columnheader'); cell.dataset.columnId = column.id;
       if (column.id === 'time') cell.textContent = 'TIME(S)';
       else {
         const name = document.createElement('span'); name.textContent = column.definition!.name; name.className = 'signal-column-drag'; name.draggable = true; name.title = t('Drag to reorder this column', 'ドラッグして列を並べ替え');
@@ -156,7 +166,28 @@ export class SignalTableView {
     const columns = this.columns();
     for (let index = range.start; index < range.end; index++) {
       const data = this.rows.get(index); const selected = selectionContains(this.selectionRanges, index); const row = document.createElement('div'); row.className = `signal-grid-row${selected ? ' selected' : ''}`; row.style.gridTemplateColumns = this.template(); row.dataset.rowIndex = String(index); row.setAttribute('role', 'row'); row.setAttribute('aria-selected', String(selected)); row.tabIndex = this.focusedIndex === index ? 0 : -1;
-      columns.forEach((column) => { const cell = document.createElement('div'); cell.className = `signal-cell${column.id === 'time' ? ' sticky-time' : ''}`; const value = !data ? t('Loading…', '読み込み中…') : column.id === 'time' ? formatNumber(data.timestamp, 6) : data.values[column.id] === undefined ? '—' : formatNumber(data.values[column.id]); cell.textContent = value; cell.title = value; cell.setAttribute('role', 'cell'); row.appendChild(cell); });
+      columns.forEach((column) => {
+        const cell = document.createElement('div');
+        cell.className = `signal-cell${column.id === 'time' ? ' sticky-time' : ''}`;
+        const value = !data ? t('Loading…', '読み込み中…') : column.id === 'time' ? formatNumber(data.timestamp, 6) : data.values[column.id] === undefined ? '—' : formatNumber(data.values[column.id]);
+        const display = `${value}${data?.valueLabels?.[column.id] ? ` (${data.valueLabels[column.id]})` : ''}`;
+        const unit = column.definition?.unit ? ` ${column.definition.unit}` : '';
+        cell.textContent = display;
+        cell.title = column.definition ? `${column.definition.name}: ${display}${unit}` : value;
+        const change = column.definition && data?.changes?.[column.id];
+        if (change) {
+          cell.classList.add(`signal-change-${change.kind}`);
+          if (change.kind === 'numeric') {
+            cell.style.setProperty('--signal-change-strength', `${5 + 27 * Math.sqrt(Math.max(0, Math.min(1, change.magnitude)))}%`);
+            cell.title += `\n${t('Change', '変化量')}: ${change.delta > 0 ? '+' : ''}${formatNumber(change.delta)}${unit}`;
+          } else if (change.kind === 'state') {
+            cell.title += `\n${t('Previous state', '直前の状態')}: ${change.previousLabel}`;
+          } else {
+            cell.title += `\n${t('First measurement after missing or invalid data', '欠損・無効値からの復帰')}`;
+          }
+        }
+        cell.dataset.columnId = column.id; cell.setAttribute('role', 'cell'); row.appendChild(cell);
+      });
       if (data) {
         row.addEventListener('mousedown', (event) => this.beginRowDrag(index, event));
         row.addEventListener('click', (event) => { if (this.ignoreRowClick) { event.preventDefault(); return; } this.selectRow(index, event); row.focus({ preventScroll: true }); });
@@ -297,7 +328,7 @@ export class SignalTableView {
   private totalWidth(): number { const visible = this.displayWidths(); return this.columns().reduce((sum, column) => sum + visible[column.id], 0); }
   private applyWidths(): void { const value = this.template(); const width = `${this.totalWidth()}px`; this.header.style.gridTemplateColumns = value; this.header.style.width = width; this.sizer.style.width = width; this.rowWindow.style.width = width; this.rowWindow.querySelectorAll<HTMLElement>('.signal-grid-row').forEach((row) => row.style.gridTemplateColumns = value); }
   private startResize(event: MouseEvent, id: string): void { event.preventDefault(); const start = event.clientX; const displayed = this.displayWidths(); Object.assign(this.widths, displayed); const initial = displayed[id]; const column = this.sizingColumns().find((item) => item.id === id)!; const move = (next: MouseEvent) => { this.widths[id] = Math.max(column.minWidth, Math.min(column.maxWidth, initial + next.clientX - start)); this.applyWidths(); }; const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); for (const visible of this.columns()) this.fittedWidths.add(visible.id); this.persistWidths(); }; window.addEventListener('mousemove', move); window.addEventListener('mouseup', up); }
-  private persist(): void { this.save({ tableSelectedIds: [...this.selected], tableColumnOrder: [...this.columnOrder], tableWidths: { ...this.widths }, tablePaneWidth: this.paneWidth, tablePaneCollapsed: this.paneCollapsed }); }
+  private persist(): void { this.save({ tableSignalGrouping: this.selector.groupingMode, tableSelectedIds: [...this.selected], tableColumnOrder: [...this.columnOrder], tableWidths: { ...this.widths }, tablePaneWidth: this.paneWidth, tablePaneCollapsed: this.paneCollapsed }); }
   private persistWidths(): void { this.persist(); }
   private pruneRows(): void { if (this.rows.size <= PAGE_SIZE * 6) return; const center = Math.floor(this.grid.scrollTop / ROW_HEIGHT); for (const index of this.rows.keys()) if (Math.abs(index - center) > PAGE_SIZE * 3) this.rows.delete(index); }
 }

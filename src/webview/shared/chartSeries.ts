@@ -1,5 +1,6 @@
 import type { ChartAxisRangeSetting, SignalSeriesDto } from '../../extension/editors/rawLogProtocol';
 import { convertDisplayUnit } from '../../core/units/displayUnit';
+import type { SignalSample } from '../../core/signal/signal';
 
 export function displaySeriesRange(series: readonly SignalSeriesDto[], setting?: ChartAxisRangeSetting, visibleRange?: { readonly start: number; readonly end: number }, displayUnit?: string): { minimum: number; maximum: number } {
   let range = visibleDisplayRange(series, visibleRange, displayUnit);
@@ -16,24 +17,40 @@ export function crossesSeriesGap(gaps: SignalSeriesDto['gaps'] | undefined, star
   const gap = gaps[low]; return Boolean(gap && gap.startTimestamp < endTimestamp && gap.endTimestamp > startTimestamp);
 }
 
-/** Returns the value where the rendered polyline crosses a Timestamp. */
-export function renderedSeriesValueAt(series: SignalSeriesDto, timestamp: number, connectGaps: boolean): number | undefined {
-  const samples = series.samples; if (!samples.length || !Number.isFinite(timestamp)) return undefined;
+/**
+ * Returns the value on the rendered polyline at the cursor Timestamp.
+ * Fixed markers deliberately use the full-resolution measured lookup instead.
+ */
+export function interpolatedSeriesSample(series: SignalSeriesDto, timestamp: number, connectGaps: boolean): SignalSample | undefined {
+  const samples = series.samples;
+  if (!samples.length || !Number.isFinite(timestamp)) return undefined;
   let low = 0; let high = samples.length;
-  while (low < high) { const middle = Math.floor((low + high) / 2); if (samples[middle].timestamp < timestamp) low = middle + 1; else high = middle; }
-  if (low < samples.length && samples[low].timestamp === timestamp && usable(samples[low])) return samples[low].value;
-  let left = low - 1; let right = low;
-  while (left >= 0 && !usable(samples[left])) left--;
-  while (right < samples.length && !usable(samples[right])) right++;
-  if (left < 0 || right >= samples.length) return undefined;
-  const before = samples[left]; const after = samples[right];
-  if (!connectGaps && crossesSeriesGap(series.gaps, before.timestamp, after.timestamp)) return undefined;
-  const span = after.timestamp - before.timestamp; if (!(span > 0)) return before.value;
-  const fraction = (timestamp - before.timestamp) / span;
-  return before.value + (after.value - before.value) * fraction;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (samples[middle].timestamp < timestamp) low = middle + 1;
+    else high = middle;
+  }
+
+  for (let index = low; index < samples.length && samples[index].timestamp === timestamp; index++) {
+    if (usableSample(samples[index])) return samples[index];
+  }
+
+  let leftIndex = low - 1;
+  let rightIndex = low;
+  let skippedInvalid = false;
+  while (leftIndex >= 0 && !usableSample(samples[leftIndex])) { skippedInvalid = true; leftIndex--; }
+  while (rightIndex < samples.length && !usableSample(samples[rightIndex])) { skippedInvalid = true; rightIndex++; }
+  const left = samples[leftIndex]; const right = samples[rightIndex];
+  if (!left || !right || timestamp < left.timestamp || timestamp > right.timestamp) return undefined;
+  if (!connectGaps && (skippedInvalid || crossesSeriesGap(series.gaps, left.timestamp, right.timestamp))) return undefined;
+  const span = right.timestamp - left.timestamp;
+  if (!(span > 0)) return left;
+  return { timestamp, value: left.value + (right.value - left.value) * ((timestamp - left.timestamp) / span), quality: 'valid' };
 }
 
-function usable(sample: SignalSeriesDto['samples'][number]): boolean { return Number.isFinite(sample.timestamp) && Number.isFinite(sample.value) && (sample.quality === undefined || sample.quality === 'valid'); }
+function usableSample(sample: SignalSample): boolean {
+  return Number.isFinite(sample.value) && (sample.quality === undefined || sample.quality === 'valid');
+}
 
 function visibleDisplayRange(series: readonly SignalSeriesDto[], visibleRange?: { readonly start: number; readonly end: number }, displayUnit?: string): { minimum: number; maximum: number } {
   let minimum = Infinity; let maximum = -Infinity;

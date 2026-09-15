@@ -12,6 +12,27 @@ BO_ 672 Vehicle_Powertrain_Status: 8 VehicleECU
  SG_ EngineSpeed : 32|16@1+ (0.25,0) [0|16000] "rpm" Dashboard
  SG_ EngineTorque : 48|16@1- (0.1,0) [-3276.8|3276.7] "Nm" Dashboard
 
+BO_ 784 Body_Control_Status: 8 VehicleECU
+ SG_ Headlight : 7|1@0+ (1,0) [0|1] "" Dashboard
+ SG_ LeftTurnSignal : 6|1@0+ (1,0) [0|1] "" Dashboard
+ SG_ RightTurnSignal : 5|1@0+ (1,0) [0|1] "" Dashboard
+ SG_ GearPosition : 16|4@1+ (1,0) [0|15] "" Dashboard
+
+VAL_ 784 Headlight 0 "Off" 1 "On";
+VAL_ 784 LeftTurnSignal 0 "Off" 1 "On";
+VAL_ 784 RightTurnSignal 0 "Off" 1 "On";
+VAL_ 784 GearPosition 0 "Park" 1 "Neutral" 3 "Drive";
+
+BO_ 800 Multiplexed_Drive_Status: 8 VehicleECU
+ SG_ Multiplexer M : 0|8@1+ (1,0) [0|2] "" Dashboard
+ SG_ DriveState : 8|8@1+ (1,0) [0|3] "" Dashboard
+ SG_ RequestedTorque m0 : 16|16@1- (0.1,0) [-3276.8|3276.7] "Nm" Dashboard
+ SG_ DCLinkPower m1 : 16|16@1+ (0.1,0) [0|6553.5] "kW" Dashboard
+ SG_ RegenerationLimit m2 : 16|16@1+ (0.1,0) [0|6553.5] "kW" Dashboard
+
+VAL_ 800 Multiplexer 0 "Torque" 1 "Power" 2 "Regeneration";
+VAL_ 800 DriveState 0 "Disabled" 1 "Ready" 2 "Driving" 3 "Fault";
+
 BO_ 2566869221 Environmental_Status: 12 VehicleECU
  SG_ AmbientTemperature : 7|16@0- (0.1,-40) [-40|150] "degC" Dashboard
  SG_ AtmosphericPressure : 23|16@0+ (0.125,0) [0|8191.875] "kPa" Dashboard

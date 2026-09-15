@@ -33,15 +33,15 @@ export function parseResolution(text: string): ResolutionParseResult {
     value = Number(normalized);
   }
   if (!Number.isFinite(value)) return { valid: false, error: 'Resolution must be finite.' };
-  if (value <= 0) return { valid: false, error: 'Resolution must be greater than zero.' };
-  if (value < MIN_RESOLUTION || value > MAX_RESOLUTION) return { valid: false, error: `Resolution must be between ${MIN_RESOLUTION} and ${MAX_RESOLUTION}.` };
+  if (value === 0) return { valid: false, error: 'Scale must not be zero.' };
+  if (Math.abs(value) < MIN_RESOLUTION || Math.abs(value) > MAX_RESOLUTION) return { valid: false, error: `Scale magnitude must be between ${MIN_RESOLUTION} and ${MAX_RESOLUTION}.` };
   return { valid: true, resolution: { value, text: normalized, ...(ratio ? { fraction: ratio } : {}) } };
 }
 
 export function resolutionStepFactor(text: string): 2 | 10 {
   const parsed = parseResolution(text);
   if (!parsed.valid) return 10;
-  const power = Math.log2(parsed.resolution.value);
+  const power = Math.log2(Math.abs(parsed.resolution.value));
   return Math.abs(power - Math.round(power)) < 1e-12 ? 2 : 10;
 }
 

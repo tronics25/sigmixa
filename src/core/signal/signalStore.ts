@@ -1,10 +1,12 @@
 import type { SignalDefinition, SignalEvent, SignalSample, SignalSeries } from './signal';
-import { downsampleEven, nearestSample, samplesInRange, samplesInRangeWithContext, type TimeRange } from '../timeline/timeline';
+import { sampleIndex, signalCellChange, type SignalCellChange } from './tableChanges';
+import { downsampleEven, nearestSample, nearestMeasuredSample, samplesInRange, samplesInRangeWithContext, type TimeRange } from '../timeline/timeline';
 
 export interface SignalEventRow {
   readonly id: string;
   readonly timestamp: number;
   readonly values: ReadonlyMap<string, SignalSample>;
+  readonly changes?: Readonly<Record<string, SignalCellChange>>;
 }
 
 export interface SignalTablePage {
@@ -50,6 +52,7 @@ export class InMemorySignalStore {
   private tableCacheSelection: readonly string[] = [];
   private tableCacheRange: TimeRange | undefined;
   private tableCache: SignalEventRow[] = [];
+  private readonly tableCadence = new WeakMap<MutableSeries, { length: number; threshold: number }>();
 
   get generation(): number { return this.version; }
   get rowCount(): number { return this.rows.length; }
@@ -143,6 +146,34 @@ export class InMemorySignalStore {
     return downsampleEven(this.tableCache, limit);
   }
 
+  /** Only bounded display pages carry metadata; stored rows and exports stay unchanged. */
+  tableDisplayPage(selectedIds: readonly string[], offset: number, limit: number, range?: TimeRange): SignalTablePage {
+    const page = this.tablePage(selectedIds, offset, limit, range);
+    const selected = new Set(selectedIds);
+    const hints = new Map<string, number>();
+    return { ...page, rows: page.rows.map((row) => {
+      const changes: Record<string, SignalCellChange> = Object.create(null);
+      for (const [id, sample] of row.values) {
+        if (!selected.has(id)) continue;
+        const target = this.series.get(id); if (!target) continue;
+        this.ensureSeriesSorted(target);
+        const index = sampleIndex(target.samples, sample, hints.get(id));
+        if (index < 0) continue;
+        hints.set(id, index + 1);
+        const previous = target.samples[index - 1];
+        if (!previous || (range && previous.timestamp < range.start)) continue;
+        let cadence = this.tableCadence.get(target);
+        if (!cadence || cadence.length !== target.samples.length) {
+          cadence = { length: target.samples.length, threshold: signalCadenceThreshold(target.samples) };
+          this.tableCadence.set(target, cadence);
+        }
+        const change = signalCellChange(sample, previous, target.minimum, target.maximum, cadence.threshold);
+        if (change) changes[id] = change;
+      }
+      return { ...row, changes };
+    }) };
+  }
+
   seriesSlice(selectedIds: readonly string[], range: TimeRange | undefined, maxPoints: number): readonly SignalSeriesSlice[] {
     const result: SignalSeriesSlice[] = [];
     for (const id of selectedIds) {
@@ -169,6 +200,16 @@ export class InMemorySignalStore {
     for (const id of selectedIds) {
       const target = this.series.get(id); if (!target) continue; this.ensureSeriesSorted(target);
       const sample = nearestSample(target.samples, timestamp, range); if (sample) result.push({ definition: target.definition, sample });
+    }
+    return result;
+  }
+
+  measured(selectedIds: readonly string[], timestamp: number, range?: TimeRange): readonly { signalId: string; sample: SignalSample }[] {
+    const result: { signalId: string; sample: SignalSample }[] = [];
+    for (const id of new Set(selectedIds)) {
+      const target = this.series.get(id); if (!target) continue; this.ensureSeriesSorted(target);
+      const sample = nearestMeasuredSample(target.samples, timestamp, range);
+      if (sample) result.push({ signalId: id, sample });
     }
     return result;
   }
@@ -203,8 +244,7 @@ export class InMemorySignalStore {
 const MAX_CADENCE_SAMPLES = 2048;
 const MAX_REPORTED_GAPS = 2000;
 
-function detectSignalGaps(samples: readonly SignalSample[]): readonly SignalGap[] {
-  if (samples.length < 2) return [];
+function signalCadenceThreshold(samples: readonly SignalSample[]): number {
   const deltas: number[] = [];
   const candidateCount = Math.min(MAX_CADENCE_SAMPLES, samples.length - 1);
   for (let sampleIndex = 0; sampleIndex < candidateCount; sampleIndex++) {
@@ -215,7 +255,12 @@ function detectSignalGaps(samples: readonly SignalSample[]): readonly SignalGap[
   }
   deltas.sort((left, right) => left - right);
   const median = deltas.length ? deltas[Math.floor(deltas.length / 2)] : undefined;
-  const threshold = median === undefined ? Infinity : median * 4;
+  return median === undefined ? Infinity : median * 4;
+}
+
+function detectSignalGaps(samples: readonly SignalSample[]): readonly SignalGap[] {
+  if (samples.length < 2) return [];
+  const threshold = signalCadenceThreshold(samples);
   const gaps: SignalGap[] = [];
   for (let index = 1; index < samples.length; index++) {
     const previous = samples[index - 1]; const current = samples[index]; const delta = current.timestamp - previous.timestamp;

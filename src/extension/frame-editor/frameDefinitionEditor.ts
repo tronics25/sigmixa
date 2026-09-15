@@ -95,7 +95,8 @@ export class FrameDefinitionEditor implements vscode.Disposable {
   }
 
   private async saveWidths(widths: Readonly<Record<string, number>>): Promise<void> {
-    const safe = Object.fromEntries(Object.entries(widths).filter(([, value]) => Number.isFinite(value) && value >= 32 && value <= 1000));
+    const textColumns = new Set(['name', 'unit', 'derivedName', 'derivedUnit', 'definition']);
+    const safe = Object.fromEntries(Object.entries(widths).filter(([id, value]) => Number.isFinite(value) && value >= 32 && value <= (textColumns.has(id) ? 4096 : 1000)));
     try { await this.store.update((project) => ({ ...project, viewStates: { ...project.viewStates, 'frame-definition-columns': safe } })); }
     catch { /* Definition saving surfaces storage failures; width persistence is best-effort. */ }
   }

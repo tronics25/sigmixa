@@ -1,5 +1,34 @@
 # Change Log
 
+## 0.11.0 - 2026-09-16
+
+- Replaced the SigMixa wordmark, Marketplace icon and Activity Bar icon with the new hexagonal signal design.
+- Matched Time Series and Clip Comparison value-label borders to each plotted line's color and solid/dashed pattern, including pinned markers.
+- Made hover values follow the rendered line smoothly with synchronous interpolation, while fixed markers still snap to full-resolution measured samples.
+- Consolidated Time Series navigation into one contextual row: selecting a range replaces the ordinary zoom controls with CAN Timestamp edge adjustment, zoom-to-range, Clip creation, and clear actions.
+- Expanded Clip Comparison alignment controls with press-and-hold stepping, wheel scrubbing, live drag adjustment, and nearest-CAN-Timestamp snapping on release.
+- Standardized press-and-hold repetition across zoom, pan, selected-range edge and Clip-alignment controls, and compacted contextual range and reset actions without adding permanent labels.
+- Added true vector SVG export alongside PNG for Time Series, Clip Comparison and Trajectory without adding another permanent toolbar control.
+- Removed redundant L/R badges from on-screen and exported chart legends while preserving left/right Y-axis layout behavior.
+- Reorganized Time Series, Clip Comparison and Trajectory toolbars into persistent analysis controls and compact right-aligned icon actions with localized tooltips and accessible names.
+- Kept marker-clear actions in a stable toolbar position and toned them down as disabled until a marker exists.
+- Signal Table highlights changed cells by relative numeric change, named-state transitions and discrete recovery indicators, without altering exported values.
+- Added Frame / Unit system grouping to Signal lists in Time Series, Table and Clip Comparison, with selection counts and preserved source actions.
+- Made Frame Definition names and expressions responsive while keeping numeric and selection columns compact; narrow layouts scroll within the table, and numeric detail controls no longer stretch with the preview.
+- Added clickable Derived Signal dependency diagrams with upstream traversal and unresolved-reference indicators.
+- Added DBC Signal value-label (`VAL_`) import/export and per-Signal label editing. State labels follow original RAW integers through decoding and appear beside numeric values in RAW Log, Table, Time Series and Clip Comparison; calculations and CSV values remain numeric.
+- RAW Log decoded values now reveal their source bytes and exact bit masks on hover or keyboard focus, without adding permanent panels.
+- Signal Table column headers and Signal selection now highlight together; Trajectory axis selectors use the matching axis colors.
+- Linked Frame Signal rows and Bit Layout on hover, keyboard focus and selection, with stable Signal colors and MSB/LSB indicators. Editor focus follows Signal identity across redraws.
+- Simplified Frame Definition controls and added inline linear-interpolation and filter previews in expandable Derived Signal definitions. Lookup edits preserve row order.
+- Linked Time Series and Clip Comparison legends and Signal lists to the corresponding plotted lines.
+- Enabled negative Scale in Frame definitions and DBC import/export, including correct exported minimum/maximum bounds.
+
+- Scale now selects arithmetic automatically: power-of-two values shift integer RAW before Offset; other values such as `0.01` retain fractional values. Direct Signal conversion uses exact integer/rational arithmetic until final numeric output, without blanket fractional truncation or an additional Frame setting.
+- Time Series and Clip Comparison hover labels and pinned markers now inspect nearest original samples instead of interpolating the reduced plot. Reference lines snap to original sample timestamps, shown below the graph. Value labels omit matching timestamps and show compact signed offsets such as `@-3ms` only for asynchronous samples. Sample dots use their actual positions; gap connection remains a drawing-only option.
+- Coalesced measurement requests keep rapid cursor movement bounded, and PNG export waits for pinned-marker measurements.
+- Refreshed the README and user documentation, and expanded the single sample workspace with value-label and Multiplexing scenarios for stable release.
+
 ## 0.10.0
 
 - Added persistent Clips with scoped RAW Log, Table, Time Series and Trajectory views, source navigation, deletion and multi-Clip comparison.

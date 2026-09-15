@@ -100,6 +100,16 @@ for (let step = 0; step <= 1200; step++) {
     const body = (driverDoor ? 0x80 : 0) | (passengerDoor ? 0x40 : 0) | (seatbelt ? 0x20 : 0);
     const gear = speed > 0.1 ? 3 : time < 55 ? 1 : 0;
     classic(time + 0.005, 1, '310', 'Tx', [flags, body, gear, Math.round(22 + Math.sin(time / 9) * 2 + 40), 0, 0, 0, 0]);
+
+    // Multiplexed payload: bytes 2-3 change meaning according to byte 0.
+    const mux = Math.floor(time / 5) % 3;
+    const multiplexed = new Array(8).fill(0);
+    multiplexed[0] = mux;
+    multiplexed[1] = time >= 1 && time < 56 ? (speed > 0.1 ? 2 : 1) : 0;
+    if (mux === 0) putSigned16(multiplexed, 2, (accelerator * 2.1 - pedal * 0.55) * 10);
+    else if (mux === 1) put16(multiplexed, 2, Math.max(0, speed * accelerator * 0.045) * 10);
+    else put16(multiplexed, 2, Math.max(0, pedal * 0.8) * 10);
+    classic(time + 0.0055, 1, '320', 'Rx', multiplexed);
   }
 
   if (step % 20 === 0) {

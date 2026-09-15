@@ -7,6 +7,8 @@ const extracted = (id, name, unit, byteOffset, lengthBits, scale, offset = 0, op
   id, name, unit, byteOffset, bitOffset: options.bitOffset ?? 0, lengthBits,
   signedness: options.signedness ?? 'unsigned', byteOrder: options.byteOrder ?? 'little',
   conversion: { type: 'scale-offset', lsb: scale, lsbText: options.scaleText ?? String(scale), offset },
+  ...(options.valueLabels ? { valueLabels: options.valueLabels } : {}),
+  ...(options.multiplexing ? { multiplexing: options.multiplexing } : {}),
 });
 
 const frames = [
@@ -19,7 +21,7 @@ const frames = [
       extracted('sig-accelerator', 'Accelerator Position', '%', 6, 16, 0.1),
       extracted('sig-engine-torque', 'Engine Torque', 'Nm', 8, 16, 0.1, 0, { signedness: 'signed' }),
       extracted('sig-coolant-temp', 'Coolant Temperature', '°C', 10, 8, 1, -40),
-      extracted('sig-drive-mode', 'Drive Mode', '', 11, 3, 1),
+      extracted('sig-drive-mode', 'Drive Mode', '', 11, 3, 1, 0, { valueLabels: { 0: 'Off', 1: 'Ready', 3: 'Drive' } }),
       extracted('sig-odometer', 'Odometer', 'km', 12, 32, 0.1),
       extracted('sig-temp', 'Motor Temperature', '°C', 40, 16, 0.1, -40),
     ],
@@ -50,16 +52,27 @@ const frames = [
   {
     id: 'ff-310', canId: 0x310, extended: false, name: 'Body Control Status', frameLength: 8, origin: { type: 'manual' },
     signals: [
-      extracted('sig-headlight', 'Headlight', '', 0, 1, 1, 0, { byteOrder: 'big' }),
-      extracted('sig-turn-left', 'Left Turn Signal', '', 0, 1, 1, 0, { byteOrder: 'big', bitOffset: 1 }),
-      extracted('sig-turn-right', 'Right Turn Signal', '', 0, 1, 1, 0, { byteOrder: 'big', bitOffset: 2 }),
-      extracted('sig-horn', 'Horn', '', 0, 1, 1, 0, { byteOrder: 'big', bitOffset: 3 }),
-      extracted('sig-driver-door', 'Driver Door Open', '', 1, 1, 1, 0, { byteOrder: 'big' }),
-      extracted('sig-passenger-door', 'Passenger Door Open', '', 1, 1, 1, 0, { byteOrder: 'big', bitOffset: 1 }),
-      extracted('sig-seatbelt', 'Driver Seatbelt Latched', '', 1, 1, 1, 0, { byteOrder: 'big', bitOffset: 2 }),
-      extracted('sig-gear-position', 'Gear Position', '', 2, 4, 1),
+      extracted('sig-headlight', 'Headlight', '', 0, 1, 1, 0, { byteOrder: 'big', valueLabels: { 0: 'Off', 1: 'On' } }),
+      extracted('sig-turn-left', 'Left Turn Signal', '', 0, 1, 1, 0, { byteOrder: 'big', bitOffset: 1, valueLabels: { 0: 'Off', 1: 'On' } }),
+      extracted('sig-turn-right', 'Right Turn Signal', '', 0, 1, 1, 0, { byteOrder: 'big', bitOffset: 2, valueLabels: { 0: 'Off', 1: 'On' } }),
+      extracted('sig-horn', 'Horn', '', 0, 1, 1, 0, { byteOrder: 'big', bitOffset: 3, valueLabels: { 0: 'Off', 1: 'On' } }),
+      extracted('sig-driver-door', 'Driver Door Open', '', 1, 1, 1, 0, { byteOrder: 'big', valueLabels: { 0: 'Closed', 1: 'Open' } }),
+      extracted('sig-passenger-door', 'Passenger Door Open', '', 1, 1, 1, 0, { byteOrder: 'big', bitOffset: 1, valueLabels: { 0: 'Closed', 1: 'Open' } }),
+      extracted('sig-seatbelt', 'Driver Seatbelt Latched', '', 1, 1, 1, 0, { byteOrder: 'big', bitOffset: 2, valueLabels: { 0: 'Unlatched', 1: 'Latched' } }),
+      extracted('sig-gear-position', 'Gear Position', '', 2, 4, 1, 0, { valueLabels: { 0: 'Park', 1: 'Neutral', 3: 'Drive' } }),
       extracted('sig-cabin-temperature', 'Cabin Temperature', '°C', 3, 8, 1, -40),
     ], derivedSignals: [],
+  },
+  {
+    id: 'ff-320', canId: 0x320, extended: false, name: 'Multiplexed Drive Status', frameLength: 8, multiplexing: true, origin: { type: 'manual' },
+    signals: [
+      extracted('sig-mux-mode', 'Multiplexer', '', 0, 8, 1, 0, { multiplexing: { type: 'multiplexer' }, valueLabels: { 0: 'Torque', 1: 'Power', 2: 'Regeneration' } }),
+      extracted('sig-drive-state', 'Drive State', '', 1, 8, 1, 0, { valueLabels: { 0: 'Disabled', 1: 'Ready', 2: 'Driving', 3: 'Fault' } }),
+      extracted('sig-requested-torque', 'Requested Torque', 'Nm', 2, 16, 0.1, 0, { signedness: 'signed', multiplexing: { type: 'conditional', ranges: [{ from: 0, to: 0 }] } }),
+      extracted('sig-dc-link-power', 'DC Link Power', 'kW', 2, 16, 0.1, 0, { multiplexing: { type: 'conditional', ranges: [{ from: 1, to: 1 }] } }),
+      extracted('sig-regen-limit', 'Regeneration Limit', 'kW', 2, 16, 0.1, 0, { multiplexing: { type: 'conditional', ranges: [{ from: 2, to: 2 }] } }),
+    ],
+    derivedSignals: [],
   },
   {
     id: 'ff-184', canId: 0x184, extended: false, name: 'Vehicle Position and Motion', frameLength: 16, origin: { type: 'manual' },
@@ -138,16 +151,19 @@ const project = {
   lookupTables: [],
   calculations: [],
   viewStates: {
-    'frame-definition-columns': { name: 130, unit: 75, byte: 70, bit: 62, length: 82, signed: 100, endian: 112, scale: 180, offset: 90, actions: 52, derivedName: 180, derivedUnit: 90, derivedType: 160, definition: 520, derivedActions: 52 },
+    'frame-definition-columns': { name: 203, unit: 112, byte: 48, bit: 44, length: 58, signed: 96, endian: 92, scale: 100, offset: 74, minimum: 74, maximum: 74, activation: 136, actions: 32, derivedName: 235, derivedUnit: 112, derivedType: 140, definition: 520, derivedActions: 32 },
     'log-view-default': {
       tableSelectedIds: ['sig-speed', 'sig-engine-speed', 'sig-engine-torque', 'sig-mechanical-power', 'sig-brake-pressure', 'sig-wheel-speed-difference', 'sig-headlight', 'sig-gear-position', 'sig-object-distance', 'sig-time-to-collision', counterId, metricId],
       tableWidths: { time: 118, 'sig-speed': 130, 'sig-engine-speed': 130, 'sig-accelerator': 145, 'sig-engine-torque': 135, 'sig-coolant-temp': 150, 'sig-mechanical-power': 140, 'sig-brake-pressure': 130, 'sig-pedal': 145, 'sig-wheel-speed-difference': 180, 'sig-headlight': 110, 'sig-gear-position': 120, 'sig-object-distance': 130, 'sig-relative-speed': 130, 'sig-time-to-collision': 130, [counterId]: 140, [metricId]: 140 },
       chartSelectedIds: ['sig-speed', 'sig-smoothed-speed', referenceSpeedId, 'sig-engine-speed', 'sig-engine-torque', 'sig-brake-pressure', 'sig-temp', ambientTemperatureId, 'sig-yaw-rate', 'sig-lateral-accel', 'sig-object-distance', 'sig-time-to-collision'],
       chartColors: { 'sig-speed': '#2563eb', 'sig-smoothed-speed': '#0891b2', [referenceSpeedId]: '#f97316', 'sig-engine-speed': '#7c3aed', 'sig-accelerator': '#84cc16', 'sig-engine-torque': '#dc2626', 'sig-mechanical-power': '#eab308', 'sig-brake-pressure': '#ef4444', 'sig-wheel-speed-fl': '#0ea5e9', 'sig-wheel-speed-fr': '#22c55e', 'sig-temp': '#a855f7', 'sig-ambient-can': '#f59e0b', [ambientTemperatureId]: '#16a34a', 'sig-yaw-rate': '#ec4899', 'sig-lateral-accel': '#14b8a6', 'sig-object-distance': '#3b82f6', 'sig-relative-speed': '#f43f5e', 'sig-time-to-collision': '#8b5cf6', [counterId]: '#7c3aed', [metricId]: '#0891b2' },
-      chartMode: 'raw', chartPaneWidth: 270, chartPaneCollapsed: false,
+      chartMode: 'raw', chartPaneWidth: 270, chartPaneCollapsed: false, chartSignalGrouping: 'frame', tableSignalGrouping: 'frame',
+      chartConnectGaps: true, chartAxisRange: { mode: 'visible', includeZero: false },
+      chartGroupLayout: [['family:speed', 'family:rotational-speed'], ['family:torque', 'family:pressure'], ['family:temperature'], ['family:angular-speed', 'family:acceleration'], ['family:length', 'family:time']],
       trajectoryXId: 'sig-position-x', trajectoryYId: 'sig-position-y', trajectoryZId: 'sig-position-z',
       trajectoryInvert: { x: false, y: false, z: false }, trajectoryEqualAspect: true,
       trajectoryTrail: 'all', trajectoryTrailSeconds: 10, trajectorySpeed: 1,
+      trajectoryConnectGaps: true, trajectoryShowGrid: true, trajectoryShowPoints: true,
     },
   },
 };

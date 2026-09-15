@@ -2,7 +2,7 @@
   "name": "sigmixa",
   "displayName": "SigMixa",
   "description": "%sigmixa.description%",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "publisher": "tronics25",
   "license": "MIT",
   "private": true,
@@ -20,6 +20,16 @@
   "categories": [
     "Visualization",
     "Other"
+  ],
+  "keywords": [
+    "CAN",
+    "CAN FD",
+    "ASC",
+    "BLF",
+    "DBC",
+    "automotive",
+    "telemetry",
+    "visualization"
   ],
   "activationEvents": [
     "onCustomEditor:sigmixa.rawLog",

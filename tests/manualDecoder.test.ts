@@ -30,6 +30,15 @@ test('unmatched CAN frames are ignored without diagnostics', () => {
   assert.deepEqual(result, { decoded: [], diagnostics: [] });
 });
 
+test('each Signal Scale automatically selects arithmetic and feeds Derived Signals', () => {
+  const direct = definition.signals[0];
+  const fractional: ManualFrameDefinition = { ...definition, frameLength: 2, signals: [
+    { ...direct, name: 'Speed', conversion: { type: 'scale-offset', lsb: 1/16, lsbText: '1/16', offset: 0 } },
+    { ...direct, id: 'percent', name: 'Percent', byteOffset: 1, conversion: { type: 'scale-offset', lsb: .01, lsbText: '1/100', offset: 0 } },
+  ], derivedSignals: [{ id: 'derived', name: 'Derived', unit: '', operation: { type: 'expression', expression: '[Speed] + 0.25' } }] };
+  assert.deepEqual(decodeManualFrame(frame([36, 225]), fractional).decoded.map((entry) => entry.sample.value), [2, 2.25, 2.25]);
+});
+
 test('multiplexed decoder emits only Signals active for the raw Multiplexer value', () => {
   const multiplexed: ManualFrameDefinition = { ...definition, multiplexing: true, derivedSignals: [], signals: [
     { ...definition.signals[0], id: 'mode', name: 'Mode', lengthBits: 4, conversion: { type: 'scale-offset', lsb: 10, lsbText: '10', offset: 100 }, multiplexing: { type: 'multiplexer' } },
@@ -42,15 +51,18 @@ test('multiplexed decoder emits only Signals active for the raw Multiplexer valu
 });
 
 test('Lookup Table interpolates linearly and Filter keeps state within an analysis context', () => {
-  const derivedDefinition: ManualFrameDefinition = { ...definition, derivedSignals: [
+  const derivedDefinition: ManualFrameDefinition = { ...definition, signals: [
+    { ...definition.signals[0], conversion: { type: 'scale-offset', lsb: .01, lsbText: '0.01', offset: -1 } },
+    definition.signals[1],
+  ], derivedSignals: [
     { id: 'lookup', name: 'Lookup', unit: '', operation: { type: 'lookup', input: 'Speed', outOfRange: 'clamp', points: [{ input: 0, output: 0 }, { input: 10, output: 100 }] } },
     { id: 'filtered', name: 'Filtered', unit: 'm/s', operation: { type: 'filter', input: 'Speed', filter: 'low-pass', timeSeconds: 1 } },
   ] };
   const context = createManualDecodeContext();
   const first = decodeManualFrame({ ...frame([0x80, 0]), timestamp: 0 }, derivedDefinition, context);
   const second = decodeManualFrame({ ...frame([0xff, 0]), timestamp: 1 }, derivedDefinition, context);
-  assert.equal(first.decoded.find((item) => item.definition.id === 'lookup')?.sample.value, 0);
-  assert.ok(Math.abs(second.decoded.find((item) => item.definition.id === 'lookup')!.sample.value - 9.921875) < 1e-9);
+  assert.ok(Math.abs(first.decoded.find((item) => item.definition.id === 'lookup')!.sample.value - 2.8) < 1e-9);
+  assert.equal(second.decoded.find((item) => item.definition.id === 'lookup')!.sample.value, 15.5);
   const filtered = second.decoded.find((item) => item.definition.id === 'filtered')!.sample.value;
-  assert.ok(filtered > 0 && filtered < 0.9921875);
+  assert.ok(filtered > .28 && filtered < 1.55);
 });

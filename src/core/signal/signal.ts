@@ -10,6 +10,7 @@ export interface SignalDefinition {
   readonly id: string;
   readonly name: string;
   readonly unit?: string;
+  readonly hasValueLabels?: boolean;
   readonly group?: string;
   readonly source: SignalSource;
   readonly frameRef?: { readonly canId: number; readonly extended: boolean };
@@ -18,6 +19,8 @@ export interface SignalDefinition {
 export interface SignalSample {
   readonly timestamp: Timestamp;
   readonly value: number;
+  /** State name resolved from the original RAW value, not a rounded physical value. */
+  readonly valueLabel?: string;
   readonly quality?: 'valid' | 'invalid' | 'missing';
   readonly originalTimestamp?: { readonly value: number; readonly unit: 'seconds' | 'milliseconds' | 'microseconds' };
 }

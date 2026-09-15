@@ -5,6 +5,9 @@
       "id": "ff-2a0",
       "name": "Vehicle Powertrain Status",
       "frameLength": 64,
+      "origin": {
+        "type": "manual"
+      },
       "signals": [
         {
           "id": "sig-speed",
@@ -116,6 +119,11 @@
             "lsb": 1,
             "lsbText": "1",
             "offset": 0
+          },
+          "valueLabels": {
+            "0": "Off",
+            "1": "Ready",
+            "3": "Drive"
           }
         },
         {
@@ -243,15 +251,15 @@
           }
         }
       ],
-      "origin": {
-        "type": "manual"
-      },
       "canId": "2A0"
     },
     {
       "id": "ff-300",
       "name": "Brake and Wheel Speed",
       "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
       "signals": [
         {
           "id": "sig-brake-pressure",
@@ -368,15 +376,15 @@
           }
         }
       ],
-      "origin": {
-        "type": "manual"
-      },
       "canId": "300"
     },
     {
       "id": "ff-310",
       "name": "Body Control Status",
       "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
       "signals": [
         {
           "id": "sig-headlight",
@@ -392,6 +400,10 @@
             "lsb": 1,
             "lsbText": "1",
             "offset": 0
+          },
+          "valueLabels": {
+            "0": "Off",
+            "1": "On"
           }
         },
         {
@@ -408,6 +420,10 @@
             "lsb": 1,
             "lsbText": "1",
             "offset": 0
+          },
+          "valueLabels": {
+            "0": "Off",
+            "1": "On"
           }
         },
         {
@@ -424,6 +440,10 @@
             "lsb": 1,
             "lsbText": "1",
             "offset": 0
+          },
+          "valueLabels": {
+            "0": "Off",
+            "1": "On"
           }
         },
         {
@@ -440,6 +460,10 @@
             "lsb": 1,
             "lsbText": "1",
             "offset": 0
+          },
+          "valueLabels": {
+            "0": "Off",
+            "1": "On"
           }
         },
         {
@@ -456,6 +480,10 @@
             "lsb": 1,
             "lsbText": "1",
             "offset": 0
+          },
+          "valueLabels": {
+            "0": "Closed",
+            "1": "Open"
           }
         },
         {
@@ -472,6 +500,10 @@
             "lsb": 1,
             "lsbText": "1",
             "offset": 0
+          },
+          "valueLabels": {
+            "0": "Closed",
+            "1": "Open"
           }
         },
         {
@@ -488,6 +520,10 @@
             "lsb": 1,
             "lsbText": "1",
             "offset": 0
+          },
+          "valueLabels": {
+            "0": "Unlatched",
+            "1": "Latched"
           }
         },
         {
@@ -504,6 +540,11 @@
             "lsb": 1,
             "lsbText": "1",
             "offset": 0
+          },
+          "valueLabels": {
+            "0": "Park",
+            "1": "Neutral",
+            "3": "Drive"
           }
         },
         {
@@ -524,15 +565,149 @@
         }
       ],
       "derivedSignals": [],
+      "canId": "310"
+    },
+    {
+      "id": "ff-320",
+      "name": "Multiplexed Drive Status",
+      "frameLength": 8,
+      "multiplexing": true,
       "origin": {
         "type": "manual"
       },
-      "canId": "310"
+      "signals": [
+        {
+          "id": "sig-mux-mode",
+          "name": "Multiplexer",
+          "unit": "",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          },
+          "valueLabels": {
+            "0": "Torque",
+            "1": "Power",
+            "2": "Regeneration"
+          },
+          "multiplexing": {
+            "type": "multiplexer"
+          }
+        },
+        {
+          "id": "sig-drive-state",
+          "name": "Drive State",
+          "unit": "",
+          "byteOffset": 1,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          },
+          "valueLabels": {
+            "0": "Disabled",
+            "1": "Ready",
+            "2": "Driving",
+            "3": "Fault"
+          }
+        },
+        {
+          "id": "sig-requested-torque",
+          "name": "Requested Torque",
+          "unit": "Nm",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          },
+          "multiplexing": {
+            "type": "conditional",
+            "ranges": [
+              {
+                "from": 0,
+                "to": 0
+              }
+            ]
+          }
+        },
+        {
+          "id": "sig-dc-link-power",
+          "name": "DC Link Power",
+          "unit": "kW",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          },
+          "multiplexing": {
+            "type": "conditional",
+            "ranges": [
+              {
+                "from": 1,
+                "to": 1
+              }
+            ]
+          }
+        },
+        {
+          "id": "sig-regen-limit",
+          "name": "Regeneration Limit",
+          "unit": "kW",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          },
+          "multiplexing": {
+            "type": "conditional",
+            "ranges": [
+              {
+                "from": 2,
+                "to": 2
+              }
+            ]
+          }
+        }
+      ],
+      "derivedSignals": [],
+      "canId": "320"
     },
     {
       "id": "ff-184",
       "name": "Vehicle Position and Motion",
       "frameLength": 16,
+      "origin": {
+        "type": "manual"
+      },
       "signals": [
         {
           "id": "sig-position-x",
@@ -651,15 +826,15 @@
           }
         }
       ],
-      "origin": {
-        "type": "manual"
-      },
       "canId": "184"
     },
     {
       "id": "ff-18ff50e5",
       "name": "Environmental Status",
       "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
       "signals": [
         {
           "id": "sig-ambient-can",
@@ -743,15 +918,15 @@
         }
       ],
       "derivedSignals": [],
-      "origin": {
-        "type": "manual"
-      },
       "canId": "18FF50E5"
     },
     {
       "id": "ff-5a0x",
       "name": "ADAS Object Summary",
       "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
       "signals": [
         {
           "id": "sig-object-distance",
@@ -845,9 +1020,6 @@
           }
         }
       ],
-      "origin": {
-        "type": "manual"
-      },
       "canId": "5A0x"
     }
   ],
@@ -857,23 +1029,23 @@
       "version": "1.1.0",
       "source": ".sigmixa/plugins/byte-scaler",
       "enabled": true,
+      "configSchemaVersion": "1",
       "config": {
         "byteIndex": 10,
         "factor": 1,
         "label": "Coolant Raw Byte"
-      },
-      "configSchemaVersion": "1"
+      }
     },
     {
       "id": "sample.payload-metric",
       "version": "1.0.0",
       "source": ".sigmixa/plugins/payload-metric",
       "enabled": true,
+      "configSchemaVersion": "1",
       "config": {
         "mode": "average",
         "throwOnMarker": true
-      },
-      "configSchemaVersion": "1"
+      }
     }
   ],
   "pluginBindings": [
@@ -922,8 +1094,9 @@
       "startTimestamp": 2,
       "endTimestamp": 8,
       "signalIds": [
-        "sig-temp",
-        "sig-coolant-temp"
+        "sig-speed",
+        "sig-engine-speed",
+        "sig-accelerator"
       ]
     },
     {
@@ -935,21 +1108,8 @@
       "endTimestamp": 24,
       "signalIds": [
         "sig-speed",
-        "sig-batt",
-        "sig-engine-speed",
-        "sig-accelerator",
-        "sig-engine-torque",
-        "sig-coolant-temp",
-        "sig-drive-mode",
-        "sig-odometer",
-        "sig-temp",
-        "sig-corrected-speed",
-        "sig-corrected-speed-rate",
-        "sig-speed-grade",
-        "sig-smoothed-speed",
-        "sig-average-accelerator",
-        "sig-mechanical-power",
-        "sig-power-utilization"
+        "sig-brake-pressure",
+        "sig-pedal"
       ]
     }
   ],
@@ -957,21 +1117,24 @@
   "calculations": [],
   "viewStates": {
     "frame-definition-columns": {
-      "name": 130,
-      "unit": 75,
-      "byte": 70,
-      "bit": 62,
-      "length": 82,
-      "signed": 100,
-      "endian": 112,
-      "scale": 180,
-      "offset": 90,
-      "actions": 52,
-      "derivedName": 180,
-      "derivedUnit": 90,
-      "derivedType": 160,
+      "name": 203,
+      "unit": 112,
+      "byte": 48,
+      "bit": 44,
+      "length": 58,
+      "signed": 96,
+      "endian": 92,
+      "scale": 100,
+      "offset": 74,
+      "minimum": 74,
+      "maximum": 74,
+      "activation": 136,
+      "actions": 32,
+      "derivedName": 235,
+      "derivedUnit": 112,
+      "derivedType": 140,
       "definition": 520,
-      "derivedActions": 52
+      "derivedActions": 32
     },
     "log-view-default": {
       "tableSelectedIds": [
@@ -1046,465 +1209,34 @@
       "chartMode": "raw",
       "chartPaneWidth": 270,
       "chartPaneCollapsed": false,
-      "trajectoryXId": "sig-position-x",
-      "trajectoryYId": "sig-position-y",
-      "trajectoryZId": "sig-position-z",
-      "trajectoryInvert": {
-        "x": false,
-        "y": false,
-        "z": false
-      },
-      "trajectoryEqualAspect": true,
-      "trajectoryTrail": "all",
-      "trajectoryTrailSeconds": 10,
-      "trajectorySpeed": 1
-    },
-    "log-view:6ab6d124ffcaa7c04e06": {
-      "tableSelectedIds": [
-        "sig-speed",
-        "sig-batt",
-        "sig-engine-speed",
-        "sig-accelerator",
-        "sig-engine-torque",
-        "sig-coolant-temp",
-        "sig-drive-mode",
-        "sig-odometer",
-        "sig-temp",
-        "sig-corrected-speed",
-        "sig-corrected-speed-rate",
-        "sig-speed-grade",
-        "sig-smoothed-speed",
-        "sig-average-accelerator",
-        "sig-mechanical-power",
-        "sig-power-utilization"
-      ],
-      "tableWidths": {
-        "time": 96,
-        "sig-speed": 158,
-        "sig-engine-speed": 149,
-        "sig-accelerator": 175,
-        "sig-engine-torque": 149,
-        "sig-coolant-temp": 150,
-        "sig-mechanical-power": 171,
-        "sig-brake-pressure": 153,
-        "sig-pedal": 145,
-        "sig-wheel-speed-difference": 254,
-        "sig-headlight": 90,
-        "sig-gear-position": 109,
-        "sig-object-distance": 150,
-        "sig-relative-speed": 130,
-        "sig-time-to-collision": 151,
-        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte": 183,
-        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric": 153,
-        "sig-batt": 144,
-        "sig-drive-mode": 98,
-        "sig-odometer": 121,
-        "sig-temp": 173,
-        "sig-corrected-speed": 224,
-        "sig-corrected-speed-rate": 190,
-        "sig-speed-grade": 121,
-        "sig-smoothed-speed": 207,
-        "sig-average-accelerator": 228,
-        "sig-power-utilization": 155,
-        "sig-wheel-speed-fl": 214,
-        "sig-wheel-speed-fr": 222,
-        "sig-brake-level": 104,
-        "sig-smoothed-brake-pressure": 219,
-        "sig-turn-left": 124,
-        "sig-turn-right": 132,
-        "sig-horn": 90,
-        "sig-driver-door": 134,
-        "sig-passenger-door": 161,
-        "sig-seatbelt": 171,
-        "sig-cabin-temperature": 172,
-        "sig-object-angle": 143,
-        "sig-object-confidence": 167,
-        "sig-object-valid": 102,
-        "sig-position-x": 114,
-        "sig-position-y": 113,
-        "sig-position-z": 114,
-        "sig-heading": 115,
-        "sig-yaw-rate": 131,
-        "sig-lateral-accel": 170,
-        "sig-path-radius": 125,
-        "sig-planar-position": 180,
-        "sig-ambient-can": 219,
-        "sig-barometric-pressure": 187,
-        "sig-module-voltage": 190,
-        "sig-altitude": 100,
-        "sig-environment-counter": 156
-      },
-      "chartSelectedIds": [
-        "sig-speed",
-        "sig-accelerator",
-        "sig-engine-torque",
-        "sig-coolant-temp",
-        "sig-temp",
-        "sig-corrected-speed-rate",
-        "sig-smoothed-speed",
-        "sig-average-accelerator",
-        "sig-mechanical-power",
-        "sig-power-utilization"
-      ],
-      "chartColors": {
-        "sig-speed": "#2563eb",
-        "sig-smoothed-speed": "#0891b2",
-        "external:reference-signals:Reference%20Speed": "#f97316",
-        "sig-engine-speed": "#7c3aed",
-        "sig-accelerator": "#84cc16",
-        "sig-engine-torque": "#dc2626",
-        "sig-mechanical-power": "#eab308",
-        "sig-brake-pressure": "#ef4444",
-        "sig-wheel-speed-fl": "#0ea5e9",
-        "sig-wheel-speed-fr": "#22c55e",
-        "sig-temp": "#a855f7",
-        "sig-ambient-can": "#f59e0b",
-        "external:reference-signals:Ambient%20Temperature": "#16a34a",
-        "sig-yaw-rate": "#ec4899",
-        "sig-lateral-accel": "#14b8a6",
-        "sig-object-distance": "#3b82f6",
-        "sig-relative-speed": "#f43f5e",
-        "sig-time-to-collision": "#8b5cf6",
-        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte": "#7c3aed",
-        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric": "#0891b2",
-        "sig-batt": "#dc2626",
-        "sig-coolant-temp": "#0891b2",
-        "sig-drive-mode": "#db2777",
-        "sig-odometer": "#65a30d",
-        "sig-corrected-speed": "#ea580c",
-        "sig-corrected-speed-rate": "#0d9488",
-        "sig-speed-grade": "#be123c",
-        "sig-average-accelerator": "#a16207",
-        "sig-power-utilization": "#9333ea",
-        "sig-pedal": "#dc2626",
-        "sig-wheel-speed-difference": "#7c3aed",
-        "sig-brake-level": "#0891b2",
-        "sig-smoothed-brake-pressure": "#db2777",
-        "sig-headlight": "#65a30d",
-        "sig-turn-left": "#4f46e5",
-        "sig-turn-right": "#ea580c",
-        "sig-horn": "#0d9488",
-        "sig-driver-door": "#be123c",
-        "sig-passenger-door": "#334155",
-        "sig-seatbelt": "#a16207",
-        "sig-gear-position": "#15803d",
-        "sig-cabin-temperature": "#9333ea",
-        "sig-position-x": "#2563eb",
-        "sig-position-y": "#dc2626",
-        "sig-position-z": "#16a34a",
-        "sig-heading": "#d97706",
-        "sig-path-radius": "#db2777",
-        "sig-planar-position": "#65a30d",
-        "sig-barometric-pressure": "#ea580c",
-        "sig-module-voltage": "#0d9488",
-        "sig-altitude": "#be123c",
-        "sig-environment-counter": "#334155",
-        "sig-object-angle": "#9333ea",
-        "sig-object-confidence": "#2563eb",
-        "sig-object-valid": "#dc2626",
-        "signal-5f520055-ea04-492c-b4c7-19e9612c0bbf": "#d97706"
-      },
-      "chartMode": "raw",
-      "chartPaneWidth": 336,
-      "chartPaneCollapsed": false,
-      "trajectoryXId": "sig-position-x",
-      "trajectoryYId": "sig-position-y",
-      "trajectoryZId": "sig-position-z",
-      "trajectoryInvert": {
-        "x": false,
-        "y": false,
-        "z": false
-      },
-      "trajectoryEqualAspect": true,
-      "trajectoryTrail": "all",
-      "trajectoryTrailSeconds": 10,
-      "trajectorySpeed": 1,
-      "tableColumnOrder": [
-        "sig-speed",
-        "sig-batt",
-        "sig-engine-speed",
-        "sig-accelerator",
-        "sig-engine-torque",
-        "sig-coolant-temp",
-        "sig-drive-mode",
-        "sig-odometer",
-        "sig-temp",
-        "sig-corrected-speed",
-        "sig-corrected-speed-rate",
-        "sig-speed-grade",
-        "sig-smoothed-speed",
-        "sig-average-accelerator",
-        "sig-mechanical-power",
-        "sig-power-utilization"
-      ],
-      "tablePaneWidth": 250,
-      "tablePaneCollapsed": false,
-      "chartConnectGaps": true,
-      "chartAxisRange": {
-        "mode": "global",
-        "includeZero": false
-      },
-      "trajectoryShowGrid": true,
-      "trajectoryShowPoints": true,
-      "trajectoryView": {
-        "yaw": 0.7853981633974483,
-        "pitch": 0.6154797086703873,
-        "zoom": 1,
-        "panX": 0,
-        "panY": 0
-      },
-      "trajectoryConnectGaps": true
-    },
-    "log-view:f5ff6e0f90096a7f7f51": {
-      "tableSelectedIds": [
-        "sig-speed",
-        "sig-engine-speed",
-        "sig-engine-torque",
-        "sig-mechanical-power",
-        "sig-brake-pressure",
-        "sig-wheel-speed-difference",
-        "sig-headlight",
-        "sig-gear-position",
-        "sig-object-distance",
-        "sig-time-to-collision",
-        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte",
-        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric"
-      ],
-      "tableWidths": {
-        "time": 118,
-        "sig-speed": 130,
-        "sig-engine-speed": 130,
-        "sig-accelerator": 145,
-        "sig-engine-torque": 135,
-        "sig-coolant-temp": 150,
-        "sig-mechanical-power": 140,
-        "sig-brake-pressure": 130,
-        "sig-pedal": 145,
-        "sig-wheel-speed-difference": 180,
-        "sig-headlight": 110,
-        "sig-gear-position": 120,
-        "sig-object-distance": 130,
-        "sig-relative-speed": 130,
-        "sig-time-to-collision": 130,
-        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte": 140,
-        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric": 140
-      },
-      "chartSelectedIds": [
-        "sig-temp",
-        "sig-coolant-temp"
-      ],
-      "chartColors": {
-        "sig-speed": "#2563eb",
-        "sig-smoothed-speed": "#0891b2",
-        "external:reference-signals:Reference%20Speed": "#f97316",
-        "sig-engine-speed": "#7c3aed",
-        "sig-accelerator": "#84cc16",
-        "sig-engine-torque": "#dc2626",
-        "sig-mechanical-power": "#eab308",
-        "sig-brake-pressure": "#ef4444",
-        "sig-wheel-speed-fl": "#0ea5e9",
-        "sig-wheel-speed-fr": "#22c55e",
-        "sig-temp": "#a855f7",
-        "sig-ambient-can": "#f59e0b",
-        "external:reference-signals:Ambient%20Temperature": "#16a34a",
-        "sig-yaw-rate": "#ec4899",
-        "sig-lateral-accel": "#14b8a6",
-        "sig-object-distance": "#3b82f6",
-        "sig-relative-speed": "#f43f5e",
-        "sig-time-to-collision": "#8b5cf6",
-        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte": "#7c3aed",
-        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric": "#0891b2",
-        "sig-batt": "#dc2626",
-        "sig-coolant-temp": "#0891b2",
-        "sig-drive-mode": "#db2777",
-        "sig-odometer": "#65a30d",
-        "sig-corrected-speed": "#ea580c",
-        "sig-corrected-speed-rate": "#0d9488",
-        "sig-speed-grade": "#be123c",
-        "sig-average-accelerator": "#a16207",
-        "sig-power-utilization": "#9333ea",
-        "sig-pedal": "#dc2626",
-        "sig-wheel-speed-difference": "#7c3aed",
-        "sig-brake-level": "#0891b2",
-        "sig-smoothed-brake-pressure": "#db2777",
-        "sig-headlight": "#65a30d",
-        "sig-turn-left": "#4f46e5",
-        "sig-turn-right": "#ea580c",
-        "sig-horn": "#0d9488",
-        "sig-driver-door": "#be123c",
-        "sig-passenger-door": "#334155",
-        "sig-seatbelt": "#a16207",
-        "sig-gear-position": "#15803d",
-        "sig-cabin-temperature": "#9333ea",
-        "sig-position-x": "#2563eb",
-        "sig-position-y": "#dc2626",
-        "sig-position-z": "#16a34a",
-        "sig-heading": "#d97706",
-        "sig-path-radius": "#db2777",
-        "sig-planar-position": "#65a30d",
-        "sig-barometric-pressure": "#ea580c",
-        "sig-module-voltage": "#0d9488",
-        "sig-altitude": "#be123c",
-        "sig-environment-counter": "#334155",
-        "sig-object-angle": "#9333ea",
-        "sig-object-confidence": "#2563eb",
-        "sig-object-valid": "#dc2626"
-      },
-      "chartMode": "raw",
-      "chartPaneWidth": 270,
-      "chartPaneCollapsed": false,
-      "trajectoryXId": "sig-position-x",
-      "trajectoryYId": "sig-position-y",
-      "trajectoryZId": "sig-position-z",
-      "trajectoryInvert": {
-        "x": false,
-        "y": false,
-        "z": false
-      },
-      "trajectoryEqualAspect": true,
-      "trajectoryTrail": "all",
-      "trajectoryTrailSeconds": 10,
-      "trajectorySpeed": 1,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
       "chartConnectGaps": true,
       "chartAxisRange": {
         "mode": "visible",
         "includeZero": false
-      }
-    },
-    "log-view:5f4b9b6c5614581a6da7": {
-      "tableSelectedIds": [
-        "sig-speed",
-        "sig-engine-speed",
-        "sig-engine-torque",
-        "sig-mechanical-power",
-        "sig-brake-pressure",
-        "sig-wheel-speed-difference",
-        "sig-headlight",
-        "sig-gear-position",
-        "sig-object-distance",
-        "sig-time-to-collision",
-        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte",
-        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric",
-        "sig-batt",
-        "sig-accelerator",
-        "sig-coolant-temp",
-        "sig-drive-mode",
-        "sig-odometer",
-        "sig-temp",
-        "sig-corrected-speed",
-        "sig-corrected-speed-rate",
-        "sig-speed-grade",
-        "sig-smoothed-speed",
-        "sig-average-accelerator",
-        "sig-power-utilization"
-      ],
-      "tableWidths": {
-        "time": 118,
-        "sig-speed": 130,
-        "sig-engine-speed": 130,
-        "sig-accelerator": 145,
-        "sig-engine-torque": 135,
-        "sig-coolant-temp": 150,
-        "sig-mechanical-power": 140,
-        "sig-brake-pressure": 130,
-        "sig-pedal": 145,
-        "sig-wheel-speed-difference": 180,
-        "sig-headlight": 110,
-        "sig-gear-position": 120,
-        "sig-object-distance": 130,
-        "sig-relative-speed": 130,
-        "sig-time-to-collision": 130,
-        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte": 140,
-        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric": 140,
-        "sig-batt": 144,
-        "sig-drive-mode": 98,
-        "sig-odometer": 121,
-        "sig-temp": 173,
-        "sig-corrected-speed": 224,
-        "sig-corrected-speed-rate": 190,
-        "sig-speed-grade": 106,
-        "sig-smoothed-speed": 207,
-        "sig-average-accelerator": 228,
-        "sig-power-utilization": 155
       },
-      "chartSelectedIds": [
-        "sig-speed",
-        "sig-batt",
-        "sig-engine-speed",
-        "sig-accelerator",
-        "sig-engine-torque",
-        "sig-coolant-temp",
-        "sig-drive-mode",
-        "sig-odometer",
-        "sig-temp",
-        "sig-corrected-speed",
-        "sig-corrected-speed-rate",
-        "sig-speed-grade",
-        "sig-smoothed-speed",
-        "sig-average-accelerator",
-        "sig-mechanical-power",
-        "sig-power-utilization"
+      "chartGroupLayout": [
+        [
+          "family:speed",
+          "family:rotational-speed"
+        ],
+        [
+          "family:torque",
+          "family:pressure"
+        ],
+        [
+          "family:temperature"
+        ],
+        [
+          "family:angular-speed",
+          "family:acceleration"
+        ],
+        [
+          "family:length",
+          "family:time"
+        ]
       ],
-      "chartColors": {
-        "sig-speed": "#2563eb",
-        "sig-smoothed-speed": "#0891b2",
-        "external:reference-signals:Reference%20Speed": "#f97316",
-        "sig-engine-speed": "#7c3aed",
-        "sig-accelerator": "#84cc16",
-        "sig-engine-torque": "#dc2626",
-        "sig-mechanical-power": "#eab308",
-        "sig-brake-pressure": "#ef4444",
-        "sig-wheel-speed-fl": "#0ea5e9",
-        "sig-wheel-speed-fr": "#22c55e",
-        "sig-temp": "#a855f7",
-        "sig-ambient-can": "#f59e0b",
-        "external:reference-signals:Ambient%20Temperature": "#16a34a",
-        "sig-yaw-rate": "#ec4899",
-        "sig-lateral-accel": "#14b8a6",
-        "sig-object-distance": "#3b82f6",
-        "sig-relative-speed": "#f43f5e",
-        "sig-time-to-collision": "#8b5cf6",
-        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte": "#7c3aed",
-        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric": "#0891b2",
-        "sig-batt": "#dc2626",
-        "sig-coolant-temp": "#0891b2",
-        "sig-drive-mode": "#db2777",
-        "sig-odometer": "#65a30d",
-        "sig-corrected-speed": "#ea580c",
-        "sig-corrected-speed-rate": "#0d9488",
-        "sig-speed-grade": "#be123c",
-        "sig-average-accelerator": "#a16207",
-        "sig-power-utilization": "#9333ea",
-        "sig-pedal": "#dc2626",
-        "sig-wheel-speed-difference": "#7c3aed",
-        "sig-brake-level": "#0891b2",
-        "sig-smoothed-brake-pressure": "#db2777",
-        "sig-headlight": "#65a30d",
-        "sig-turn-left": "#4f46e5",
-        "sig-turn-right": "#ea580c",
-        "sig-horn": "#0d9488",
-        "sig-driver-door": "#be123c",
-        "sig-passenger-door": "#334155",
-        "sig-seatbelt": "#a16207",
-        "sig-gear-position": "#15803d",
-        "sig-cabin-temperature": "#9333ea",
-        "sig-position-x": "#2563eb",
-        "sig-position-y": "#dc2626",
-        "sig-position-z": "#16a34a",
-        "sig-heading": "#d97706",
-        "sig-path-radius": "#db2777",
-        "sig-planar-position": "#65a30d",
-        "sig-barometric-pressure": "#ea580c",
-        "sig-module-voltage": "#0d9488",
-        "sig-altitude": "#be123c",
-        "sig-environment-counter": "#334155",
-        "sig-object-angle": "#9333ea",
-        "sig-object-confidence": "#2563eb",
-        "sig-object-valid": "#dc2626"
-      },
-      "chartMode": "raw",
-      "chartPaneWidth": 270,
-      "chartPaneCollapsed": false,
       "trajectoryXId": "sig-position-x",
       "trajectoryYId": "sig-position-y",
       "trajectoryZId": "sig-position-z",
@@ -1517,51 +1249,9 @@
       "trajectoryTrail": "all",
       "trajectoryTrailSeconds": 10,
       "trajectorySpeed": 1,
-      "chartConnectGaps": true,
-      "chartAxisRanges": {
-        "family:length": {
-          "mode": "manual",
-          "includeZero": false
-        },
-        "unit:raw": {
-          "mode": "manual"
-        },
-        "family:acceleration": {
-          "mode": "visible",
-          "includeZero": false
-        },
-        "family:angular-speed": {
-          "mode": "visible",
-          "includeZero": false
-        },
-        "family:rotational-speed": {
-          "mode": "visible",
-          "includeZero": false
-        },
-        "family:speed": {
-          "mode": "visible",
-          "includeZero": false
-        },
-        "family:voltage": {
-          "mode": "visible",
-          "includeZero": false
-        }
-      },
-      "chartAxisRange": {
-        "mode": "visible",
-        "includeZero": false
-      },
       "trajectoryConnectGaps": true,
       "trajectoryShowGrid": true,
-      "trajectoryShowPoints": true,
-      "trajectoryView": {
-        "yaw": 3.141592653589793,
-        "pitch": 1.5707963267948966,
-        "zoom": 1,
-        "panX": 0,
-        "panY": 0,
-        "mirrorHorizontal": true
-      }
+      "trajectoryShowPoints": true
     }
   }
 }

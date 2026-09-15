@@ -24,6 +24,8 @@ export interface ManualSignalDefinition {
   readonly signedness: SignalSignedness;
   readonly byteOrder: ByteOrder;
   readonly conversion: ManualConversion;
+  /** Decimal RAW integer keys (before Scale/Offset), preserved losslessly. */
+  readonly valueLabels?: Readonly<Record<string, string>>;
   readonly minimum?: number;
   readonly maximum?: number;
   readonly multiplexing?: { readonly type: 'multiplexer' } | { readonly type: 'conditional'; readonly ranges: readonly MultiplexerRange[] };
@@ -68,6 +70,7 @@ export function signalDefinitionFor(frame: ManualFrameDefinition, signal: Manual
     id: signal.id,
     name: signal.name,
     unit: signal.unit || undefined,
+    ...('valueLabels' in signal && Object.keys(signal.valueLabels ?? {}).length ? { hasValueLabels: true } : {}),
     source: { type: 'manual-can', frameDefinitionId: frame.id },
     frameRef: { canId: frame.canId, extended: frame.extended },
   };
@@ -188,6 +191,17 @@ export function validateFrameDefinition(frame: ManualFrameDefinition): Validatio
   const multiplexerMaximum = multiplexers.length === 1 && multiplexers[0].lengthBits <= 32 ? 2 ** multiplexers[0].lengthBits - 1 : undefined;
   for (const signal of frame.signals) {
     const detail = { signalId: signal.id };
+    const labelKeys = new Set<string>();
+    for (const [key, label] of Object.entries(signal.valueLabels ?? {})) {
+      if (!/^-?(?:0|[1-9]\d*)$/.test(key) || key === '-0' || typeof label !== 'string') { add('SIGNAL_VALUE_LABEL_INVALID', `${signal.name}: value labels require decimal RAW integers and text labels.`, detail); continue; }
+      const raw = BigInt(key); const canonical = raw.toString();
+      if (labelKeys.has(canonical)) add('SIGNAL_VALUE_LABEL_DUPLICATE', `${signal.name}: duplicate RAW value ${key}.`, detail);
+      labelKeys.add(canonical);
+      if (Number.isInteger(signal.lengthBits) && signal.lengthBits >= 1 && signal.lengthBits <= 64) {
+        const signed = signal.signedness === 'signed'; const magnitude = 1n << BigInt(signal.lengthBits - (signed ? 1 : 0));
+        if (raw < (signed ? -magnitude : 0n) || raw >= magnitude) add('SIGNAL_VALUE_LABEL_RANGE', `${signal.name}: RAW value ${key} is outside the Signal bit range.`, detail);
+      }
+    }
     if (!signal.id.trim()) add('SIGNAL_ID_REQUIRED', 'Signal ID is required.', detail);
     else if (ids.has(signal.id)) add('SIGNAL_ID_DUPLICATE', `Signal ID “${signal.id}” is duplicated.`, detail);
     ids.add(signal.id);
@@ -212,7 +226,7 @@ export function validateFrameDefinition(frame: ManualFrameDefinition): Validatio
       }
       previousSignals.push(signal); bits.set(bit, previousSignals);
     }
-    if (!Number.isFinite(signal.conversion.lsb) || signal.conversion.lsb <= 0) add('SIGNAL_LSB_INVALID', `${signal.name || signal.id}: Scale must be a positive finite number.`, detail);
+    if (!Number.isFinite(signal.conversion.lsb) || signal.conversion.lsb === 0) add('SIGNAL_LSB_INVALID', `${signal.name || signal.id}: Scale must be a non-zero finite number.`, detail);
     const parsed = parseResolution(signal.conversion.lsbText);
     if (!parsed.valid) add('SIGNAL_LSB_TEXT_INVALID', `${signal.name || signal.id}: ${parsed.error}`, detail);
     else if (Math.abs(parsed.resolution.value - signal.conversion.lsb) > Math.max(1e-15, Math.abs(signal.conversion.lsb) * 1e-12)) add('SIGNAL_LSB_MISMATCH', `${signal.name || signal.id}: stored Scale value does not match its display text.`, detail);

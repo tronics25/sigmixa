@@ -152,7 +152,7 @@ export class RawLogDocument implements vscode.CustomDocument {
   }
 
   signalCatalog(): readonly SignalDefinition[] { return this.signalStore.catalog(); }
-  signalTablePage(selectedIds: readonly string[], offset: number, limit: number) { return this.signalStore.tablePage(selectedIds, offset, limit, this.scope); }
+  signalTablePage(selectedIds: readonly string[], offset: number, limit: number) { return this.signalStore.tableDisplayPage(selectedIds, offset, limit, this.scope); }
   signalTableSample(selectedIds: readonly string[], limit = 300) { return this.signalStore.tableSample(selectedIds, limit, this.scope); }
   signalSeries(selectedIds: readonly string[], range: { start: number; end: number } | undefined, maxPoints = 4000) {
     const boundedMaxPoints = Math.max(2, Math.min(10_000, Math.floor(maxPoints)));
@@ -162,6 +162,12 @@ export class RawLogDocument implements vscode.CustomDocument {
     return { range: fullRange, series: this.signalStore.seriesSlice(selectedIds, requestedRange, boundedMaxPoints) };
   }
   nearestSignals(selectedIds: readonly string[], timestamp: number, range = this.scope) { return this.signalStore.nearest(selectedIds, timestamp, range); }
+
+  measuredSignals(selectedIds: readonly string[], timestamp: number, range?: { readonly start: number; readonly end: number }) {
+    const bounded = this.scope && range ? { start: Math.max(this.scope.start, range.start), end: Math.min(this.scope.end, range.end) } : this.scope ?? range;
+    if (bounded && (bounded.end < bounded.start || timestamp < bounded.start || timestamp > bounded.end)) return [];
+    return this.signalStore.measured(selectedIds, timestamp, bounded);
+  }
   adjacentFrameTimestamp(timestamp: number, direction: -1 | 1): number | undefined { return this.store.adjacentTimestamp(timestamp, direction, this.scope); }
   nearestFrameTimestamp(timestamp: number): number | undefined { return this.store.nearestTimestamp(timestamp, this.scope); }
 
@@ -300,7 +306,11 @@ export class RawLogDocument implements vscode.CustomDocument {
     const filterIds = (definition?.derivedSignals ?? []).filter((signal) => signal.operation.type === 'filter').map((signal) => signal.id);
     const filteredAtFrame = new Map(this.signalStore.nearest(filterIds, frame.timestamp).filter((item) => item.sample.timestamp === frame.timestamp).map((item) => [item.definition.id, item.sample]));
     const plugin = this.pluginDisplay.get(frame.id);
-    return { definition, tags: [...result.decoded.map((item) => formatDecodedSignal(filteredAtFrame.has(item.definition.id) ? { ...item, sample: filteredAtFrame.get(item.definition.id)! } : item)), ...(plugin?.tags ?? [])], diagnostics: [...result.diagnostics, ...(plugin?.diagnostics ?? [])] };
+    const decodedSignals = result.decoded.map((item) => ({
+      tag: formatDecodedSignal(filteredAtFrame.has(item.definition.id) ? { ...item, sample: filteredAtFrame.get(item.definition.id)! } : item),
+      ...('byteOffset' in item.signal ? { raw: item.raw?.toString(), byteOffset: item.signal.byteOffset, bitOffset: item.signal.bitOffset, lengthBits: item.signal.lengthBits, byteOrder: item.signal.byteOrder } : {}),
+    }));
+    return { definition, decodedSignals, tags: [...decodedSignals.map((item) => item.tag), ...(plugin?.tags ?? [])], diagnostics: [...result.diagnostics, ...(plugin?.diagnostics ?? [])] };
   }
 
   private publishDiagnostics(diagnostics: readonly Diagnostic[]): void {
@@ -344,6 +354,7 @@ export class RawLogDocument implements vscode.CustomDocument {
       length: frame.dataLength,
       rawContent: raw,
       decodedContent: display.tags.join('  ·  '),
+      decodedSignals: display.decodedSignals,
       diagnostics: display.diagnostics.map((item) => ({ code: item.code, message: item.message })),
     };
   }

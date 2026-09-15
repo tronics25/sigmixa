@@ -60,7 +60,7 @@ test('bundled BLF showcase mirrors every supported ASC frame', async () => {
     canId: frame.canId, extended: frame.extended, dlcCode: frame.dlcCode,
     dataLength: frame.dataLength, data: [...frame.data],
   });
-  assert.equal(result.framesParsed, 3038); assert.equal(frames.length, result.framesParsed);
+  assert.equal(result.framesParsed, 3159); assert.equal(frames.length, result.framesParsed);
   assert.deepEqual(frames.map(comparable), supportedAscFrames.map(comparable));
   assert.deepEqual(diagnostics, []);
 });

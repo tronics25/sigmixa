@@ -11,6 +11,7 @@ import type { SignalGroupDto } from '../editors/rawLogProtocol';
 import { resolveClipPath } from './clipPaths';
 import { clipComparisonHtml } from './clipComparisonHtml';
 import type { ClipComparisonToExtension, ClipComparisonToWebview, ComparisonClipDto } from './clipComparisonProtocol';
+import { saveRenderedImage } from '../imageExport';
 
 export class ClipComparisonEditor implements vscode.Disposable {
   private panels = new Set<vscode.WebviewPanel>();
@@ -53,6 +54,11 @@ export class ClipComparisonEditor implements vscode.Disposable {
     };
     panel.webview.onDidReceiveMessage((message: ClipComparisonToExtension) => {
       if (message.type === 'ready') void load();
+      else if (message.type === 'measuredSignalsRequest') {
+        const clip = available.find((item) => item.id === message.clipId);
+        const samples = clip ? documentsByClip.get(clip.id)?.measuredSignals(message.signalIds, message.timestamp, { start: clip.startTimestamp, end: clip.endTimestamp }) ?? [] : [];
+        void panel.webview.postMessage({ type: 'measuredSignals', requestId: message.requestId, samples } satisfies ClipComparisonToWebview);
+      }
       else if (message.type === 'selectSignals' && payload) {
         const valid = new Set(payload.definitions.map((item) => item.id)); const selectedSignalIds = [...new Set(message.signalIds)].filter((id) => valid.has(id));
         const loadedClips = available.filter((clip) => documentsByClip.has(clip.id)); const seriesByClip = buildSeries(loadedClips, documentsByClip, selectedSignalIds);
@@ -66,31 +72,23 @@ export class ClipComparisonEditor implements vscode.Disposable {
       }
       else if (message.type === 'shiftAnchor') {
         const document = documentsByClip.get(message.clipId); const current = anchors.get(message.clipId); if (!document || current === undefined) return;
-        const next = document.adjacentFrameTimestamp(current, message.direction); if (next === undefined) return; anchors.set(message.clipId, next);
+        let next = current; const steps = Math.max(1, Math.min(100, Math.floor(message.steps ?? 1)));
+        for (let step = 0; step < steps; step++) { const adjacent = document.adjacentFrameTimestamp(next, message.direction); if (adjacent === undefined) break; next = adjacent; }
+        if (next === current) return; anchors.set(message.clipId, next);
+        void panel.webview.postMessage({ type: 'anchorChanged', clipId: message.clipId, anchorTimestamp: next } satisfies ClipComparisonToWebview);
+      }
+      else if (message.type === 'setAnchor') {
+        const document = documentsByClip.get(message.clipId); if (!document || !Number.isFinite(message.timestamp)) return;
+        const next = document.nearestFrameTimestamp(message.timestamp); if (next === undefined) return; anchors.set(message.clipId, next);
         void panel.webview.postMessage({ type: 'anchorChanged', clipId: message.clipId, anchorTimestamp: next } satisfies ClipComparisonToWebview);
       }
       else if (message.type === 'saveClipComparisonImage') {
-        void saveComparisonImage(message.dataUrl, root ? path.join(root, 'sigmixa-clip-comparison.png') : undefined);
+        void saveRenderedImage({ title: 'Save Clip Comparison Image', japaneseTitle: 'クリップ比較画像を保存', defaultBasePath: root ? path.join(root, 'sigmixa-clip-comparison') : undefined, image: message });
       }
     });
     panel.onDidDispose(() => { disposed = true; this.panels.delete(panel); for (const document of documentsByPath.values()) document.dispose(); });
   }
   dispose(): void { for (const panel of this.panels) panel.dispose(); this.panels.clear(); }
-}
-
-async function saveComparisonImage(dataUrl: string, defaultPath?: string): Promise<void> {
-  const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
-  if (!match) { void vscode.window.showErrorMessage('The comparison image could not be created.'); return; }
-  const data = Buffer.from(match[1], 'base64');
-  if (!data.length || data.length > 30 * 1024 * 1024) { void vscode.window.showErrorMessage('The comparison image is empty or too large.'); return; }
-  const uri = await vscode.window.showSaveDialog({
-    defaultUri: defaultPath ? vscode.Uri.file(defaultPath) : undefined,
-    filters: { PNG: ['png'] },
-    saveLabel: 'Save Comparison Image',
-  });
-  if (!uri) return;
-  await vscode.workspace.fs.writeFile(uri, data);
-  void vscode.window.showInformationMessage(`Saved ${path.basename(uri.fsPath)}`);
 }
 
 function buildSeries(clips: readonly ClipDefinition[], documents: ReadonlyMap<string, RawLogDocument>, signalIds: readonly string[]) {

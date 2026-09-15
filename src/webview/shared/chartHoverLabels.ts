@@ -68,21 +68,32 @@ export function layoutHoverLabelBoxes<T extends HoverLabelBoxInput>(
   return result;
 }
 
-/** Centers a compact Timestamp badge on the cursor and stacks it upward when another badge occupies the same space. */
-export function layoutTimestampMarker(cursorX: number, width: number, height: number, left: number, right: number, bottom: number, occupied: readonly HoverLabelRect[] = [], top = 0): HoverLabelRect {
+/** Keep Timestamp badges in the existing time-axis gutter, never over plotted data. */
+export function layoutTimestampMarker(cursorX: number, width: number, height: number, left: number, right: number, bottom: number, occupied: readonly HoverLabelRect[] = [], _top = 0): HoverLabelRect {
   const availableWidth = Math.max(1, right - left - 4); const markerWidth = Math.min(width, availableWidth);
   const base = {
     x: Math.max(left + 2, Math.min(right - markerWidth - 2, cursorX - markerWidth / 2)),
-    y: bottom - height - 2,
+    y: bottom + 5,
     width: markerWidth,
     height,
   };
-  const step = height + 3; const rows = Math.max(0, Math.floor((base.y - top) / step));
-  for (let row = 0; row <= rows; row++) {
-    const candidate = { ...base, y: base.y - row * step };
+  for (let row = 0; row <= occupied.length; row++) {
+    const candidate = { ...base, y: base.y + row * (height + 3) };
     if (occupied.every((rect) => !rectsOverlap(candidate, rect))) return candidate;
   }
   return base;
+}
+
+export function timestampGutter(context: CanvasRenderingContext2D, labels: readonly { x: number; text: string }[], left: number, right: number): number {
+  const occupied: HoverLabelRect[] = [];
+  for (const label of labels) occupied.push(layoutTimestampMarker(label.x, context.measureText(label.text).width + 12, 18, left, right, 0, occupied));
+  return Math.max(0, ...occupied.map((rect) => rect.y + rect.height + 5 - 28));
+}
+
+export function paintTimestampConnector(context: CanvasRenderingContext2D, cursorX: number, bottom: number, rect: HoverLabelRect): void {
+  context.save(); context.lineWidth = 1; context.beginPath(); context.moveTo(cursorX, bottom);
+  context.lineTo(cursorX, rect.y - 2); context.lineTo(Math.max(rect.x, Math.min(rect.x + rect.width, cursorX)), rect.y);
+  context.stroke(); context.restore();
 }
 
 function verticalCandidates(preferred: number, top: number, bottom: number, gap: number): readonly number[] {

@@ -1,8 +1,11 @@
 import type { FrameFilter } from '../../core/frame/frameStore';
 import type { Diagnostic } from '../../core/diagnostics/diagnostic';
 import type { SignalDefinition, SignalEvent, SignalSample } from '../../core/signal/signal';
+import type { SignalCellChange } from '../../core/signal/tableChanges';
 
 export interface LogViewState {
+  readonly chartSignalGrouping?: 'frame' | 'unit';
+  readonly tableSignalGrouping?: 'frame' | 'unit';
   readonly tableSelectedIds?: readonly string[];
   readonly tableColumnOrder?: readonly string[];
   readonly tableWidths?: Readonly<Record<string, number>>;
@@ -50,6 +53,8 @@ export interface SignalTableRowDto {
   readonly id: string;
   readonly timestamp: number;
   readonly values: Readonly<Record<string, number>>;
+  readonly valueLabels?: Readonly<Record<string, string>>;
+  readonly changes?: Readonly<Record<string, SignalCellChange>>;
 }
 
 export interface SignalSeriesDto {
@@ -61,6 +66,8 @@ export interface SignalSeriesDto {
   readonly globalMaximum?: number;
   readonly gaps: readonly { readonly startTimestamp: number; readonly endTimestamp: number }[];
 }
+
+export interface MeasuredSignalDto { readonly signalId: string; readonly sample: SignalSample; }
 
 export interface ExternalCsvPreviewDto {
   readonly importId: string;
@@ -81,6 +88,7 @@ export interface RawRowDto {
   readonly length: number;
   readonly rawContent: string;
   readonly decodedContent: string;
+  readonly decodedSignals?: readonly { readonly tag: string; readonly raw?: string; readonly byteOffset?: number; readonly bitOffset?: number; readonly lengthBits?: number; readonly byteOrder?: 'little' | 'big' }[];
   readonly canIdValue: number;
   readonly extended: boolean;
   readonly definitionId?: string;
@@ -101,20 +109,22 @@ export type ToExtensionMessage =
   | { readonly type: 'signalTableSampleRequest'; readonly requestId: number; readonly selectedIds: readonly string[] }
   | { readonly type: 'signalTableRowsRequest'; readonly action: 'copy' | 'open'; readonly ranges: readonly { readonly start: number; readonly end: number }[]; readonly selectedIds: readonly string[] }
   | { readonly type: 'signalSeriesRequest'; readonly requestId: number; readonly selectedIds: readonly string[]; readonly range?: { readonly start: number; readonly end: number }; readonly maxPoints: number }
+  | { readonly type: 'measuredSignalsRequest'; readonly requestId: number; readonly selectedIds: readonly string[]; readonly timestamp: number }
   | { readonly type: 'cancelAnalysis' }
   | { readonly type: 'importExternalCsv' }
   | { readonly type: 'commitExternalCsv'; readonly importId: string; readonly timestampColumn: string; readonly timestampUnit: 'seconds' | 'milliseconds' | 'microseconds'; readonly valueColumns: readonly { readonly column: string; readonly name: string; readonly unit?: string }[] }
   | { readonly type: 'cancelExternalCsvImport'; readonly importId: string }
   | { readonly type: 'removeExternalCsvSignal'; readonly sourceId: string; readonly column: string }
   | { readonly type: 'exportSignalCsv'; readonly selectedIds: readonly string[] }
-  | { readonly type: 'saveTimeSeriesImage'; readonly dataUrl: string }
-  | { readonly type: 'saveTrajectoryImage'; readonly dataUrl: string }
+  | { readonly type: 'saveTimeSeriesImage'; readonly pngDataUrl: string; readonly svg: string }
+  | { readonly type: 'saveTrajectoryImage'; readonly pngDataUrl: string; readonly svg: string }
   | { readonly type: 'snapTimeRangeRequest'; readonly requestId: number; readonly startTimestamp: number; readonly endTimestamp: number }
   | { readonly type: 'adjustTimeRangeRequest'; readonly requestId: number; readonly edge: 'start' | 'end'; readonly direction: -1 | 1; readonly startTimestamp: number; readonly endTimestamp: number }
   | { readonly type: 'createClip'; readonly startTimestamp: number; readonly endTimestamp: number; readonly signalIds: readonly string[] }
   | { readonly type: 'saveLogViewState'; readonly state: LogViewState };
 
 export type ToWebviewMessage =
+  | { readonly type: 'measuredSignals'; readonly requestId: number; readonly samples: readonly MeasuredSignalDto[] }
   | { readonly type: 'init'; readonly fileName: string; readonly parsing: boolean; readonly frames: number; readonly diagnostics: number; readonly channels: readonly number[]; readonly viewState?: LogViewState; readonly clip?: { readonly name: string; readonly startTimestamp: number; readonly endTimestamp: number } }
   | { readonly type: 'page'; readonly requestId: number; readonly offset: number; readonly total: number; readonly generation: number; readonly rows: readonly RawRowDto[] }
   | { readonly type: 'progress'; readonly frames: number; readonly bytesRead: number; readonly totalBytes: number; readonly channels: readonly number[] }

@@ -12,6 +12,7 @@ import { readExternalCsvHeader } from '../external/externalCsvLoader';
 import { removeExternalCsvSignal, updateClipSignals, type ExternalCsvValueColumn } from '../../core/project/schema';
 import { formatCanId } from '../../core/frame/canId';
 import { clipIdFromUri, portableClipPath } from '../clips/clipPaths';
+import { saveRenderedImage, type RenderedImage } from '../imageExport';
 
 export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider<RawLogDocument> {
   private readonly pendingExternalCsv = new Map<string, { readonly uri: vscode.Uri; readonly headers: readonly string[] }>();
@@ -111,13 +112,15 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         const page = document.signalTablePage(message.selectedIds, message.offset, message.limit);
         void send({
           type: 'signalTablePage', requestId: message.requestId, offset: page.offset, total: page.total, generation: page.generation,
-          rows: page.rows.map((row) => ({ id: row.id, timestamp: row.timestamp, values: Object.fromEntries(Array.from(row.values, ([id, sample]) => [id, sample.value])) })),
+          rows: page.rows.map((row) => ({ id: row.id, timestamp: row.timestamp, values: Object.fromEntries(Array.from(row.values, ([id, sample]) => [id, sample.value])), valueLabels: Object.fromEntries(Array.from(row.values).flatMap(([id, sample]) => sample.valueLabel ? [[id, sample.valueLabel]] : [])), changes: row.changes })),
         });
       } else if (message.type === 'signalTableSampleRequest') {
         const rows = document.signalTableSample(message.selectedIds);
-        void send({ type: 'signalTableSample', requestId: message.requestId, rows: rows.map((row) => ({ id: row.id, timestamp: row.timestamp, values: Object.fromEntries(Array.from(row.values, ([id, sample]) => [id, sample.value])) })) });
+        void send({ type: 'signalTableSample', requestId: message.requestId, rows: rows.map((row) => ({ id: row.id, timestamp: row.timestamp, values: Object.fromEntries(Array.from(row.values, ([id, sample]) => [id, sample.value])), valueLabels: Object.fromEntries(Array.from(row.values).flatMap(([id, sample]) => sample.valueLabel ? [[id, sample.valueLabel]] : [])) })) });
       } else if (message.type === 'signalTableRowsRequest') {
         void this.transferSignalTableRows(document, message, send);
+      } else if (message.type === 'measuredSignalsRequest') {
+        void send({ type: 'measuredSignals', requestId: message.requestId, samples: document.measuredSignals(message.selectedIds, message.timestamp) });
       } else if (message.type === 'signalSeriesRequest') {
         const result = document.signalSeries(message.selectedIds, message.range, message.maxPoints);
         void send({ type: 'signalSeries', requestId: message.requestId, fullRange: result.range, series: result.series.map((series) => ({ ...series, events: series.events ?? [] })) });
@@ -134,9 +137,9 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       } else if (message.type === 'exportSignalCsv') {
         void this.exportSignals(document, message.selectedIds);
       } else if (message.type === 'saveTimeSeriesImage') {
-        void this.saveTimeSeriesImage(document, message.dataUrl);
+        void this.saveTimeSeriesImage(document, message);
       } else if (message.type === 'saveTrajectoryImage') {
-        void this.saveTrajectoryImage(document, message.dataUrl);
+        void this.saveTrajectoryImage(document, message);
       } else if (message.type === 'snapTimeRangeRequest') {
         const startTimestamp = document.nearestFrameTimestamp(message.startTimestamp) ?? message.startTimestamp; const endTimestamp = document.nearestFrameTimestamp(message.endTimestamp) ?? message.endTimestamp;
         void send({ type: 'timeRangeAdjusted', requestId: message.requestId, startTimestamp: Math.min(startTimestamp, endTimestamp), endTimestamp: Math.max(startTimestamp, endTimestamp) });
@@ -201,20 +204,12 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     catch (error) { void vscode.window.showErrorMessage(`Signal CSV export failed: ${(error as Error).message}`); }
   }
 
-  private async saveTimeSeriesImage(document: RawLogDocument, dataUrl: string): Promise<void> {
-    const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl); if (!match) { void vscode.window.showErrorMessage('Could not save the Time Series image because the generated PNG was invalid.'); return; }
-    const bytes = Buffer.from(match[1], 'base64'); if (!bytes.length || bytes.length > 25_000_000) { void vscode.window.showErrorMessage('The generated Time Series image is empty or too large.'); return; }
-    const base = document.fileName.replace(/\.(?:asc|blf)$/i, ''); const target = await vscode.window.showSaveDialog({ title: 'Save Time Series Image', filters: { PNG: ['png'] }, defaultUri: vscode.Uri.file(path.join(path.dirname(document.uri.fsPath), `${base}-time-series.png`)) }); if (!target) return;
-    try { await vscode.workspace.fs.writeFile(target, bytes); void vscode.window.showInformationMessage(`Time Series image saved: ${target.fsPath || target.toString()}`); }
-    catch (error) { void vscode.window.showErrorMessage(`Could not save the Time Series image: ${(error as Error).message}`); }
+  private async saveTimeSeriesImage(document: RawLogDocument, image: RenderedImage): Promise<void> {
+    const base = document.fileName.replace(/\.(?:asc|blf)$/i, ''); await saveRenderedImage({ title: 'Save Time Series Image', japaneseTitle: '時系列画像を保存', defaultBasePath: path.join(path.dirname(document.uri.fsPath), `${base}-time-series`), image });
   }
 
-  private async saveTrajectoryImage(document: RawLogDocument, dataUrl: string): Promise<void> {
-    const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl); if (!match) { void vscode.window.showErrorMessage('Could not save the Trajectory image because the generated PNG was invalid.'); return; }
-    const bytes = Buffer.from(match[1], 'base64'); if (!bytes.length || bytes.length > 25_000_000) { void vscode.window.showErrorMessage('The generated Trajectory image is empty or too large.'); return; }
-    const base = document.fileName.replace(/\.(?:asc|blf)$/i, ''); const target = await vscode.window.showSaveDialog({ title: 'Save Trajectory Image', filters: { PNG: ['png'] }, defaultUri: vscode.Uri.file(path.join(path.dirname(document.uri.fsPath), `${base}-trajectory.png`)) }); if (!target) return;
-    try { await vscode.workspace.fs.writeFile(target, bytes); void vscode.window.showInformationMessage(`Trajectory image saved: ${target.fsPath || target.toString()}`); }
-    catch (error) { void vscode.window.showErrorMessage(`Could not save the Trajectory image: ${(error as Error).message}`); }
+  private async saveTrajectoryImage(document: RawLogDocument, image: RenderedImage): Promise<void> {
+    const base = document.fileName.replace(/\.(?:asc|blf)$/i, ''); await saveRenderedImage({ title: 'Save Trajectory Image', japaneseTitle: '軌跡画像を保存', defaultBasePath: path.join(path.dirname(document.uri.fsPath), `${base}-trajectory`), image });
   }
 
   private async selectExternalCsv(send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {
