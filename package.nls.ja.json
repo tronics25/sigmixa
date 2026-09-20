@@ -1,5 +1,5 @@
 {
-  "sigmixa.description": "CANログをSignal中心に解析・可視化するVisual Studio Code拡張機能",
+  "sigmixa.description": "VS Codeで使える無料・オープンソースのCAN/CAN FDログ解析ツール。DBCを使ったASC/BLFのデコード、Signalのグラフ化、クリップ比較、2D/3D軌跡再生に対応。オフラインでログを解析できる、CANalyzerに代わる選択肢です。",
   "sigmixa.views.logFiles": "ログファイル",
   "sigmixa.views.clips": "クリップ",
   "sigmixa.views.frames": "CANフレーム",

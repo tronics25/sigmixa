@@ -1,13 +1,21 @@
 # SigMixa for VS Code
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="media/sigmixa-logo-dark.png">
-  <img src="media/sigmixa-logo.png" alt="SigMixa" width="620">
-</picture>
+<img src="media/sigmixa-logo.png" alt="SigMixa" width="620">
 
-SigMixa turns CAN logs into Signals, tables and interactive charts directly in VS Code. Inspect ASC or BLF captures, define decoding rules, replay motion and compare selected intervals across recordings.
+[![Version](https://img.shields.io/visual-studio-marketplace/v/tronics25.sigmixa)](https://marketplace.visualstudio.com/items?itemName=tronics25.sigmixa)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/tronics25.sigmixa)](https://marketplace.visualstudio.com/items?itemName=tronics25.sigmixa)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/tronics25.sigmixa)](https://marketplace.visualstudio.com/items?itemName=tronics25.sigmixa)
+[![License: MIT](https://img.shields.io/github/license/tronics25/sigmixa)](LICENSE)
 
-All log processing and visualization run locally in the VS Code Extension Host and Webview. SigMixa does not upload captures.
+**Open-source CAN / CAN FD log analyzer that runs locally inside VS Code.**
+
+Decode ASC or BLF captures with DBC, plot Signals, compare intervals across recordings and replay 2D/3D trajectories. SigMixa's built-in analysis runs offline and does not upload your captures.
+
+[![SigMixa in VS Code: add Signals and inspect their bits, pin chart values, create and compare Clips, and rotate a playing 3D Trajectory](media/demo.gif)](media/demo.mp4)
+
+[Watch the video](media/demo.mp4)
+
+A free, open-source alternative for offline CAN log analysis.
 
 ## Features
 

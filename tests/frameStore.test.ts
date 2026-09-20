@@ -90,3 +90,12 @@ test('adjacent Timestamp cache stays correct after unsorted appends', () => {
   store.append([{ ...frame(2), timestamp: 2 }]);
   assert.equal(store.adjacentTimestamp(1, 1), 2);
 });
+
+test('CAN-reference index pages sparse matches in original order', () => {
+  const store = new ChunkedFrameStore(3);
+  store.append(Array.from({ length: 50 }, (_, index) => ({ ...frame(index, index % 10), extended: index % 7 === 0 })));
+  const refs = [{ canId: 3, extended: false }, { canId: 0, extended: true }];
+  const expected = store.query({ offset: 0, limit: 2000, filter: { canIdRefs: refs } }).rows;
+  assert.equal(store.countByCanRefs(refs), expected.length);
+  assert.deepEqual(store.queryByCanRefs(refs, 1, 3).map((item) => item.id), expected.slice(1, 4).map((item) => item.id));
+});

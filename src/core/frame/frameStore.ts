@@ -42,6 +42,25 @@ export interface FrameStore {
   clear(): void;
 }
 
+/** A compact append-only ordinal list. Unlike number[], entries stay at four bytes each. */
+class OrdinalIndex {
+  private readonly chunks: Uint32Array[] = [];
+  private count = 0;
+  constructor(private readonly chunkSize = 4096) {}
+  get length(): number { return this.count; }
+  push(value: number): void {
+    if (value < 0 || value > 0xffffffff) throw new Error('Frame index exceeds the supported range.');
+    const chunkIndex = Math.floor(this.count / this.chunkSize); const offset = this.count % this.chunkSize;
+    if (!this.chunks[chunkIndex]) this.chunks.push(new Uint32Array(this.chunkSize));
+    this.chunks[chunkIndex][offset] = value; this.count++;
+  }
+  at(index: number): number | undefined {
+    if (index < 0 || index >= this.count) return undefined;
+    return this.chunks[Math.floor(index / this.chunkSize)][index % this.chunkSize];
+  }
+  *values(): IterableIterator<number> { for (let index = 0; index < this.count; index++) yield this.at(index)!; }
+}
+
 const bytesToHex = (data: Uint8Array): string => Array.from(data, (byte) => byte.toString(16).padStart(2, '0')).join(' ');
 
 function matches(frame: CanFrame, filter: FrameFilter | undefined, context?: FrameQueryContext, searchPattern?: RegExp | null): boolean {
@@ -72,10 +91,13 @@ export class ChunkedFrameStore implements FrameStore {
   private cachedFilterKey: string | undefined;
   private cachedFilter: FrameFilter | undefined;
   private cachedContext: FrameQueryContext | undefined;
-  private cachedMatches: CanFrame[] = [];
+  private readonly canRefIndexes = new Map<string, OrdinalIndex>();
+  private readonly channelIndexes = new Map<number, OrdinalIndex>();
+  private readonly directionIndexes = new Map<CanFrame['direction'], OrdinalIndex>();
+  private cachedMatches = new OrdinalIndex();
   private cachedSearchPattern: RegExp | null | undefined;
   private timestampCacheGeneration = -1;
-  private timestampCache: number[] = [];
+  private timestampCache: Float64Array = new Float64Array();
 
   constructor(private readonly chunkSize = 4096) {
     if (!Number.isInteger(chunkSize) || chunkSize < 1) throw new Error('chunkSize must be a positive integer.');
@@ -86,8 +108,13 @@ export class ChunkedFrameStore implements FrameStore {
 
   *frames(): IterableIterator<CanFrame> { for (const chunk of this.chunks) yield* chunk; }
 
+  *framesByCanRefs(refs: readonly { readonly canId: number; readonly extended: boolean }[]): IterableIterator<CanFrame> {
+    for (const ordinal of mergeIndexes(this.canRefIndexesFor(refs))) { const frame = this.frameAt(ordinal); if (frame) yield frame; }
+  }
+
   append(frames: readonly CanFrame[]): void {
     for (const frame of frames) {
+      const ordinal = this.count;
       let chunk = this.chunks[this.chunks.length - 1];
       if (!chunk || chunk.length >= this.chunkSize) {
         chunk = [];
@@ -95,7 +122,10 @@ export class ChunkedFrameStore implements FrameStore {
       }
       chunk.push(frame);
       this.count++;
-      if (this.cachedFilterKey !== undefined && matches(frame, this.cachedFilter, this.cachedContext, this.cachedSearchPattern)) this.cachedMatches.push(frame);
+      appendIndex(this.canRefIndexes, canKey(frame.canId, frame.extended), ordinal);
+      appendIndex(this.channelIndexes, frame.channel, ordinal);
+      appendIndex(this.directionIndexes, frame.direction, ordinal);
+      if (this.cachedFilterKey !== undefined && matches(frame, this.cachedFilter, this.cachedContext, this.cachedSearchPattern)) this.cachedMatches.push(ordinal);
     }
     if (frames.length) this.version++;
   }
@@ -124,13 +154,35 @@ export class ChunkedFrameStore implements FrameStore {
       this.cachedFilter = query.filter;
       this.cachedContext = activeContext;
       this.cachedSearchPattern = compileSearchPattern(query.filter);
-      this.cachedMatches = [];
-      for (const chunk of this.chunks) for (const frame of chunk) if (matches(frame, query.filter, activeContext, this.cachedSearchPattern)) this.cachedMatches.push(frame);
+      this.cachedMatches = new OrdinalIndex();
+      for (const ordinal of this.candidateOrdinals(query.filter)) {
+        const frame = this.frameAt(ordinal);
+        if (frame && matches(frame, query.filter, activeContext, this.cachedSearchPattern)) this.cachedMatches.push(ordinal);
+      }
     }
+    const rows: CanFrame[] = [];
+    const end = Math.min(this.cachedMatches.length, offset + limit);
+    for (let index = offset; index < end; index++) { const frame = this.frameAt(this.cachedMatches.at(index)!); if (frame) rows.push(frame); }
     return {
-      rows: this.cachedMatches.slice(offset, offset + limit), offset,
+      rows, offset,
       total: this.cachedMatches.length, generation: this.version,
     };
+  }
+
+  /** Number of frames matching exact standard/extended CAN references. */
+  countByCanRefs(refs: readonly { readonly canId: number; readonly extended: boolean }[]): number {
+    return this.canRefIndexesFor(refs).reduce((sum, index) => sum + index.length, 0);
+  }
+
+  /** Pages exact CAN-reference matches in original file order without scanning unrelated frames. */
+  queryByCanRefs(refs: readonly { readonly canId: number; readonly extended: boolean }[], offset: number, limit: number): readonly CanFrame[] {
+    const rows: CanFrame[] = []; const start = Math.max(0, Math.floor(offset)); const end = start + Math.max(1, Math.floor(limit)); let matchIndex = 0;
+    for (const ordinal of mergeIndexes(this.canRefIndexesFor(refs))) {
+      if (matchIndex >= end) break;
+      if (matchIndex++ < start) continue;
+      const frame = this.frameAt(ordinal); if (frame) rows.push(frame);
+    }
+    return rows;
   }
 
   representativeSample(filter: FrameFilter | undefined, maxRows: number, context?: FrameQueryContext): readonly CanFrame[] {
@@ -138,14 +190,13 @@ export class ChunkedFrameStore implements FrameStore {
     const searchPattern = compileSearchPattern(filter);
     let total = 0;
     const longestById = new Map<string, CanFrame>();
-    for (const chunk of this.chunks) {
-      for (const frame of chunk) {
-        if (!matches(frame, filter, context, searchPattern)) continue;
-        total++;
-        const key = `${frame.extended ? 'e' : 's'}:${frame.canId}`;
-        const current = longestById.get(key);
-        if (!current || frame.dataLength > current.dataLength) longestById.set(key, frame);
-      }
+    for (const ordinal of this.candidateOrdinals(filter)) {
+      const frame = this.frameAt(ordinal); if (!frame) continue;
+      if (!matches(frame, filter, context, searchPattern)) continue;
+      total++;
+      const key = `${frame.extended ? 'e' : 's'}:${frame.canId}`;
+      const current = longestById.get(key);
+      if (!current || frame.dataLength > current.dataLength) longestById.set(key, frame);
     }
     if (total === 0) return [];
     const chosen = new Map<string, CanFrame>();
@@ -159,13 +210,12 @@ export class ChunkedFrameStore implements FrameStore {
       const targets = new Set<number>();
       for (let i = 0; i < remaining; i++) targets.add(Math.round(i * (total - 1) / Math.max(1, remaining - 1)));
       let matched = 0;
-      outer: for (const chunk of this.chunks) {
-        for (const frame of chunk) {
-          if (!matches(frame, filter, context, searchPattern)) continue;
-          if (targets.has(matched)) chosen.set(frame.id, frame);
-          matched++;
-          if (chosen.size >= limit) break outer;
-        }
+      for (const ordinal of this.candidateOrdinals(filter)) {
+        const frame = this.frameAt(ordinal); if (!frame) continue;
+        if (!matches(frame, filter, context, searchPattern)) continue;
+        if (targets.has(matched)) chosen.set(frame.id, frame);
+        matched++;
+        if (chosen.size >= limit) break;
       }
     }
     return Array.from(chosen.values()).slice(0, limit);
@@ -173,8 +223,7 @@ export class ChunkedFrameStore implements FrameStore {
 
   adjacentTimestamp(timestamp: number, direction: -1 | 1, range?: { readonly start: number; readonly end: number }): number | undefined {
     if (this.timestampCacheGeneration !== this.version) {
-      this.timestampCache = this.chunks.flatMap((chunk) => chunk.map((frame) => frame.timestamp)).sort((left, right) => left - right);
-      this.timestampCacheGeneration = this.version;
+      this.rebuildTimestampCache();
     }
     const timestamps = this.timestampCache;
     let index = direction < 0 ? lowerBound(timestamps, timestamp) - 1 : upperBound(timestamps, timestamp);
@@ -188,8 +237,7 @@ export class ChunkedFrameStore implements FrameStore {
   nearestTimestamp(timestamp: number, range?: { readonly start: number; readonly end: number }): number | undefined {
     if (!Number.isFinite(timestamp)) return undefined;
     if (this.timestampCacheGeneration !== this.version) {
-      this.timestampCache = this.chunks.flatMap((chunk) => chunk.map((frame) => frame.timestamp)).sort((left, right) => left - right);
-      this.timestampCacheGeneration = this.version;
+      this.rebuildTimestampCache();
     }
     const start = range ? lowerBound(this.timestampCache, range.start) : 0;
     const end = range ? upperBound(this.timestampCache, range.end) : this.timestampCache.length;
@@ -206,13 +254,74 @@ export class ChunkedFrameStore implements FrameStore {
     this.cachedFilterKey = undefined;
     this.cachedFilter = undefined;
     this.cachedContext = undefined;
-    this.cachedMatches = [];
+    this.cachedMatches = new OrdinalIndex();
     this.cachedSearchPattern = undefined;
+    this.canRefIndexes.clear(); this.channelIndexes.clear(); this.directionIndexes.clear();
     this.timestampCacheGeneration = -1;
-    this.timestampCache = [];
+    this.timestampCache = new Float64Array();
+  }
+
+  private frameAt(ordinal: number): CanFrame | undefined {
+    return this.chunks[Math.floor(ordinal / this.chunkSize)]?.[ordinal % this.chunkSize];
+  }
+
+  private canRefIndexesFor(refs: readonly { readonly canId: number; readonly extended: boolean }[]): readonly OrdinalIndex[] {
+    const unique = new Set(refs.map((ref) => canKey(ref.canId, ref.extended)));
+    return [...unique].map((key) => this.canRefIndexes.get(key)).filter((index): index is OrdinalIndex => Boolean(index));
+  }
+
+  private candidateOrdinals(filter: FrameFilter | undefined): Iterable<number> {
+    const constrained: OrdinalIndex[] = [];
+    if (filter?.direction) { const index = this.directionIndexes.get(filter.direction); if (!index) return []; constrained.push(index); }
+    if (filter?.channel !== undefined) { const index = this.channelIndexes.get(filter.channel); if (!index) return []; constrained.push(index); }
+    const refs = filter?.canIdRefs?.length ? filter.canIdRefs : filter?.canIds?.flatMap((canId) => [{ canId, extended: false }, { canId, extended: true }]);
+    const canIndexes = refs?.length ? this.canRefIndexesFor(refs) : [];
+    if (refs?.length && !canIndexes.length) return [];
+    const canCount = canIndexes.reduce((sum, index) => sum + index.length, 0);
+    const narrowest = constrained.sort((left, right) => left.length - right.length)[0];
+    if (narrowest && (!canIndexes.length || narrowest.length <= canCount)) return narrowest.values();
+    if (canIndexes.length) return mergeIndexes(canIndexes);
+    return allOrdinals(this.count);
+  }
+
+  private rebuildTimestampCache(): void {
+    const timestamps = new Float64Array(this.count); let index = 0;
+    for (const chunk of this.chunks) for (const frame of chunk) timestamps[index++] = frame.timestamp;
+    timestamps.sort(); this.timestampCache = timestamps; this.timestampCacheGeneration = this.version;
   }
 }
 
-function lowerBound(values: readonly number[], target: number): number { let low = 0; let high = values.length; while (low < high) { const middle = (low + high) >>> 1; if (values[middle] < target) low = middle + 1; else high = middle; } return low; }
-function upperBound(values: readonly number[], target: number): number { let low = 0; let high = values.length; while (low < high) { const middle = (low + high) >>> 1; if (values[middle] <= target) low = middle + 1; else high = middle; } return low; }
+function lowerBound(values: ArrayLike<number>, target: number): number { let low = 0; let high = values.length; while (low < high) { const middle = (low + high) >>> 1; if (values[middle] < target) low = middle + 1; else high = middle; } return low; }
+function upperBound(values: ArrayLike<number>, target: number): number { let low = 0; let high = values.length; while (low < high) { const middle = (low + high) >>> 1; if (values[middle] <= target) low = middle + 1; else high = middle; } return low; }
 function compileSearchPattern(filter: FrameFilter | undefined): RegExp | null | undefined { if (!filter?.searchRegex || !filter.search?.trim()) return undefined; try { return new RegExp(filter.search, 'i'); } catch { return null; } }
+function canKey(canId: number, extended: boolean): string { return `${extended ? 'e' : 's'}:${canId}`; }
+function appendIndex<K>(map: Map<K, OrdinalIndex>, key: K, ordinal: number): void { let index = map.get(key); if (!index) { index = new OrdinalIndex(); map.set(key, index); } index.push(ordinal); }
+function* allOrdinals(count: number): IterableIterator<number> { for (let index = 0; index < count; index++) yield index; }
+
+/** Stable k-way merge for independently append-sorted ordinal indexes. */
+function* mergeIndexes(indexes: readonly OrdinalIndex[]): IterableIterator<number> {
+  const heap: Array<{ value: number; index: number; position: number }> = [];
+  for (let index = 0; index < indexes.length; index++) { const value = indexes[index].at(0); if (value !== undefined) heapPush(heap, { value, index, position: 0 }); }
+  let previous = -1;
+  while (heap.length) {
+    const current = heapPop(heap)!; const nextPosition = current.position + 1; const next = indexes[current.index].at(nextPosition);
+    if (next !== undefined) heapPush(heap, { value: next, index: current.index, position: nextPosition });
+    if (current.value !== previous) { previous = current.value; yield current.value; }
+  }
+}
+
+function heapPush<T extends { value: number }>(heap: T[], item: T): void {
+  let index = heap.push(item) - 1;
+  while (index > 0) { const parent = (index - 1) >>> 1; if (heap[parent].value <= item.value) break; heap[index] = heap[parent]; index = parent; }
+  heap[index] = item;
+}
+function heapPop<T extends { value: number }>(heap: T[]): T | undefined {
+  const first = heap[0]; const last = heap.pop(); if (!heap.length || !last) return first;
+  let index = 0;
+  while (true) {
+    const left = index * 2 + 1; if (left >= heap.length) break;
+    const right = left + 1; const child = right < heap.length && heap[right].value < heap[left].value ? right : left;
+    if (heap[child].value >= last.value) break; heap[index] = heap[child]; index = child;
+  }
+  heap[index] = last; return first;
+}

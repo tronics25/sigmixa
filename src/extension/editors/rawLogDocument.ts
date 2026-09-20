@@ -18,6 +18,7 @@ import type { SigMixaProject } from '../../core/project/schema';
 import { PluginHost, type PluginRegistry } from '../../core/plugin/pluginHost';
 import { loadExternalCsv } from '../external/externalCsvLoader';
 import { formatCsvSignalValue, formatCsvTimestamp } from '../../core/export/csvNumber';
+import { manualAnalysisDelta, type ManualAnalysisDelta } from '../../core/project/analysisDelta';
 
 export type DocumentUpdate =
   | { readonly type: 'progress'; readonly frames: number; readonly bytesRead: number; readonly totalBytes: number }
@@ -36,8 +37,11 @@ export class RawLogDocument implements vscode.CustomDocument {
   private parsing = true;
   private totalDiagnostics = 0;
   private projectRevision = -1;
+  private analysisRevision = -1;
   private currentProject: SigMixaProject;
+  private analyzedProject: SigMixaProject;
   private definitions = new Map<string, ManualFrameDefinition>();
+  private analysisDefinitions = new Map<string, ManualFrameDefinition>();
   private pluginHost: PluginHost;
   private pluginDisplay = new Map<string, { readonly tags: readonly string[]; readonly diagnostics: readonly Diagnostic[] }>();
   private pluginDiagnosticOccurrences = new Map<string, number>();
@@ -45,16 +49,21 @@ export class RawLogDocument implements vscode.CustomDocument {
   private displayRevision = 0;
   private readonly channels = new Set<number>();
   private signalStore = new InMemorySignalStore();
-  private manualDecodeContext = createManualDecodeContext();
+  private manualDecodeContexts = new Map<string, ReturnType<typeof createManualDecodeContext>>();
   private analysisToken = 0;
   private analysisRunning = false;
   private parseTask: Promise<AscParseSummary | BlfParseSummary>;
 
   constructor(readonly uri: vscode.Uri, project: SigMixaProject, revision: number, private readonly pluginRegistry: PluginRegistry, readonly scope?: { readonly start: number; readonly end: number }) {
     this.currentProject = project;
+    this.analyzedProject = project;
+    this.analysisRevision = revision;
     this.fileName = path.basename(uri.fsPath);
     this.pluginHost = new PluginHost(pluginRegistry, [], [], []);
     this.setProject(project, revision);
+    this.analysisDefinitions = definitionMap(project.frames);
+    this.pluginHost.dispose();
+    this.pluginHost = new PluginHost(pluginRegistry, project.frames, project.plugins, project.pluginBindings);
     this.registerSignalDefinitions(this.signalStore, project.frames);
     const sourceId = uri.toString();
     const parseFile = path.extname(uri.fsPath).toLowerCase() === '.blf' ? parseBlfFile : parseAscFile;
@@ -77,7 +86,7 @@ export class RawLogDocument implements vscode.CustomDocument {
       }),
     }).then(async (summary) => {
       this.parsing = false;
-      if (!summary.cancelled) await this.appendExternal(this.signalStore, this.currentProject);
+      if (!summary.cancelled) await this.appendExternal(this.signalStore, this.analyzedProject);
       this.signalStore.finalize();
       const completeSummary = { ...summary, diagnostics: this.totalDiagnostics };
       this.updates.fire({ type: 'complete', summary: completeSummary });
@@ -121,31 +130,90 @@ export class RawLogDocument implements vscode.CustomDocument {
   dispose(): void { this.cancel(); this.cancelAnalysis(); this.pluginHost.dispose(); this.updates.dispose(); void this.parseTask; }
 
   async rebuildSignals(project: SigMixaProject, revision: number, force = false): Promise<void> {
-    if (!force && revision === this.projectRevision) return;
-    this.setProject(project, revision, force);
+    if (!force && revision === this.analysisRevision) { this.setProject(project, revision); return; }
+    const delta = force ? undefined : manualAnalysisDelta(this.analyzedProject, project);
+    this.setProject(project, revision);
     const token = ++this.analysisToken;
+    this.analysisRunning = true;
+    if (delta) {
+      await this.rebuildManualDelta(project, revision, delta, token);
+      return;
+    }
     const next = new InMemorySignalStore();
     this.registerSignalDefinitions(next, project.frames);
-    this.pluginDisplay.clear();
-    this.pluginDiagnosticOccurrences.clear();
-    this.signalStore = next;
-    this.manualDecodeContext = createManualDecodeContext();
-    this.analysisRunning = true;
-    const total = this.store.size;
-    let processed = 0;
-    while (processed < total && token === this.analysisToken) {
-      const page = this.store.query({ offset: processed, limit: 1000 });
-      this.decodeInto(next, page.rows);
-      processed += page.rows.length;
-      this.updates.fire({ type: 'analysisProgress', processed, total });
-      if (!page.rows.length) break;
+    const nextDefinitions = definitionMap(project.frames);
+    const nextContexts = new Map<string, ReturnType<typeof createManualDecodeContext>>();
+    const nextPluginHost = new PluginHost(this.pluginRegistry, project.frames, project.plugins, project.pluginBindings);
+    const nextPluginDisplay = new Map<string, { readonly tags: readonly string[]; readonly diagnostics: readonly Diagnostic[] }>();
+    let processed = 0; let batch: CanFrame[] = [];
+    for (const frame of this.store.frames()) {
+      if (token !== this.analysisToken) break;
+      batch.push(frame); if (batch.length < 1000) continue;
+      this.decodeInto(next, batch, nextDefinitions, nextContexts, nextPluginHost, nextPluginDisplay);
+      processed += batch.length; batch = [];
+      this.updates.fire({ type: 'analysisProgress', processed, total: this.store.size });
       await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    if (batch.length && token === this.analysisToken) { this.decodeInto(next, batch, nextDefinitions, nextContexts, nextPluginHost, nextPluginDisplay); processed += batch.length; this.updates.fire({ type: 'analysisProgress', processed, total: this.store.size }); }
+    // A parser batch may have arrived exactly as the iterator reached its end.
+    while (processed < this.store.size && token === this.analysisToken) {
+      const page = this.store.query({ offset: processed, limit: 1000 }); if (!page.rows.length) break;
+      this.decodeInto(next, page.rows, nextDefinitions, nextContexts, nextPluginHost, nextPluginDisplay); processed += page.rows.length;
+      this.updates.fire({ type: 'analysisProgress', processed, total: this.store.size }); await new Promise<void>((resolve) => setImmediate(resolve));
     }
     const cancelled = token !== this.analysisToken;
     if (!cancelled) {
-      await this.appendExternal(next, project);
-      if (token !== this.analysisToken) { this.updates.fire({ type: 'analysisComplete', processed, cancelled: true }); return; }
+      // While parsing, the completion path appends External CSV to whichever
+      // store is current after this atomic swap. Avoid importing it twice.
+      if (!this.parsing) await this.appendExternal(next, project);
+      if (token !== this.analysisToken) { nextPluginHost.dispose(); this.updates.fire({ type: 'analysisComplete', processed, cancelled: true }); return; }
       next.finalize();
+      this.pluginHost.dispose();
+      this.pluginHost = nextPluginHost;
+      this.pluginDisplay = nextPluginDisplay;
+      this.pluginDiagnosticOccurrences.clear();
+      this.signalStore = next;
+      this.analysisDefinitions = nextDefinitions;
+      this.manualDecodeContexts = nextContexts;
+      this.analyzedProject = project;
+      this.analysisRevision = revision;
+      this.displayCache.clear(); this.displayRevision++;
+      this.analysisRunning = false;
+    } else nextPluginHost.dispose();
+    this.updates.fire({ type: 'analysisComplete', processed, cancelled });
+  }
+
+  private async rebuildManualDelta(project: SigMixaProject, revision: number, delta: ManualAnalysisDelta, token: number): Promise<void> {
+    const nextDefinitions = definitionMap(project.frames);
+    const replacement = new InMemorySignalStore();
+    const changedFrames = project.frames.filter((frame) => delta.frameIds.has(frame.id));
+    this.registerSignalDefinitions(replacement, changedFrames);
+    const contexts = new Map<string, ReturnType<typeof createManualDecodeContext>>();
+    let processed = 0; let batch: CanFrame[] = [];
+    for (const frame of this.store.framesByCanRefs(delta.canRefs)) {
+      if (token !== this.analysisToken) break;
+      batch.push(frame); if (batch.length < 1000) continue;
+      this.decodeManualInto(replacement, batch, nextDefinitions, contexts, delta.frameIds);
+      processed += batch.length; batch = [];
+      this.updates.fire({ type: 'analysisProgress', processed, total: this.store.countByCanRefs(delta.canRefs) });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    if (batch.length && token === this.analysisToken) { this.decodeManualInto(replacement, batch, nextDefinitions, contexts, delta.frameIds); processed += batch.length; this.updates.fire({ type: 'analysisProgress', processed, total: this.store.countByCanRefs(delta.canRefs) }); }
+    while (processed < this.store.countByCanRefs(delta.canRefs) && token === this.analysisToken) {
+      const page = this.store.queryByCanRefs(delta.canRefs, processed, 1000); if (!page.length) break;
+      this.decodeManualInto(replacement, page, nextDefinitions, contexts, delta.frameIds); processed += page.length;
+      this.updates.fire({ type: 'analysisProgress', processed, total: this.store.countByCanRefs(delta.canRefs) }); await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    const cancelled = token !== this.analysisToken;
+    if (!cancelled) {
+      replacement.finalize();
+      this.signalStore.replaceDefinitions((definition) => definition.source.type === 'manual-can' && delta.frameIds.has(definition.source.frameDefinitionId), replacement);
+      for (const id of delta.frameIds) this.manualDecodeContexts.delete(id);
+      for (const [id, context] of contexts) this.manualDecodeContexts.set(id, context);
+      this.analysisDefinitions = nextDefinitions;
+      this.analyzedProject = project;
+      this.analysisRevision = revision;
+      this.displayCache.clear(); this.displayRevision++;
       this.analysisRunning = false;
     }
     this.updates.fire({ type: 'analysisComplete', processed, cancelled });
@@ -237,13 +305,11 @@ export class RawLogDocument implements vscode.CustomDocument {
     await once(stream, 'close');
   }
 
-  private setProject(project: SigMixaProject, revision: number, force = false): void {
-    if (!force && revision === this.projectRevision) return;
+  private setProject(project: SigMixaProject, revision: number): void {
+    if (revision === this.projectRevision) return;
     this.currentProject = project;
     this.projectRevision = revision;
-    this.definitions = new Map(project.frames.map((definition) => [`${definition.extended ? 'e' : 's'}:${definition.canId}`, definition]));
-    this.pluginHost.dispose();
-    this.pluginHost = new PluginHost(this.pluginRegistry, project.frames, project.plugins, project.pluginBindings);
+    this.definitions = definitionMap(project.frames);
     this.displayCache.clear();
     this.displayRevision++;
   }
@@ -252,18 +318,40 @@ export class RawLogDocument implements vscode.CustomDocument {
     store.registerDefinitions(definitions.flatMap((frame) => [...frame.signals, ...(frame.derivedSignals ?? [])].map((signal) => signalDefinitionFor(frame, signal))));
   }
 
-  private decodeInto(store: InMemorySignalStore, frames: readonly CanFrame[]): void {
+  private decodeInto(
+    store: InMemorySignalStore,
+    frames: readonly CanFrame[],
+    definitions = this.analysisDefinitions,
+    contexts = this.manualDecodeContexts,
+    pluginHost = this.pluginHost,
+    pluginDisplay = this.pluginDisplay,
+  ): void {
     for (const frame of frames) {
-      const definition = this.definitions.get(`${frame.extended ? 'e' : 's'}:${frame.canId}`);
-      const manual = definition ? decodeManualFrame(frame, definition, this.manualDecodeContext) : { decoded: [], diagnostics: [] };
-      const plugin = this.pluginHost.processFrame(frame);
+      const definition = definitions.get(canKey(frame.canId, frame.extended));
+      const manual = definition ? decodeManualFrame(frame, definition, contextFor(contexts, definition.id)) : { decoded: [], diagnostics: [] };
+      const plugin = pluginHost.processFrame(frame);
       store.appendFrame(frame.id, frame.timestamp, [...manual.decoded, ...plugin.decoded]);
       for (const [signalId, events] of plugin.events) store.appendEvents(signalId, events);
       if (plugin.handled || plugin.diagnostics.length) {
-        this.pluginDisplay.set(frame.id, { tags: plugin.decoded.map((item) => `${item.definition.name}=${item.sample.value}${item.definition.unit ? ` ${item.definition.unit}` : ''}`), diagnostics: plugin.diagnostics });
-        if (this.pluginDisplay.size > 5000) { const oldest = this.pluginDisplay.keys().next().value as string | undefined; if (oldest) this.pluginDisplay.delete(oldest); }
+        pluginDisplay.set(frame.id, { tags: plugin.decoded.map((item) => `${item.definition.name}=${item.sample.value}${item.definition.unit ? ` ${item.definition.unit}` : ''}`), diagnostics: plugin.diagnostics });
+        if (pluginDisplay.size > 5000) { const oldest = pluginDisplay.keys().next().value as string | undefined; if (oldest) pluginDisplay.delete(oldest); }
       }
       if (plugin.diagnostics.length) this.publishDiagnostics(plugin.diagnostics);
+    }
+  }
+
+  private decodeManualInto(
+    store: InMemorySignalStore,
+    frames: readonly CanFrame[],
+    definitions: ReadonlyMap<string, ManualFrameDefinition>,
+    contexts: Map<string, ReturnType<typeof createManualDecodeContext>>,
+    eligibleFrameIds: ReadonlySet<string>,
+  ): void {
+    for (const frame of frames) {
+      const definition = definitions.get(canKey(frame.canId, frame.extended));
+      if (!definition || !eligibleFrameIds.has(definition.id)) continue;
+      const manual = decodeManualFrame(frame, definition, contextFor(contexts, definition.id));
+      store.appendFrame(frame.id, frame.timestamp, manual.decoded);
     }
   }
 
@@ -373,4 +461,12 @@ function normalizeRanges(ranges: readonly { readonly start: number; readonly end
   const result: { start: number; end: number }[] = [];
   for (const range of sorted) { const previous = result[result.length - 1]; if (previous && range.start <= previous.end + 1) previous.end = Math.max(previous.end, range.end); else result.push({ ...range }); }
   return result;
+}
+
+function definitionMap(frames: readonly ManualFrameDefinition[]): Map<string, ManualFrameDefinition> {
+  return new Map(frames.map((definition) => [canKey(definition.canId, definition.extended), definition]));
+}
+function canKey(canId: number, extended: boolean): string { return `${extended ? 'e' : 's'}:${canId}`; }
+function contextFor(contexts: Map<string, ReturnType<typeof createManualDecodeContext>>, definitionId: string): ReturnType<typeof createManualDecodeContext> {
+  let context = contexts.get(definitionId); if (!context) { context = createManualDecodeContext(); contexts.set(definitionId, context); } return context;
 }

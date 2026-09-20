@@ -1,8 +1,8 @@
 {
   "name": "sigmixa",
-  "displayName": "SigMixa",
+  "displayName": "SigMixa — CAN Log Analyzer",
   "description": "%sigmixa.description%",
-  "version": "0.11.0",
+  "version": "1.0.0",
   "publisher": "tronics25",
   "license": "MIT",
   "private": true,
@@ -19,17 +19,44 @@
   },
   "categories": [
     "Visualization",
+    "Data Science",
     "Other"
   ],
   "keywords": [
     "CAN",
+    "CAN bus",
     "CAN FD",
+    "DBC",
     "ASC",
     "BLF",
-    "DBC",
+    "CANalyzer",
+    "log viewer",
+    "CAN trace",
+    "decoder",
     "automotive",
     "telemetry",
-    "visualization"
+    "signal plot",
+    "time series",
+    "trajectory",
+    "multiplexing",
+    "visualization",
+    "data analysis"
+  ],
+  "galleryBanner": {
+    "color": "#1B2A4A",
+    "theme": "light"
+  },
+  "badges": [
+    {
+      "url": "https://img.shields.io/visual-studio-marketplace/v/tronics25.sigmixa",
+      "href": "https://marketplace.visualstudio.com/items?itemName=tronics25.sigmixa",
+      "description": "VS Code Marketplace version"
+    },
+    {
+      "url": "https://img.shields.io/github/license/tronics25/sigmixa",
+      "href": "https://github.com/tronics25/sigmixa/blob/main/LICENSE",
+      "description": "MIT License"
+    }
   ],
   "activationEvents": [
     "onCustomEditor:sigmixa.rawLog",

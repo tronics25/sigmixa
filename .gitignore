@@ -5,6 +5,7 @@ outputs/
 media/codicons/
 *.vsix
 .DS_Store
+scripts/readme-demo/
 
 design/
 README_INTERNAL.md

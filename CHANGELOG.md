@@ -1,5 +1,14 @@
 # Change Log
 
+## 1.0.0 - 2026-09-21
+
+- Completed the initial SigMixa feature set for offline CAN and CAN FD analysis in VS Code.
+- Added compact CAN ID, channel, direction and Timestamp indexes for large logs. Filter caches now retain compact Frame ordinals instead of duplicate object references.
+- Added differential Signal reanalysis: editing an unbound Frame definition decodes only its affected CAN IDs and atomically replaces those results while preserving unrelated Signals, Plugins and External CSV data. Stateful Plugin, Binding and External CSV changes safely fall back to a full rebuild.
+- Finalized the transparent, theme-independent SigMixa wordmark and Marketplace icon.
+- Expanded Marketplace metadata and refreshed the README with badges and a real VS Code workflow video covering Frame definition, chart inspection, Clips, comparison and 3D Trajectory.
+- Corrected the bundled Codicons attribution and license notices.
+
 ## 0.11.0 - 2026-09-16
 
 - Replaced the SigMixa wordmark, Marketplace icon and Activity Bar icon with the new hexagonal signal design.

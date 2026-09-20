@@ -122,3 +122,16 @@ test('Signal series treats missing-quality samples as a gap boundary', () => {
   assert.equal(series.globalMinimum, 1);
   assert.equal(series.globalMaximum, 3);
 });
+
+test('incremental replacement preserves unrelated Signals and merges the same Frame row', () => {
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed, temperature]);
+  store.appendFrame('shared', 1, [decoded(speed, 1, 10), decoded(temperature, 1, 20)]);
+  const replacement = new InMemorySignalStore(); const updatedSpeed = { ...speed, name: 'Updated speed' };
+  replacement.registerDefinitions([updatedSpeed]); replacement.appendFrame('shared', 1, [decoded(updatedSpeed, 1, 99)]); replacement.finalize();
+  store.replaceDefinitions((definition) => definition.source.type === 'manual-can' && definition.source.frameDefinitionId === 'frame-a', replacement);
+  const page = store.tablePage([speed.id, temperature.id], 0, 10);
+  assert.equal(page.total, 1);
+  assert.equal(page.rows[0].values.get(speed.id)?.value, 99);
+  assert.equal(page.rows[0].values.get(temperature.id)?.value, 20);
+  assert.equal(store.catalog().find((definition) => definition.id === speed.id)?.name, 'Updated speed');
+});

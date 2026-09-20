@@ -39,6 +39,13 @@ interface MutableSeries {
   sorted: boolean;
 }
 
+interface MutableSignalEventRow {
+  readonly id: string;
+  readonly timestamp: number;
+  readonly values: Map<string, SignalSample>;
+  readonly changes?: Readonly<Record<string, SignalCellChange>>;
+}
+
 export interface DecodedSignalSample {
   readonly definition: SignalDefinition;
   readonly sample: SignalSample;
@@ -46,7 +53,8 @@ export interface DecodedSignalSample {
 
 export class InMemorySignalStore {
   private readonly series = new Map<string, MutableSeries>();
-  private readonly rows: SignalEventRow[] = [];
+  private readonly rows: MutableSignalEventRow[] = [];
+  private readonly rowsById = new Map<string, MutableSignalEventRow[]>();
   private version = 0;
   private tableCacheKey = '';
   private tableCacheSelection: readonly string[] = [];
@@ -83,8 +91,8 @@ export class InMemorySignalStore {
       target.maximumTimestamp = Math.max(target.maximumTimestamp, item.sample.timestamp);
       values.set(item.definition.id, item.sample);
     }
-    const row = { id: frameId, timestamp, values };
-    this.rows.push(row);
+    const row = { id: frameId, timestamp, values }; this.rows.push(row);
+    const indexed = this.rowsById.get(frameId) ?? []; indexed.push(row); this.rowsById.set(frameId, indexed);
     if (this.tableCacheSelection.length && this.rowMatches(row, this.tableCacheSelection)
       && (!this.tableCacheRange || (timestamp >= this.tableCacheRange.start && timestamp <= this.tableCacheRange.end))) this.tableCache.push(row);
     this.version++;
@@ -108,6 +116,39 @@ export class InMemorySignalStore {
     target.events.push(...events); this.version++;
   }
 
+  /**
+   * Atomically replaces a subset of decoded definitions with a separately-built
+   * shard. This keeps unrelated series intact during incremental reanalysis.
+   */
+  replaceDefinitions(predicate: (definition: SignalDefinition) => boolean, replacement: InMemorySignalStore): void {
+    const removed = new Set<string>();
+    for (const [id, target] of this.series) if (predicate(target.definition)) { removed.add(id); this.series.delete(id); }
+    if (removed.size) {
+      for (let index = this.rows.length - 1; index >= 0; index--) {
+        const row = this.rows[index]; for (const id of removed) row.values.delete(id);
+        if (!row.values.size) {
+          this.rows.splice(index, 1); const indexed = this.rowsById.get(row.id)?.filter((candidate) => candidate !== row) ?? [];
+          if (indexed.length) this.rowsById.set(row.id, indexed); else this.rowsById.delete(row.id);
+        }
+      }
+    }
+    for (const [id, target] of replacement.series) this.series.set(id, {
+      definition: target.definition, samples: [...target.samples], events: [...target.events],
+      minimum: target.minimum, maximum: target.maximum, minimumTimestamp: target.minimumTimestamp,
+      maximumTimestamp: target.maximumTimestamp, sorted: target.sorted,
+    });
+    for (const source of replacement.rows) {
+      const existing = this.rowsById.get(source.id)?.find((row) => row.timestamp === source.timestamp) ?? this.rowsById.get(source.id)?.[0];
+      if (existing) for (const [id, sample] of source.values) existing.values.set(id, sample);
+      else {
+        const row = { id: source.id, timestamp: source.timestamp, values: new Map(source.values) }; this.rows.push(row);
+        const indexed = this.rowsById.get(row.id) ?? []; indexed.push(row); this.rowsById.set(row.id, indexed);
+      }
+    }
+    this.rows.sort((left, right) => left.timestamp - right.timestamp);
+    this.invalidateTableCache(); this.version++;
+  }
+
   calculationSeries(): readonly { readonly definition: SignalDefinition; readonly samples: readonly SignalSample[] }[] {
     return [...this.series.values()].map((target) => { this.ensureSeriesSorted(target); return { definition: target.definition, samples: target.samples }; });
   }
@@ -118,10 +159,7 @@ export class InMemorySignalStore {
       target.events.sort((left, right) => left.timestamp - right.timestamp);
     }
     this.rows.sort((left, right) => left.timestamp - right.timestamp);
-    this.tableCacheKey = '';
-    this.tableCacheSelection = [];
-    this.tableCacheRange = undefined;
-    this.tableCache = [];
+    this.invalidateTableCache();
     this.version++;
   }
 
@@ -232,6 +270,10 @@ export class InMemorySignalStore {
 
   private rowMatches(row: SignalEventRow, selectedIds: readonly string[]): boolean {
     return selectedIds.some((id) => row.values.has(id));
+  }
+
+  private invalidateTableCache(): void {
+    this.tableCacheKey = ''; this.tableCacheSelection = []; this.tableCacheRange = undefined; this.tableCache = [];
   }
 
   private ensureSeriesSorted(target: MutableSeries): void {
