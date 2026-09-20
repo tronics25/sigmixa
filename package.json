@@ -2,7 +2,7 @@
   "name": "sigmixa",
   "displayName": "SigMixa — CAN Log Analyzer",
   "description": "%sigmixa.description%",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "tronics25",
   "license": "MIT",
   "private": true,
@@ -44,11 +44,11 @@
   ],
   "galleryBanner": {
     "color": "#1B2A4A",
-    "theme": "light"
+    "theme": "dark"
   },
   "badges": [
     {
-      "url": "https://img.shields.io/visual-studio-marketplace/v/tronics25.sigmixa",
+      "url": "https://vsmarketplacebadges.dev/version-short/tronics25.sigmixa.svg",
       "href": "https://marketplace.visualstudio.com/items?itemName=tronics25.sigmixa",
       "description": "VS Code Marketplace version"
     },

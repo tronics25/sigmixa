@@ -2,9 +2,9 @@
 
 <img src="media/sigmixa-logo.png" alt="SigMixa" width="620">
 
-[![Version](https://img.shields.io/visual-studio-marketplace/v/tronics25.sigmixa)](https://marketplace.visualstudio.com/items?itemName=tronics25.sigmixa)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/tronics25.sigmixa)](https://marketplace.visualstudio.com/items?itemName=tronics25.sigmixa)
-[![Rating](https://img.shields.io/visual-studio-marketplace/r/tronics25.sigmixa)](https://marketplace.visualstudio.com/items?itemName=tronics25.sigmixa)
+[![Version](https://vsmarketplacebadges.dev/version-short/tronics25.sigmixa.svg)](https://marketplace.visualstudio.com/items?itemName=tronics25.sigmixa)
+[![Installs](https://vsmarketplacebadges.dev/installs-short/tronics25.sigmixa.svg)](https://marketplace.visualstudio.com/items?itemName=tronics25.sigmixa)
+[![Rating](https://vsmarketplacebadges.dev/rating-short/tronics25.sigmixa.svg)](https://marketplace.visualstudio.com/items?itemName=tronics25.sigmixa)
 [![License: MIT](https://img.shields.io/github/license/tronics25/sigmixa)](LICENSE)
 
 **Open-source CAN / CAN FD log analyzer that runs locally inside VS Code.**

@@ -1,5 +1,10 @@
 # Change Log
 
+## 1.0.1 - 2026-09-21
+
+- Restored the Version, Installs, and Rating badges after the previous Marketplace badge endpoints were retired.
+- Improved Marketplace banner contrast by using light text on the dark SigMixa banner color.
+
 ## 1.0.0 - 2026-09-21
 
 - Completed the initial SigMixa feature set for offline CAN and CAN FD analysis in VS Code.
