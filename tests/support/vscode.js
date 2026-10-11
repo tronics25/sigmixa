@@ -8,7 +8,7 @@ const wrap = async (fn) => { try { return await fn(); } catch (error) { if (erro
 const messages = [];
 class EventEmitter { constructor() { this.listeners = []; this.event = (l) => { this.listeners.push(l); return { dispose() {} }; }; } fire(v) { for (const l of this.listeners) l(v); } dispose() {} }
 module.exports = {
-  Uri, FileSystemError, EventEmitter, messages,
+  Uri, FileSystemError, EventEmitter, messages, env: { language: 'en' },
   workspace: { workspaceFolders: [], fs: {
     readFile: (u) => wrap(() => fsp.readFile(u.fsPath)), writeFile: (u, b) => wrap(() => fsp.writeFile(u.fsPath, b)),
     stat: (u) => wrap(() => fsp.stat(u.fsPath)), createDirectory: (u) => fsp.mkdir(u.fsPath, { recursive: true }),

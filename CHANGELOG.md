@@ -1,5 +1,14 @@
 # Change Log
 
+## 2.0.1 - 2026-10-12
+
+- Fixed Signal values of two CAN IDs being mixed: a Frame that a group overrides and the definition it overrides must stay on the same CAN ID, and saving a change that separates them is now refused with the reason.
+- Fixed Clips of a copied group folder being changed or deleted together with the Clips they were copied from. A Clip is now identified by its log together with its ID, so the original and the copy are separate Clips and nothing is renamed.
+- Fixed a link to a log outside the workspace being lost when it was the only thing set up in the workspace.
+- Fixed a group's links to logs and CSV files outside it pointing elsewhere after the group's folder was moved to another depth.
+- HTML report: a table row now shows its own value label where the same value has different labels over time.
+- HTML report: the time shift of a target steps the same way as on the comparison screen, also to before its first sample.
+
 ## 2.0.0 - 2026-10-12
 
 - **Analysis groups.** Several logs can now share graph views and the Frame definitions of one analysis. A group is a folder with a `.sigmixa` folder: it applies its Frame definitions and view settings to every log in it, on top of the workspace's definitions; groups can be nested. Logs from elsewhere can be added to a group and appear there as well as where they are, using the definitions of the place they are opened from. Copy a group's folder to share it. 1.x workspaces open unchanged.

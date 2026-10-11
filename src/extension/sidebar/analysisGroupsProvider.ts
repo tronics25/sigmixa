@@ -94,7 +94,7 @@ export class AnalysisGroupsProvider implements vscode.TreeDataProvider<AnalysisT
     }
     const clip = node.clip;
     const item = new vscode.TreeItem(clip.name, vscode.TreeItemCollapsibleState.None);
-    item.id = `clip:${node.level}>${clip.id}`; item.contextValue = 'sigmixa.clip';
+    item.id = `clip:${node.level}>${clip.sourcePath}>${clip.id}`; item.contextValue = 'sigmixa.clip';
     item.description = clipRangeLabel(clip, t('Whole file', 'ファイル全体'));
     item.tooltip = `${clip.sourceFileName}\n${item.description}`;
     item.iconPath = new vscode.ThemeIcon('symbol-event', new vscode.ThemeColor('charts.green'));

@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { clipKey } from './clipIdentity';
 import { emptyProject, type AnalysisGroup, type ClipDefinition, type ExternalCsvSourceDefinition, type SigMixaProject } from './schema';
 
 /**
@@ -82,9 +83,18 @@ export function composeWorkspace(levels: readonly LevelFile[], logs: readonly Wo
     externalCsvSources: csvToMemory('', root.externalCsvSources),
     analysisGroups: groups,
     logPaths: owned(''),
-    clips: levels.flatMap((level) => level.project.clips.map((clip) => clipToMemory(level.folder, clip))),
+    clips: uniqueWithinLog(levels.flatMap((level) => level.project.clips.map((clip) => clipToMemory(level.folder, clip)))),
     viewStates,
   };
+}
+
+/** Two Clips of one log with the same ID (two files of an older version may each hold it) could not be told apart: the later one gets an ID of its own. */
+function uniqueWithinLog(clips: readonly ClipDefinition[]): ClipDefinition[] {
+  const seen = new Set<string>();
+  return clips.map((clip) => {
+    let id = clip.id; for (let attempt = 2; seen.has(clipKey({ id, sourcePath: clip.sourcePath })); attempt++) id = `${clip.id}-${attempt}`;
+    seen.add(clipKey({ id, sourcePath: clip.sourcePath })); return id === clip.id ? clip : { ...clip, id };
+  });
 }
 
 /** Splits the in-memory project back into one project per level, with paths relative to each level's folder. */

@@ -10,6 +10,7 @@ import { clipboardFiles } from '../platform/clipboardFiles';
 import { parseClipRangeInput, withClipRange } from '../../core/project/clipRangeEdit';
 import { randomUUID } from 'crypto';
 import { isLogFileName, levelOf } from '../../core/project/folderLevels';
+import { clipKey, findClip, isClip } from '../../core/project/clipIdentity';
 import { refuseTransfer, type TransferRefusal } from '../../core/project/logTransfer';
 import { portableClipPath } from '../clips/clipPaths';
 import { FrameDefinitionsProvider, PluginsProvider } from '../sidebar/projectProviders';
@@ -79,8 +80,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const message = clips.length === 1 ? t(`Delete Clip “${clips[0].name}”? The source log will not be deleted.`, `クリップ「${clips[0].name}」を削除しますか？元ログは削除されません。`)
       : t(`Delete ${clips.length} Clips? The source logs will not be deleted.`, `クリップ ${clips.length} 件を削除しますか？元ログは削除されません。`);
     if (await vscode.window.showWarningMessage(message, { modal: true }, remove) !== remove) return;
-    const ids = new Set(clips.map((clip) => clip.id));
-    await projectStore.update((project) => ({ ...project, clips: project.clips.filter((item) => !ids.has(item.id)) }));
+    // A Clip is its log and its ID together: a Clip with the same ID in a copied group is another Clip and stays.
+    const keys = new Set(clips.map((clip) => clipKey(clip)));
+    await projectStore.update((project) => ({ ...project, clips: project.clips.filter((item) => !keys.has(clipKey(item))) }));
   };
   /** Moves logs to the trash (never a permanent delete) and drops their Clips and view settings, after one confirmation. */
   const trashLogs = async (nodes: readonly AnalysisTreeNode[]) => {
@@ -214,8 +216,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       for (const file of files) await vscode.commands.executeCommand('vscode.openWith', file, 'sigmixa.rawLog');
     }),
-    vscode.commands.registerCommand('sigmixa.openClip', async (value: ClipDefinition | string, options?: { preserveFocus?: boolean; level?: string }) => {
-      const clip = typeof value === 'string' ? projectStore.current.clips.find((item) => item.id === value) : value;
+    vscode.commands.registerCommand('sigmixa.openClip', async (value?: ClipDefinition, options?: { preserveFocus?: boolean; level?: string }) => {
+      // A Clip is always named by its log and its ID; an ID alone is not accepted, as it may also be a Clip of another log.
+      const clip = value && typeof value === 'object' ? findClip(projectStore.current.clips, value) : undefined;
       if (!clip) return; const filePath = resolveClipPath(clip, workspacePath());
       try { await vscode.workspace.fs.stat(vscode.Uri.file(filePath)); await vscode.commands.executeCommand('vscode.openWith', projectStore.clipUri(clip, options?.level), 'sigmixa.rawLog', ...(options?.preserveFocus ? [{ preserveFocus: true }] : [])); }
       catch { void vscode.window.showErrorMessage(`Clip source file was not found: ${filePath}`); }
@@ -228,7 +231,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('sigmixa.compareClips', (value?: ClipDefinition | AnalysisTreeNode, selected?: readonly AnalysisTreeNode[]) => {
       // Compares the selected logs and Clips directly, in selection order.
       const nodes = selected?.length ? selected : comparable().length ? comparable() : value && 'kind' in value ? [value] : [];
-      comparisonEditor.create(nodes.flatMap((node): { kind: 'clip' | 'file'; clipId?: string; sourcePath?: string; level?: string }[] => node.kind === 'clip' ? [{ kind: 'clip' as const, clipId: node.clip.id, level: node.level }] : node.kind === 'file' ? [{ kind: 'file' as const, sourcePath: portableClipPath(node.filePath, workspacePath()), ...(node.listed ? { level: node.groupId ?? '' } : {}) }] : []));
+      comparisonEditor.create(nodes.flatMap((node): { kind: 'clip' | 'file'; clipId?: string; sourcePath?: string; level?: string }[] => node.kind === 'clip' ? [{ kind: 'clip' as const, clipId: node.clip.id, sourcePath: node.clip.sourcePath, level: node.level }] : node.kind === 'file' ? [{ kind: 'file' as const, sourcePath: portableClipPath(node.filePath, workspacePath()), ...(node.listed ? { level: node.groupId ?? '' } : {}) }] : []));
     }),
     vscode.commands.registerCommand('sigmixa.addGroup', async (node?: AnalysisTreeNode) => {
       // A new analysis group is a new folder with a `.sigmixa` folder, inside the selected group or folder (or the workspace).
@@ -257,7 +260,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (node.kind === 'clip') {
         const name = await vscode.window.showInputBox({ title: t('Rename Clip', 'クリップ名を変更'), value: node.clip.name, validateInput: (text) => !text.trim() ? t('Enter a name.', '名前を入力してください') : undefined });
         if (!name || name.trim() === node.clip.name) return;
-        await projectStore.update((project) => ({ ...project, clips: project.clips.map((clip) => clip.id === node.clip.id ? { ...clip, name: name.trim() } : clip) }));
+        await projectStore.update((project) => ({ ...project, clips: project.clips.map((clip) => isClip(clip, node.clip) ? { ...clip, name: name.trim() } : clip) }));
         return;
       }
       // A log is renamed where it is; an added log is only a reference to a file somewhere else.
@@ -299,14 +302,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     // The exact start and end of a Clip, typed in seconds. (On a graph, the ends of its span marker can be dragged.)
     vscode.commands.registerCommand('sigmixa.editClipRange', async (value?: ClipDefinition | AnalysisTreeNode) => {
-      const picked = clipValue(value) ?? selectedClips()[0]; const clip = picked && projectStore.current.clips.find((item) => item.id === picked.id); if (!clip) return;
+      const picked = clipValue(value) ?? selectedClips()[0]; const clip = picked && findClip(projectStore.current.clips, picked); if (!clip) return;
       const text = await vscode.window.showInputBox({
         title: t(`Change the range of Clip “${clip.name}”`, `クリップ「${clip.name}」の範囲を変更`), prompt: t('Start and end in seconds, for example 12.5 - 20', '開始と終了を秒で入力します。例: 12.5 - 20'),
         value: clip.startTimestamp === undefined || clip.endTimestamp === undefined ? '' : `${clip.startTimestamp} - ${clip.endTimestamp}`,
         validateInput: (input) => parseClipRangeInput(input) ? undefined : t('Enter a start and a later end in seconds, for example 12.5 - 20.', '開始と、それより後の終了を秒で入力してください。例: 12.5 - 20'),
       });
       const range = text === undefined ? undefined : parseClipRangeInput(text); if (!range) return;
-      try { await projectStore.update((project) => withClipRange(project, clip.id, range.start, range.end)); }
+      try { await projectStore.update((project) => withClipRange(project, clip, range.start, range.end)); }
       catch (error) { void vscode.window.showErrorMessage(t(`Could not change the Clip: ${(error as Error).message}`, `クリップを変更できませんでした: ${(error as Error).message}`)); }
     }),
     // Logs copied in the OS file manager (or paths copied as text) are added to the selected place, as a drop would.

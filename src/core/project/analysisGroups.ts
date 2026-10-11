@@ -49,6 +49,26 @@ export function overrideTemplate(project: SigMixaProject, groupId: string, canId
   return above ? { ...structuredClone(above), id, origin: { type: 'manual' } } : undefined;
 }
 
+export interface SharedSignalId { readonly signalId: string; readonly signalName: string; readonly place: string | undefined; readonly frames: readonly [ManualFrameDefinition, ManualFrameDefinition] }
+
+/**
+ * Signal IDs that two Frames of one place share, looking at each place as it is resolved: the workspace, and every group
+ * with the definitions above it applied. A group's override of a Frame keeps the Signal IDs of the definition it started
+ * from and replaces it by CAN ID; give either one another CAN ID and both apply, so samples of two CAN IDs would land in
+ * one Signal. `place` is the group's id, or undefined for the workspace.
+ */
+export function sharedSignalIds(project: SigMixaProject): SharedSignalId[] {
+  const found: SharedSignalId[] = [];
+  for (const place of [undefined, ...(project.analysisGroups ?? []).map((group) => group.id)]) {
+    const owner = new Map<string, ManualFrameDefinition>();
+    for (const frame of resolveGroupProject(project, place).frames) for (const signal of [...frame.signals, ...(frame.derivedSignals ?? [])]) {
+      const other = owner.get(signal.id);
+      if (other && other !== frame) found.push({ signalId: signal.id, signalName: signal.name, place, frames: [other, frame] }); else owner.set(signal.id, frame);
+    }
+  }
+  return found;
+}
+
 export function updateGroup(project: SigMixaProject, groupId: string, update: (group: AnalysisGroup) => AnalysisGroup): SigMixaProject {
   if (!project.analysisGroups?.some((group) => group.id === groupId)) throw new Error('Analysis group was not found.');
   return { ...project, analysisGroups: project.analysisGroups.map((group) => group.id === groupId ? update(group) : group) };

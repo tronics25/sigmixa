@@ -55,7 +55,7 @@ export interface ComparisonDefinition {
 
 /** Identity used to stop the same file or Clip being added twice. Different Clips of one log stay distinct. */
 export function comparisonTargetKey(target: Pick<ComparisonTarget, 'kind' | 'sourcePath' | 'clipId' | 'level'>): string {
-  return target.kind === 'clip' ? `clip:${target.level ?? ''}:${target.clipId ?? ''}` : `file:${target.level ?? ''}:${target.sourcePath ?? ''}`;
+  return target.kind === 'clip' ? `clip:${target.level ?? ''}:${target.sourcePath ?? ''}:${target.clipId ?? ''}` : `file:${target.level ?? ''}:${target.sourcePath ?? ''}`;
 }
 
 /** Builds the target list from a selection: the same file or Clip is kept once, in selection order. */
@@ -97,6 +97,15 @@ export function snapAnchor(times: FrameTimes, timestamp: number): number {
   if (timestamp < times.first) return 2 * times.first - (times.nearest(2 * times.first - timestamp) ?? times.first);
   if (timestamp > times.last) return 2 * times.last - (times.nearest(2 * times.last - timestamp) ?? times.last);
   return times.nearest(timestamp) ?? timestamp;
+}
+/** `FrameTimes` over a sorted list of times, for where only the times themselves are at hand (a report's samples). */
+export function sampleTimes(sorted: readonly number[]): FrameTimes {
+  const lowerBound = (timestamp: number) => { let low = 0; let high = sorted.length; while (low < high) { const middle = (low + high) >> 1; if (sorted[middle] < timestamp) low = middle + 1; else high = middle; } return low; };
+  return {
+    first: sorted[0] ?? 0, last: sorted[sorted.length - 1] ?? 0,
+    nearest: (timestamp) => { if (!sorted.length) return undefined; const index = lowerBound(timestamp); const after = sorted[index]; const before = sorted[index - 1]; return after === undefined ? before : before !== undefined && timestamp - before <= after - timestamp ? before : after; },
+    adjacent: (timestamp, direction) => { const index = lowerBound(timestamp); return direction > 0 ? sorted[sorted[index] === timestamp ? index + 1 : index] : sorted[index - 1]; },
+  };
 }
 /** The next snapped position from `anchor` (already snapped) in `direction`. */
 export function stepAnchor(times: FrameTimes, anchor: number, direction: -1 | 1): number {

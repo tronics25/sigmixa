@@ -1,4 +1,5 @@
 import type { ClipDefinition, SigMixaProject } from './schema';
+import { isClip, type ClipRef } from './clipIdentity';
 
 /** Clip edges are kept to the microsecond, the finest step a log's timestamps have. */
 export function roundClipTime(seconds: number): number { return Math.round(seconds * 1e6) / 1e6; }
@@ -19,10 +20,10 @@ export function parseClipRangeInput(text: string): { start: number; end: number 
 }
 
 /** The project with one Clip's time range replaced. Only the range changes; a range that is not valid changes nothing. */
-export function withClipRange(project: SigMixaProject, clipId: string, start: number, end: number): SigMixaProject {
+export function withClipRange(project: SigMixaProject, ref: ClipRef, start: number, end: number): SigMixaProject {
   const range = { start: roundClipTime(start), end: roundClipTime(end) };
-  if (refuseClipRange(range.start, range.end) || !project.clips.some((clip) => clip.id === clipId)) return project;
-  return { ...project, clips: project.clips.map((clip): ClipDefinition => clip.id === clipId ? { ...clip, startTimestamp: range.start, endTimestamp: range.end } : clip) };
+  if (refuseClipRange(range.start, range.end) || !project.clips.some((clip) => isClip(clip, ref))) return project;
+  return { ...project, clips: project.clips.map((clip): ClipDefinition => isClip(clip, ref) ? { ...clip, startTimestamp: range.start, endTimestamp: range.end } : clip) };
 }
 
 /** While one edge of a Clip is dragged: the range with that edge at `time`, kept inside the log and at least `minimum` long. */

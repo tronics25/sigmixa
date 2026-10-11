@@ -1,5 +1,6 @@
 import type { SignalDefinition } from '../../core/signal/signal';
 import type { ReportTable } from '../../extension/report/reportData';
+import { reportCellLabel } from '../../extension/report/reportTableCells';
 import { t } from '../shared/i18n';
 
 const ROW = 28;
@@ -32,7 +33,7 @@ export function renderReportTable(host: HTMLElement, table: ReportTable, definit
   const columns = () => table.signalIds.map((id, index) => ({ id, index })).filter(({ id }) => { const definition = byId.get(id); return !query || `${definition?.name ?? id} ${definition?.unit ?? ''}`.toLowerCase().includes(query); });
   const cell = (column: number, row: number): string => {
     const value = table.values[column]?.[row]; if (value === null || value === undefined) return '—';
-    const label = table.labels[table.signalIds[column]]?.[String(value)]; return label ? `${format(value)} (${label})` : format(value);
+    const label = reportCellLabel(table, column, row); return label ? `${format(value)} (${label})` : format(value);
   };
   const sort = () => {
     order = table.timestamps.map((_, index) => index);

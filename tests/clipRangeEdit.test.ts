@@ -8,21 +8,24 @@ const project = { clips: [
   { id: 'b', name: 'Stop 2', sourcePath: 'run.asc', sourceFileName: 'run.asc', startTimestamp: 7, endTimestamp: 9 },
 ] } as unknown as SigMixaProject;
 
+const A = { id: 'a', sourcePath: 'run.asc' };
+
 test('changing a Clip range changes only that Clip, and only its range', () => {
-  const next = withClipRange(project, 'a', 1.5, 6.25);
+  const next = withClipRange(project, A, 1.5, 6.25);
   assert.deepEqual(next.clips[0], { id: 'a', name: 'Stop 1', sourcePath: 'run.asc', sourceFileName: 'run.asc', startTimestamp: 1.5, endTimestamp: 6.25 });
   assert.equal(next.clips[1], project.clips[1]);
 });
 
 test('a range that is empty, reversed, negative or of an unknown Clip changes nothing', () => {
-  assert.equal(withClipRange(project, 'a', 5, 5), project); assert.equal(withClipRange(project, 'a', 6, 2), project);
-  assert.equal(withClipRange(project, 'a', -1, 2), project); assert.equal(withClipRange(project, 'a', Number.NaN, 2), project);
-  assert.equal(withClipRange(project, 'missing', 1, 2), project);
+  assert.equal(withClipRange(project, A, 5, 5), project); assert.equal(withClipRange(project, A, 6, 2), project);
+  assert.equal(withClipRange(project, A, -1, 2), project); assert.equal(withClipRange(project, A, Number.NaN, 2), project);
+  assert.equal(withClipRange(project, { id: 'missing', sourcePath: 'run.asc' }, 1, 2), project);
+  assert.equal(withClipRange(project, { id: 'a', sourcePath: 'other.asc' }, 1, 2), project, 'the same ID in another log is another Clip');
   assert.equal(refuseClipRange(2, 2), 'empty'); assert.equal(refuseClipRange(-1, 2), 'negative'); assert.equal(refuseClipRange(1, Infinity), 'not-a-number');
 });
 
 test('edges are kept to the microsecond', () => {
-  const next = withClipRange(project, 'a', 1.23456789, 2.00000049);
+  const next = withClipRange(project, A, 1.23456789, 2.00000049);
   assert.equal(next.clips[0].startTimestamp, 1.234568); assert.equal(next.clips[0].endTimestamp, 2);
 });
 

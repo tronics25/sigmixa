@@ -20,6 +20,7 @@ import { extensionVersion } from '../report/extensionVersion';
 import { groupUnusablePlugins, updateGroup } from '../../core/project/analysisGroups';
 import { clipIdFromUri, portableClipPath, resolveClipPath } from '../clips/clipPaths';
 import { withClipRange } from '../../core/project/clipRangeEdit';
+import { movedSource } from '../../core/project/clipIdentity';
 import { chooseExportFormat, requireRenderedImage, saveRenderedImage, type RenderedImage } from '../imageExport';
 
 export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider<RawLogDocument> {
@@ -43,7 +44,9 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
   }
 
   openCustomDocument(uri: vscode.Uri): RawLogDocument {
-    const clipId = clipIdFromUri(uri); const clip = clipId ? this.projectStore.current.clips.find((item) => item.id === clipId) : undefined;
+    const clipId = clipIdFromUri(uri); const clip = clipId ? this.projectStore.findClip(clipId, uri.fsPath) : undefined;
+    // A tab of a Clip that is gone (restored at startup, say) must not open as the whole log, nor as any other Clip.
+    if (clipId && !clip) throw new Error(t('This Clip no longer exists for this log.', 'このログのクリップは存在しません。'));
     this.warnUnusablePlugins(uri);
     return new RawLogDocument(uri, sourceProject(this.projectStore, uri), this.projectStore.analysisRevision, this.pluginManager.registry, clip ? clipRange(clip) : undefined);
   }
@@ -52,7 +55,11 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     panel.webview.options = { enableScripts: true };
     panel.webview.html = rawLogHtml(panel.webview, this.extensionUri, document.fileName, vscode.env.language);
     const send = (message: ToWebviewMessage) => panel.webview.postMessage(message);
-    const clipId = clipIdFromUri(document.uri); const clip = clipId ? this.projectStore.current.clips.find((item) => item.id === clipId) : undefined;
+    const clipId = clipIdFromUri(document.uri); const clip = clipId ? this.projectStore.findClip(clipId, document.uri.fsPath) : undefined;
+    // Where this screen's log is, as the project has it. A move made here is followed once, when it happens: this screen held
+    // the log before the move. Nothing is rewritten later, so a new file put at the old place is never taken for it.
+    let source = this.projectStore.clipRef('', document.uri.fsPath).sourcePath;
+    const moveSubscription = this.projectStore.onDidMoveLogs((moves) => { source = movedSource(source, moves); });
     let viewStateSaveErrorShown = false;
     if (clip) panel.title = clip.name;
     // A Clip has no view settings of its own: it uses those of its log in the place it was opened from.
@@ -100,7 +107,9 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     const openedClipRange = clip ? JSON.stringify(clipRange(clip)) : undefined;
     const projectSubscription = this.projectStore.onDidChange(() => {
       if (clip) {
-        const current = this.projectStore.current.clips.find((item) => item.id === clip.id);
+        const current = this.projectStore.findClip(clipId ?? clip.id, source);
+        // Its Clip was deleted: the tab would show a Clip that is no more, so it closes.
+        if (!current) { panel.dispose(); return; }
         if (current && JSON.stringify(clipRange(current)) !== openedClipRange) {
           const uri = document.uri; const column = panel.viewColumn; const active = panel.active; panel.dispose();
           setTimeout(() => void vscode.commands.executeCommand('vscode.openWith', uri, 'sigmixa.rawLog', { viewColumn: column, preserveFocus: !active }), 200);
@@ -121,7 +130,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     const runtimeSubscription = this.pluginManager.onDidChangeRuntime(() => {
       void document.rebuildSignals(sourceProject(this.projectStore, document.uri), knownAnalysisRevision, true).then(() => send({ type: 'definitionsChanged' }));
     });
-    panel.onDidDispose(() => { if (reloadTimer !== undefined) clearTimeout(reloadTimer); subscription.dispose(); projectSubscription.dispose(); runtimeSubscription.dispose(); visibilitySubscription.dispose(); });
+    panel.onDidDispose(() => { if (reloadTimer !== undefined) clearTimeout(reloadTimer); subscription.dispose(); projectSubscription.dispose(); moveSubscription.dispose(); runtimeSubscription.dispose(); visibilitySubscription.dispose(); });
     panel.webview.onDidReceiveMessage((message: ToExtensionMessage) => {
       if (message.type === 'ready') {
         staleSettings = false;
@@ -137,12 +146,13 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         void this.projectStore.update((project) => staleSettings ? project : switchViewSettingsScope(project, viewStateKey, message.state as Record<string, unknown>, group, message.scope)).then(() => { panel.webview.html = rawLogHtml(panel.webview, this.extensionUri, document.fileName, vscode.env.language); }).catch((error) => vscode.window.showErrorMessage(`${t('Could not switch where view settings are saved', '表示設定の切り替えに失敗しました')}: ${(error as Error).message}`)).finally(() => { ownViewSave--; });
       } else if (message.type === 'updateClipRange') {
         // The graphs already show the dragged range; whatever happens, they are told what is saved.
-        void this.projectStore.update((project) => withClipRange(project, message.clipId, message.startTimestamp, message.endTimestamp))
+        // The Clip is one of this log's: it is named by this log and its ID, so no Clip of another log can be meant.
+        void this.projectStore.update((project) => withClipRange(project, { id: message.clipId, sourcePath: source }, message.startTimestamp, message.endTimestamp))
           .catch((error) => vscode.window.showErrorMessage(t(`Could not change the Clip: ${(error as Error).message}`, `クリップを変更できませんでした: ${(error as Error).message}`)))
           .then(() => { knownClipRanges = JSON.stringify(clipRanges()); return send({ type: 'clipRanges', clips: clipRanges() }); });
       } else if (message.type === 'openClip') {
         // Opened from this log's graph, the Clip opens in the same place (group) as the log.
-        const target = this.projectStore.current.clips.find((item) => item.id === message.clipId);
+        const target = this.projectStore.findClip(message.clipId, source);
         if (target) void vscode.commands.executeCommand('sigmixa.openClip', target, { level: this.projectStore.levelOfUri(document.uri) });
       } else if (message.type === 'openText') {
         void vscode.workspace.openTextDocument({ content: message.text, language: 'plaintext' }).then((textDocument) => vscode.window.showTextDocument(textDocument, { viewColumn: vscode.ViewColumn.Beside, preview: false }));

@@ -3,6 +3,8 @@ import { strict as assert } from 'node:assert';
 import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path'; import { createHash } from 'crypto';
 import * as vscode from 'vscode';
 import { ProjectStore } from '../src/extension/storage/projectStore';
+import { withClipRange } from '../src/core/project/clipRangeEdit';
+import { movedSource } from '../src/core/project/clipIdentity';
 const w = (root: string, rel: string, text: string) => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); };
 const r = (root: string, rel: string) => JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'));
 const frame = (id: string, canId: string) => ({ id, name: id, canId, frameLength: 8, signals: [] });
@@ -280,4 +282,107 @@ test('a log moved in from outside the workspace keeps its Clips, and the setting
     assert.deepEqual(b.viewStates['log:far.asc'], { tab: 'in B' }, 'the settings made in B are the ones kept there');
     store.dispose();
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(outside, { recursive: true, force: true }); }
+});
+
+test('a link to a log outside the workspace is saved even when nothing else has been set up yet', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sigmixa-link-only-')); const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sigmixa-outside-'));
+  (vscode.workspace as any).workspaceFolders = [{ uri: vscode.Uri.file(root) }];
+  const far = path.join(outside, 'far.asc'); fs.writeFileSync(far, 'x');
+  const store = new ProjectStore(); await store.load();
+  assert.ok(!fs.existsSync(path.join(root, '.sigmixa/project.json')), 'opening a workspace creates nothing');
+  await store.addLogs('', [far]);
+  assert.deepEqual(r(root, '.sigmixa/project.json').addedLogs, [far]);
+  const again = new ProjectStore(); await again.load();
+  assert.deepEqual(again.logs, [{ path: far, level: '' }], 'the link is still there after reading the workspace again');
+});
+
+test('a group moved deeper keeps its links to logs outside it', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sigmixa-group-move-'));
+  (vscode.workspace as any).workspaceFolders = [{ uri: vscode.Uri.file(root) }];
+  w(root, 'basic.asc', 'x'); w(root, 'other/run.asc', 'x'); w(root, 'brake/own.asc', 'x'); w(root, 'brake/ref.csv', 't,v'); w(root, 'shared.csv', 't,v');
+  w(root, 'brake/.sigmixa/project.json', JSON.stringify({ schemaVersion: 4, frames: [], addedLogs: ['../basic.asc', '../other/run.asc'],
+    externalCsvSources: [{ id: 'in', path: 'ref.csv', fileName: 'ref.csv', timestampColumn: 't', timestampUnit: 's', valueColumns: [{ name: 'v' }] }, { id: 'out', path: '../shared.csv', fileName: 'shared.csv', timestampColumn: 't', timestampUnit: 's', valueColumns: [{ name: 'v' }] }],
+    viewStates: { 'log:../basic.asc': { tab: 'in brake' }, 'log:own.asc': { tab: 'own' } } }));
+  const store = new ProjectStore(); await store.load();
+  assert.deepEqual(store.logs.filter((log) => log.level === 'brake').map((log) => log.path).sort(), ['basic.asc', 'other/run.asc']);
+  fs.mkdirSync(path.join(root, 'tests')); fs.renameSync(path.join(root, 'brake'), path.join(root, 'tests/brake'));
+  await store.followRenames([{ from: path.join(root, 'brake'), to: path.join(root, 'tests/brake') }]); await store.load();
+  assert.deepEqual(store.logs.filter((log) => log.level === 'tests/brake').map((log) => log.path).sort(), ['basic.asc', 'other/run.asc'], 'the same two logs, where they still are');
+  const file = r(root, 'tests/brake/.sigmixa/project.json');
+  assert.deepEqual(file.addedLogs, ['../../basic.asc', '../../other/run.asc'], 'written relative to the new place');
+  assert.deepEqual(file.externalCsvSources.map((source: any) => source.path), ['ref.csv', '../../shared.csv'], 'a file inside the group moved with it; one outside is still the same file');
+  assert.deepEqual(file.viewStates['log:../../basic.asc'], { tab: 'in brake' }); assert.deepEqual(file.viewStates['log:own.asc'], { tab: 'own' });
+});
+
+test('a group copied while one of its Clips is open: nothing is rewritten, and the open screen keeps meaning its own Clip', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sigmixa-clip-copy-'));
+  (vscode.workspace as any).workspaceFolders = [{ uri: vscode.Uri.file(root) }];
+  const original = JSON.stringify({ schemaVersion: 4, frames: [], clips: [{ id: 'c1', name: 'Stop', sourcePath: 'run.asc', sourceFileName: 'run.asc', range: { start: 1, end: 2 } }] });
+  w(root, 'B/run.asc', 'x'); w(root, 'B/.sigmixa/project.json', original);
+  const store = new ProjectStore(); await store.load();
+  const held = { id: 'c1', file: path.join(root, 'B/run.asc') };   // what an open Clip tab holds: the ID and the log file
+  fs.cpSync(path.join(root, 'B'), path.join(root, 'A'), { recursive: true }); await store.load();
+  assert.deepEqual(store.current.clips.map((item) => [item.sourcePath, item.id]), [['A/run.asc', 'c1'], ['B/run.asc', 'c1']], 'no ID is changed');
+  assert.equal(fs.readFileSync(path.join(root, 'A/.sigmixa/project.json'), 'utf8'), original); assert.equal(fs.readFileSync(path.join(root, 'B/.sigmixa/project.json'), 'utf8'), original);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'A/.sigmixa')), ['project.json'], 'reading the workspace writes nothing');
+  assert.equal(store.findClip(held.id, held.file)?.sourcePath, 'B/run.asc');
+  await store.update((project) => withClipRange(project, store.clipRef(held.id, held.file), 5, 6));
+  assert.deepEqual(r(root, 'B/.sigmixa/project.json').clips.map((item: any) => item.range), [{ start: 5, end: 6 }]);
+  assert.deepEqual(r(root, 'A/.sigmixa/project.json').clips.map((item: any) => item.range), [{ start: 1, end: 2 }], 'the copy is untouched');
+});
+
+test('copied while the workspace was closed, then the Clip of the original is deleted: its restored tab finds no Clip, not the copy', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sigmixa-clip-closed-copy-'));
+  (vscode.workspace as any).workspaceFolders = [{ uri: vscode.Uri.file(root) }];
+  w(root, 'B/run.asc', 'x'); w(root, 'B/.sigmixa/project.json', JSON.stringify({ schemaVersion: 4, frames: [], clips: [{ id: 'c1', name: 'Stop', sourcePath: 'run.asc', sourceFileName: 'run.asc', range: { start: 1, end: 2 } }] }));
+  fs.cpSync(path.join(root, 'B'), path.join(root, 'A'), { recursive: true });
+  // The copy's Clip is given another range, so the two can be told apart by what a screen would show.
+  w(root, 'A/.sigmixa/project.json', JSON.stringify({ schemaVersion: 4, frames: [], clips: [{ id: 'c1', name: 'Stop', sourcePath: 'run.asc', sourceFileName: 'run.asc', range: { start: 5, end: 6 } }] }));
+  const store = new ProjectStore(); await store.load();
+  const tabOfB = { id: 'c1', file: path.join(root, 'B/run.asc') };
+  assert.equal(store.findClip(tabOfB.id, tabOfB.file)?.startTimestamp, 1, 'the restored tab of B shows the Clip of B');
+  // The Clip of B is deleted.
+  await store.update((project) => ({ ...project, clips: project.clips.filter((item) => item.sourcePath !== 'B/run.asc') }));
+  assert.equal(store.findClip(tabOfB.id, tabOfB.file), undefined, 'it is gone; the Clip of A (5 to 6 s) is not taken for it');
+  await store.update((project) => withClipRange(project, store.clipRef(tabOfB.id, tabOfB.file), 8, 9));
+  assert.deepEqual(r(root, 'A/.sigmixa/project.json').clips.map((item: any) => item.range), [{ start: 5, end: 6 }], 'and a range change from that tab changes nothing');
+  const restarted = new ProjectStore(); await restarted.load();
+  assert.equal(restarted.findClip(tabOfB.id, tabOfB.file), undefined); assert.equal(restarted.findClip('c1', path.join(root, 'A/run.asc'))?.startTimestamp, 5);
+});
+
+test('a move is followed by those who held the log at the time, once; a new file put at the old place is another log', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sigmixa-clip-move-'));
+  (vscode.workspace as any).workspaceFolders = [{ uri: vscode.Uri.file(root) }];
+  const clip = (start: number) => JSON.stringify({ schemaVersion: 4, frames: [], clips: [{ id: 'c1', name: 'Stop', sourcePath: 'run.asc', sourceFileName: 'run.asc', range: { start, end: start + 1 } }] });
+  w(root, 'A/run.asc', 'x'); w(root, 'A/.sigmixa/project.json', clip(1));
+  const store = new ProjectStore(); await store.load();
+  // A screen holds the Clip of A/run.asc. It follows moves when told of them, and must never see its Clip missing meanwhile.
+  let held = store.clipRef('c1', path.join(root, 'A/run.asc')).sourcePath; const missing: string[] = [];
+  store.onDidMoveLogs((moves) => { held = movedSource(held, moves); });
+  store.onDidChange(() => { if (!store.findClip('c1', held)) missing.push(held); });
+  // A is moved to B.
+  fs.renameSync(path.join(root, 'A'), path.join(root, 'B')); await store.followRenames([{ from: path.join(root, 'A'), to: path.join(root, 'B') }]);
+  assert.equal(held, 'B/run.asc'); assert.equal(store.findClip('c1', held)?.startTimestamp, 1); assert.deepEqual(missing, []);
+  // B is copied to make a new A, whose Clip is given another range.
+  fs.cpSync(path.join(root, 'B'), path.join(root, 'A'), { recursive: true }); w(root, 'A/.sigmixa/project.json', clip(5)); await store.load();
+  // A path given now is taken as it is: the earlier move from A to B is not applied to it.
+  assert.equal(store.findClip('c1', path.join(root, 'A/run.asc'))?.startTimestamp, 5, 'the Clip of the new A is found at A');
+  assert.equal(store.findClip('c1', held)?.startTimestamp, 1, 'the screen that held the moved log still means the one in B');
+  await store.update((project) => withClipRange(project, store.clipRef('c1', path.join(root, 'A/run.asc')), 7, 8));
+  assert.deepEqual(r(root, 'A/.sigmixa/project.json').clips.map((item: any) => item.range), [{ start: 7, end: 8 }], 'a range change of the Clip of A changes A');
+  assert.deepEqual(r(root, 'B/.sigmixa/project.json').clips.map((item: any) => item.range), [{ start: 1, end: 2 }], 'and leaves B as it was');
+  // A log renamed inside its folder: the holder follows, again without seeing the Clip missing.
+  fs.renameSync(path.join(root, 'B/run.asc'), path.join(root, 'B/renamed.asc')); await store.followRenames([{ from: path.join(root, 'B/run.asc'), to: path.join(root, 'B/renamed.asc') }]);
+  assert.equal(held, 'B/renamed.asc'); assert.equal(store.findClip('c1', held)?.startTimestamp, 1); assert.deepEqual(missing, []);
+  assert.equal(store.findClip('c1', path.join(root, 'B/run.asc')), undefined, 'the old path, given afresh, finds nothing: no rename is guessed');
+});
+
+test('a workspace that cannot be written opens all the same when a group was copied', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sigmixa-clip-readonly-'));
+  (vscode.workspace as any).workspaceFolders = [{ uri: vscode.Uri.file(root) }];
+  w(root, 'B/run.asc', 'x'); w(root, 'B/.sigmixa/project.json', JSON.stringify({ schemaVersion: 4, frames: [], clips: [{ id: 'c1', name: 'Stop', sourcePath: 'run.asc', sourceFileName: 'run.asc', range: { start: 1, end: 2 } }] }));
+  fs.cpSync(path.join(root, 'B'), path.join(root, 'A'), { recursive: true });
+  const locked = [path.join(root, 'A/.sigmixa'), path.join(root, 'B/.sigmixa')]; locked.forEach((folder) => fs.chmodSync(folder, 0o555));
+  try { const store = new ProjectStore(); await store.load(); assert.equal(store.current.clips.length, 2); assert.equal(store.findClip('c1', path.join(root, 'B/run.asc'))?.sourcePath, 'B/run.asc'); }
+  finally { locked.forEach((folder) => fs.chmodSync(folder, 0o755)); }
 });

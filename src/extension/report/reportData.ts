@@ -11,7 +11,10 @@ export interface ReportTable {
   readonly timestamps: readonly number[];
   /** `values[column][row]`; null where that Signal has no value at the row's time. */
   readonly values: readonly (readonly (number | null)[])[];
+  /** The label of a value, per Signal: `labels[signalId][value]`. */
   readonly labels: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /** Rows whose label is not the one `labels` has for that value (a Plugin may label one value differently over time): `rowLabels[signalId][row]`. */
+  readonly rowLabels?: Readonly<Record<string, Readonly<Record<string, string>>>>;
   readonly totalRows: number;
 }
 

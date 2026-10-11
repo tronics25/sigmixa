@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyProject, type SigMixaProject } from '../src/core/project/schema';
 import { composeWorkspace, levelOf, parentLevelOf, splitWorkspace, type LevelFile, type WorkspaceLog } from '../src/core/project/folderLevels';
+import { clipKey, findClip, movedSource } from '../src/core/project/clipIdentity';
 import { overrideTemplate, promoteGroupFrames, resolveGroupProject } from '../src/core/project/analysisGroups';
 import type { ManualFrameDefinition } from '../src/core/manual/manualDefinition';
+import { withClipRange } from '../src/core/project/clipRangeEdit';
 
 const frame = (id: string, canId: number): ManualFrameDefinition => ({ id, name: id, canId, extended: false, frameLength: 8, signals: [] });
 const level = (folder: string, change: Partial<SigMixaProject> = {}): LevelFile => ({ folder, project: { ...emptyProject(), ...change } });
@@ -81,4 +83,41 @@ test('a new Frame in a group starts from the definition it overrides, found in t
   assert.equal(overrideTemplate(project, 'A', 0x100, true, 'x'), undefined, 'standard and extended IDs are different CAN IDs');
   fromB.signals[0].name = 'changed';
   assert.equal(project.analysisGroups!.find((group) => group.id === 'B')!.frames[0].signals[0].name, 'Speed', 'the copy does not change the definition above');
+});
+
+test('a Clip is its log and its ID together: a copied group has Clips of its own, and no ID is changed', () => {
+  const clip = { id: 'clip-1', name: 'Stop 1', sourcePath: 'run.asc', sourceFileName: 'run.asc', startTimestamp: 1, endTimestamp: 2 };
+  // B is the original and A its copy, read first. The files hold the same ID twice.
+  const files = [level(''), level('A', { clips: [clip] }), level('B', { clips: [clip] })];
+  const logs: WorkspaceLog[] = [{ path: 'A/run.asc' }, { path: 'B/run.asc' }];
+  const project = composeWorkspace(files, logs);
+  assert.deepEqual(project.clips.map((item) => [item.sourcePath, item.id]), [['A/run.asc', 'clip-1'], ['B/run.asc', 'clip-1']], 'both keep the ID they have in their files');
+  assert.notEqual(clipKey(project.clips[0]), clipKey(project.clips[1]));
+  const ofB = { id: 'clip-1', sourcePath: 'B/run.asc' }; const ofA = { id: 'clip-1', sourcePath: 'A/run.asc' };
+  assert.equal(findClip(project.clips, ofB), project.clips[1]); assert.equal(findClip(project.clips, ofA), project.clips[0]);
+  // A change to the Clip of B is a change to that Clip only.
+  const changed = withClipRange(project, ofB, 5, 6);
+  assert.deepEqual(changed.clips.map((item) => [item.sourcePath, item.startTimestamp, item.endTimestamp]), [['A/run.asc', 1, 2], ['B/run.asc', 5, 6]]);
+  const split = splitWorkspace(changed, ['', 'A', 'B'], logs);
+  assert.deepEqual(split.get('A')!.clips.map((item) => [item.id, item.startTimestamp]), [['clip-1', 1]]); assert.deepEqual(split.get('B')!.clips.map((item) => [item.id, item.startTimestamp]), [['clip-1', 5]]);
+  // The Clip of B is deleted. Whoever still holds it finds nothing: the Clip of A is another Clip.
+  const deleted = { ...changed, clips: changed.clips.filter((item) => clipKey(item) !== clipKey(ofB)) };
+  assert.equal(findClip(deleted.clips, ofB), undefined); assert.equal(findClip(deleted.clips, ofA)?.startTimestamp, 1);
+  assert.equal(withClipRange(deleted, ofB, 8, 9), deleted, 'and a change meant for it changes nothing');
+  // A log that is not where the holder says has no such Clip either; nothing is guessed from the ID.
+  assert.equal(findClip(project.clips, { id: 'clip-1', sourcePath: 'elsewhere/run.asc' }), undefined);
+});
+
+test('two Clips of one log with the same ID, from two files of an older version, are told apart', () => {
+  const clip = { id: 'clip-1', name: 'Stop 1', sourcePath: 'A/run.asc', sourceFileName: 'run.asc', startTimestamp: 1, endTimestamp: 2 };
+  // The root file names the log from the workspace, the group's file from its own folder: the same log, the same ID.
+  const project = composeWorkspace([level('', { clips: [clip] }), level('A', { clips: [{ ...clip, sourcePath: 'run.asc', name: 'Again' }] })], [{ path: 'A/run.asc' }]);
+  assert.deepEqual(project.clips.map((item) => [item.sourcePath, item.id, item.name]), [['A/run.asc', 'clip-1', 'Stop 1'], ['A/run.asc', 'clip-1-2', 'Again']]);
+});
+
+test('a held log path follows a move of the log or of a folder above it; other paths are left alone', () => {
+  const moves = [{ from: 'A', to: 'B' }];
+  assert.equal(movedSource('A/run.asc', moves), 'B/run.asc'); assert.equal(movedSource('A/sub/run.asc', moves), 'B/sub/run.asc'); assert.equal(movedSource('A', moves), 'B');
+  assert.equal(movedSource('AB/run.asc', moves), 'AB/run.asc', 'a folder whose name only starts the same is another folder');
+  assert.equal(movedSource('C/run.asc', moves), 'C/run.asc'); assert.equal(movedSource('A/run.asc', []), 'A/run.asc');
 });

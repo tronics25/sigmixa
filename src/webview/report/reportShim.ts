@@ -1,4 +1,4 @@
-import { reorderComparisonTargets, setComparisonTargetOffset, type ComparisonDefinition } from '../../core/project/comparison';
+import { reorderComparisonTargets, sampleTimes, setComparisonTargetOffset, snapAnchor, stepAnchor, type ComparisonDefinition } from '../../core/project/comparison';
 import type { SignalSample } from '../../core/signal/signal';
 import type { ComparisonSeriesDto, ComparisonToExtension, ComparisonToWebview } from '../../extension/comparison/comparisonProtocol';
 import type { ReportData } from '../../extension/report/reportData';
@@ -47,11 +47,14 @@ function handle(message: ComparisonToExtension): void {
       send({ type: 'measuredSignals', requestId: message.requestId, samples }); return;
     }
     case 'shiftOffset': case 'setOffset': case 'resetOffset': {
+      // The same stepping as the comparison screen (it may shift either way, past the first or last time), over the times
+      // the report has: its samples.
       const list = times(message.targetId); const base = start(message.targetId); const current = comparison.targets.find((target) => target.id === message.targetId)?.offset ?? 0;
-      let anchor = base + current;
+      if (!list.length) return;
+      const frameTimes = sampleTimes(list); let anchor = snapAnchor(frameTimes, base + current);
       if (message.type === 'resetOffset') anchor = base;
-      else if (message.type === 'setOffset') { const target = base + message.offset; anchor = list.reduce((best, time) => Math.abs(time - target) < Math.abs(best - target) ? time : best, list[0] ?? target); }
-      else for (let step = 0; step < Math.max(1, message.steps ?? 1); step++) { const next = message.direction > 0 ? list.find((time) => time > anchor) : [...list].reverse().find((time) => time < anchor); if (next === undefined) break; anchor = next; }
+      else if (message.type === 'setOffset') anchor = snapAnchor(frameTimes, base + message.offset);
+      else { const steps = Math.max(1, Math.min(100, Math.floor(message.steps ?? 1))); for (let step = 0; step < steps; step++) anchor = stepAnchor(frameTimes, anchor, message.direction); }
       comparison = setComparisonTargetOffset(comparison, message.targetId, anchor - base); send({ type: 'comparison', comparison }); return;
     }
     case 'reorderTargets': comparison = reorderComparisonTargets(comparison, message.order); send({ type: 'comparison', comparison }); return;

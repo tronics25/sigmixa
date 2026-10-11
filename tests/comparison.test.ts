@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { removeComparisonTarget, reorderComparisonTargets, setComparisonTargetOffset, splitSignalGroupsByTarget, uniqueComparisonTargets, type ComparisonDefinition, snapAnchor, stepAnchor, type FrameTimes } from '../src/core/project/comparison';
+import { removeComparisonTarget, reorderComparisonTargets, setComparisonTargetOffset, splitSignalGroupsByTarget, uniqueComparisonTargets, type ComparisonDefinition, sampleTimes, snapAnchor, stepAnchor, type FrameTimes } from '../src/core/project/comparison';
 
 const base: ComparisonDefinition = {
   id: 'cmp', name: 'Comparison 1',
@@ -59,4 +59,14 @@ test('a time shift moves both ways in steps of the target own frames, past eithe
   assert.deepEqual(walk(8, 1, 4), [9, 9.5, 10, 10.5], 'and comes back the same way');
   assert.equal(snapAnchor(times, 10.7), 10.5); assert.equal(snapAnchor(times, 9.3), 9.5, 'a dragged shift before the start is kept, not reset to the start');
   assert.equal(snapAnchor(times, 13.2), 13);
+});
+
+test('a report steps its time shift like the comparison screen, also to before the first sample', () => {
+  const times = sampleTimes([10, 10.5, 11, 12]);
+  assert.equal(times.first, 10); assert.equal(times.last, 12);
+  assert.equal(times.nearest(10.7), 10.5); assert.equal(times.nearest(99), 12); assert.equal(times.adjacent(10.5, 1), 11); assert.equal(times.adjacent(10.5, -1), 10); assert.equal(times.adjacent(10.7, 1), 11); assert.equal(times.adjacent(10, -1), undefined);
+  const walk = (from: number, direction: -1 | 1, count: number) => { const out: number[] = []; let anchor = from; for (let index = 0; index < count; index++) out.push(anchor = stepAnchor(times, anchor, direction)); return out; };
+  assert.deepEqual(walk(10, -1, 3), [9.5, 9, 8], 'a negative shift is possible, as on the comparison screen');
+  assert.deepEqual(walk(12, 1, 2), [13, 13.5]);
+  assert.equal(snapAnchor(times, 9.3), 9.5, 'a dragged shift before the start is kept');
 });

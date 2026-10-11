@@ -10,6 +10,7 @@ import type { LogViewState, SignalGroupDto } from '../editors/rawLogProtocol';
 import { t } from '../i18n';
 import type { ReportData, ReportTable } from './reportData';
 import { REPORT_THEME } from './reportTheme';
+import { reportTableCells } from './reportTableCells';
 
 export type ReportDetail = 'standard' | 'full';
 const STANDARD_POINTS = 20_000;
@@ -37,9 +38,8 @@ export function reportTable(document: RawLogDocument, signalIds: readonly string
   if (!signalIds.length) return undefined;
   const { rows, total } = document.reportTable(signalIds, detail === 'full' ? FULL : STANDARD_ROWS);
   if (total > rows.length) notices.push(t(`Table: ${total.toLocaleString()} → ${rows.length.toLocaleString()} rows (thinned)`, `テーブル: ${total.toLocaleString()} 行 → ${rows.length.toLocaleString()} 行（間引き）`));
-  const labels: Record<string, Record<string, string>> = {};
-  const values = signalIds.map((id) => rows.map((row) => { const sample = row.values.get(id); if (!sample || !Number.isFinite(sample.value)) return null; if (sample.valueLabel) (labels[id] ??= {})[String(sample.value)] = sample.valueLabel; return sample.value; }));
-  return { signalIds: [...signalIds], timestamps: rows.map((row) => row.timestamp), values, labels, totalRows: total };
+  const { values, labels, rowLabels } = reportTableCells(signalIds, rows.map((row) => signalIds.map((id) => row.values.get(id))));
+  return { signalIds: [...signalIds], timestamps: rows.map((row) => row.timestamp), values, labels, ...(Object.keys(rowLabels).length ? { rowLabels } : {}), totalRows: total };
 }
 
 /** Preserve the localized name for legacy workspaces with no explicit Visualize views. */

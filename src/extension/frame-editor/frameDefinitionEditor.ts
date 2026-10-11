@@ -1,4 +1,6 @@
-import { overrideTemplate, updateGroup } from '../../core/project/analysisGroups';
+import { overrideTemplate, sharedSignalIds, updateGroup } from '../../core/project/analysisGroups';
+import type { SigMixaProject } from '../../core/project/schema';
+import { t } from '../i18n';
 import { randomUUID } from 'crypto';
 import * as vscode from 'vscode';
 import type { Diagnostic } from '../../core/diagnostics/diagnostic';
@@ -81,13 +83,26 @@ export class FrameDefinitionEditor implements vscode.Disposable {
     const frame = normalizeFrameDefinition({ ...candidate, id: frameId, origin: current.origin });
     const validation = validateFrameDefinition(frame);
     const diagnostics: Diagnostic[] = [...validation.diagnostics];
+    const apply = (project: SigMixaProject): SigMixaProject => groupId ? updateGroup(project, groupId, (group) => ({ ...group, frames: group.frames.map((item) => item.id === frameId ? frame : item) })) : ({ ...project, frames: project.frames.map((item) => item.id === frameId ? frame : item) });
     const duplicate = this.frames(groupId).find((item) => item.id !== frameId && item.canId === frame.canId && item.extended === frame.extended);
     if (duplicate) diagnostics.push({ id: `definition:FRAME_CAN_ID_DUPLICATE:${frameId}`, source: 'definition', code: 'FRAME_CAN_ID_DUPLICATE', severity: 'error', message: `CAN ID is already registered as “${duplicate.name}”.` });
     const otherSignalIds = new Set(this.frames(groupId).filter((item) => item.id !== frameId).flatMap((item) => [...item.signals, ...(item.derivedSignals ?? [])].map((signal) => signal.id)));
     for (const signal of [...frame.signals, ...(frame.derivedSignals ?? [])]) if (otherSignalIds.has(signal.id)) diagnostics.push({ id: `definition:SIGNAL_ID_PROJECT_DUPLICATE:${signal.id}`, source: 'definition', code: 'SIGNAL_ID_PROJECT_DUPLICATE', severity: 'error', message: `Signal ID “${signal.id}” is already used by another frame.`, details: { signalId: signal.id } });
+    // The same check over every place the Frame applies in: an override shares its Signal IDs with the definition it
+    // started from, so the two must stay on one CAN ID, or samples of two CAN IDs would be mixed into one Signal.
+    if (!diagnostics.length) {
+      const next = apply(this.store.current); const before = new Set(sharedSignalIds(this.store.current).map((item) => `${item.place ?? ''}|${item.signalId}`));
+      const clash = sharedSignalIds(next).find((item) => !before.has(`${item.place ?? ''}|${item.signalId}`) && item.frames.some((item) => item.id === frameId));
+      if (clash) {
+        const other = clash.frames.find((item) => item.id !== frameId) ?? clash.frames[0]; const where = clash.place === undefined ? t('the workspace', 'ワークスペース') : this.store.placeLabel(clash.place);
+        diagnostics.push({ id: `definition:FRAME_OVERRIDE_CAN_ID:${frameId}`, source: 'definition', code: 'FRAME_OVERRIDE_CAN_ID', severity: 'error',
+          message: t(`This Frame and “${formatCanId(other.canId, other.extended)} ${other.name}” define the same Signals (${clash.signalName}, …), so in ${where} both would apply and their values would be mixed. Keep the two on the same CAN ID.`,
+            `このフレームと「${formatCanId(other.canId, other.extended)} ${other.name}」は同じシグナル（${clash.signalName} など）を定義しています。CAN ID が異なると${where}で両方が有効になり、値が混ざります。2 つは同じ CAN ID のままにしてください。`) });
+      }
+    }
     if (diagnostics.length) { await this.send(panel, { type: 'saveResult', revision, saved: false, diagnostics }); return; }
     try {
-      await this.store.update((project) => groupId ? updateGroup(project, groupId, (group) => ({ ...group, frames: group.frames.map((item) => item.id === frameId ? frame : item) })) : ({ ...project, frames: project.frames.map((item) => item.id === frameId ? frame : item) }));
+      await this.store.update(apply);
       panel.title = frame.name;
       await this.send(panel, { type: 'saveResult', revision, saved: true, diagnostics: [], frame });
     } catch (error) {

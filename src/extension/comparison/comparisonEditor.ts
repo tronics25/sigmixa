@@ -9,6 +9,7 @@ import { t } from '../i18n';
 import { RawLogDocument } from '../editors/rawLogDocument';
 import type { MeasuredSignalDto, SignalGroupDto } from '../editors/rawLogProtocol';
 import { signalCatalogGroups } from '../editors/signalCatalogGroups';
+import { movedSource } from '../../core/project/clipIdentity';
 import { chooseExportFormat, requireRenderedImage, saveRenderedImage } from '../imageExport';
 import type { PluginManager } from '../plugins/pluginManager';
 import { sourceGroup, sourceProject } from '../sidebar/analysisGroupsProvider';
@@ -36,7 +37,7 @@ export class ComparisonEditor implements vscode.Disposable {
     const targets = uniqueComparisonTargets(seeds.map((seed) => ({ ...seed, id: randomUUID(), offset: 0 })));
     if (targets.length < 2) { void vscode.window.showInformationMessage(t('Select two or more logs or Clips to compare.', '比較するログまたはクリップを2つ以上選んでください。')); return; }
     // The first graph starts with the Signals of the first graph in the view settings of the place the first target was selected in.
-    const first = targets[0]; const firstClip = first.kind === 'clip' ? this.store.current.clips.find((clip) => clip.id === first.clipId) : undefined;
+    const first = targets[0]; const firstClip = first.kind === 'clip' && first.clipId && first.sourcePath ? this.store.findClip(first.clipId, first.sourcePath) : undefined;
     const firstFile = path.isAbsolute(first.sourcePath ?? '') ? first.sourcePath! : path.resolve(workspaceRoot() ?? '', first.sourcePath ?? '');
     const firstUri = first.kind === 'clip' ? firstClip && this.store.clipUri(firstClip, first.level) : first.level === undefined ? vscode.Uri.file(firstFile) : this.store.logUri(firstFile, first.level);
     const settings = firstUri ? resolveViewSettings(this.store.current, this.store.viewKey(firstUri), sourceGroup(this.store, firstUri)) : {};
@@ -78,6 +79,8 @@ class ComparisonSession implements vscode.Disposable {
     this.subscriptions.push(
       this.panel.webview.onDidReceiveMessage((message: ComparisonToExtension) => void this.handle(message)),
       this.store.onDidChange(() => this.projectChanged()),
+      // The targets were chosen before the move: they follow it once, here. (Paths outside the workspace are not moved by it.)
+      this.store.onDidMoveLogs((moves) => { this.comparison = { ...this.comparison, targets: this.comparison.targets.map((target) => target.sourcePath && !path.isAbsolute(target.sourcePath) ? { ...target, sourcePath: movedSource(target.sourcePath.replace(/\\/g, '/'), moves) } : target) }; }),
     );
     this.panel.onDidDispose(() => this.dispose());
   }
@@ -138,7 +141,9 @@ class ComparisonSession implements vscode.Disposable {
     const next = new Map<string, LoadedTarget>();
     for (const target of comparison.targets) {
       if (target.kind === 'clip') {
-        const clip = project.clips.find((item) => item.id === target.clipId);
+        // A Clip target names its Clip by log and ID. A log moved here in this session is followed; otherwise a Clip that
+        // is not there is reported as deleted, never replaced by a Clip of another log.
+        const clip = target.clipId && target.sourcePath ? this.store.findClip(target.clipId, target.sourcePath) : undefined;
         next.set(target.id, clip ? { target, clip, filePath: resolveClipPath(clip, root), uri: this.store.clipUri(clip, target.level) } : { target, filePath: '', error: t('This Clip was deleted.', 'このクリップは削除されています。') });
       } else {
         const filePath = path.isAbsolute(target.sourcePath ?? '') ? target.sourcePath! : path.resolve(root ?? '', target.sourcePath ?? '');
@@ -275,7 +280,7 @@ class ComparisonSession implements vscode.Disposable {
     if (this.analysisRevision !== this.store.analysisRevision) {
       this.analysisRevision = this.store.analysisRevision;
       void Promise.all([...this.documents].map(([key, document]) => document.rebuildSignals(sourceProject(this.store, this.levels.get(key) ?? document.uri.fsPath), this.analysisRevision))).then(() => this.load());
-    } else if ([...this.loaded.values()].some((item) => item.target.kind === 'clip' && !this.store.current.clips.some((clip) => clip.id === item.target.clipId && clip.startTimestamp === item.clip?.startTimestamp && clip.endTimestamp === item.clip?.endTimestamp && clip.name === item.clip?.name))) void this.load();
+    } else if ([...this.loaded.values()].some((item) => item.target.kind === 'clip' && !((clip) => !!clip && clip.startTimestamp === item.clip?.startTimestamp && clip.endTimestamp === item.clip?.endTimestamp && clip.name === item.clip?.name)(item.target.clipId && item.target.sourcePath ? this.store.findClip(item.target.clipId, item.target.sourcePath) : undefined))) void this.load();
   }
 
   dispose(): void {

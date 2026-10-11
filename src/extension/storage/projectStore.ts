@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { CURRENT_PROJECT_SCHEMA_VERSION, emptyProject, migrateProject, parseProjectJson, serializeProject, type AnalysisGroup, type ClipDefinition, type SigMixaProject } from '../../core/project/schema';
 import { clipViewKey, composeWorkspace, addedLogsOf, GROUP_VIEW_KEY, LEVEL_DIRECTORY, LEVEL_FILE, locationLevel, logViewKey, parseLogViewKey, splitWorkspace, type LevelFile, type WorkspaceLog } from '../../core/project/folderLevels';
+import { findClip, type ClipRef, type LogMove } from '../../core/project/clipIdentity';
 import { scanWorkspace } from './workspaceScan';
 
 /**
@@ -43,12 +44,23 @@ export class ProjectStore implements vscode.Disposable {
   private externalLogHints: readonly string[] = [];
   setExternalLogHints(paths: readonly string[]): void { this.externalLogHints = paths; }
 
+  private readonly logMoves = new vscode.EventEmitter<readonly LogMove[]>();
+  /**
+   * Logs or folders were moved or renamed here (paths as the project has them). Fired once, before the project shows the
+   * move, so whoever holds the path of a log rewrites it first and never sees its Clips missing in between.
+   */
+  readonly onDidMoveLogs = this.logMoves.event;
+  /** While a move is followed, the steps in between are not shown: the project is published once, as it is at the end. */
+  private quiet = 0; private unpublished = false; private unpublishedFromDisk = false;
+
   /** Reads every level again. Unchanged files are not reported as a change. */
   async load(): Promise<SigMixaProject> {
     const root = this.root();
     if (!root) { this.setCurrent(emptyProject()); return this.project; }
-    await this.writeChain.catch(() => undefined);
-    return this.read(root);
+    let result = this.project;
+    this.writeChain = this.writeChain.catch(() => undefined).then(async () => { result = await this.read(root); });
+    await this.writeChain;
+    return result;
   }
 
   private async read(root: vscode.Uri): Promise<SigMixaProject> {
@@ -182,27 +194,62 @@ export class ProjectStore implements vscode.Disposable {
    * locations. The workspace is read again first, so levels are written to the folders as they are now.
    */
   async followRenames(pairs: readonly { readonly from: string; readonly to: string }[]): Promise<void> {
+    const announced = pairs.map((pair) => ({ from: this.locate(pair.from), to: this.locate(pair.to) })).filter((move) => move.from !== move.to && !path.isAbsolute(move.to) && !path.isAbsolute(move.from));
+    if (announced.length) this.logMoves.fire(announced);
+    this.quiet++;
+    try { await this.follow(pairs); }
+    finally {
+      if (!--this.quiet && this.unpublished) {
+        // What was read from disk on the way is still told as such, so screens do not save stale settings over it.
+        const fromDisk = this.unpublishedFromDisk; this.unpublished = false; this.unpublishedFromDisk = false; const before = this.readingDisk; this.readingDisk = before || fromDisk;
+        try { this.changes.fire(this.project); } finally { this.readingDisk = before; }
+      }
+    }
+  }
+  private async follow(pairs: readonly { readonly from: string; readonly to: string }[]): Promise<void> {
     await this.load();
     const moves = pairs.map((pair) => ({ from: this.locate(pair.from), to: this.locate(pair.to) })).filter((move) => move.from !== move.to && !path.isAbsolute(move.to));
     if (!moves.length) return;
     const moved = (value: string) => { for (const move of moves) if (value === move.from || value.startsWith(`${move.from}/`)) return move.to + value.slice(move.from.length); return undefined; };
-    const listChange = [...(this.project.addedLogs ?? []), ...(this.project.analysisGroups ?? []).flatMap((group) => group.addedLogs ?? [])].some((file) => moved(file) !== undefined);
+    // A level's file keeps paths relative to its own folder. A level that moved was just read from its new place, so a path
+    // leading out of it was resolved from there and points somewhere else: work out what it pointed to from the old place.
+    const relinked = (level: string | undefined, file: string): string | undefined => {
+      if (!level || path.isAbsolute(file)) return undefined;
+      const move = moves.find((item) => level === item.to || level.startsWith(`${item.to}/`)); if (!move) return undefined;
+      const relative = path.posix.relative(level, file); if (!relative.startsWith('..')) return undefined;
+      const original = path.posix.normalize(path.posix.join(move.from + level.slice(move.to.length), relative)); if (original.startsWith('..')) return undefined;
+      const target = moved(original) ?? original; return target === file ? undefined : target;
+    };
+    const placed = (level: string | undefined, file: string) => relinked(level, file) ?? moved(file);
+    const groups = this.project.analysisGroups ?? [];
+    const listChange = (this.project.addedLogs ?? []).some((file) => moved(file) !== undefined) || groups.some((group) => (group.addedLogs ?? []).some((file) => placed(group.id, file) !== undefined));
+    const sourcesChange = groups.some((group) => (group.definitionDependencies?.externalCsvSources ?? []).some((source) => relinked(group.id, source.path) !== undefined));
     const clipsChange = listChange || this.project.clips.some((clip) => moved(clip.sourcePath) !== undefined);
-    const keysChange = Object.keys(this.project.viewStates).some((key) => { const parsed = parseLogViewKey(key); return !!parsed && moved(parsed.path) !== undefined; });
-    if (!clipsChange && !keysChange) return;
+    const keysChange = Object.keys(this.project.viewStates).some((key) => { const parsed = parseLogViewKey(key); return !!parsed && placed(parsed.level, parsed.path) !== undefined; });
+    if (!clipsChange && !keysChange && !sourcesChange) return;
     // A log moved into the group it was added to no longer needs the link: it is listed there as the file itself.
     const needed = (level: string) => (file: string) => path.isAbsolute(file) || locationLevel(this.levelFolders, file) !== level;
-    const follow = (list: readonly string[] | undefined, level: string) => list?.map((file) => moved(file) ?? file).filter(needed(level));
-    if (listChange) this.workspaceLogs = this.workspaceLogs.map((log) => log.level !== undefined ? { ...log, path: moved(log.path) ?? log.path } : log).filter((log) => log.level === undefined || needed(log.level)(log.path));
-    await this.update((project) => ({ ...project, addedLogs: follow(project.addedLogs, ''), analysisGroups: project.analysisGroups?.map((group) => ({ ...group, addedLogs: follow(group.addedLogs, group.id) })),
+    const follow = (list: readonly string[] | undefined, level: string) => list?.map((file) => placed(level, file) ?? file).filter(needed(level));
+    if (listChange) this.workspaceLogs = this.workspaceLogs.map((log) => log.level !== undefined ? { ...log, path: placed(log.level, log.path) ?? log.path } : log).filter((log) => log.level === undefined || needed(log.level)(log.path));
+    await this.update((project) => ({ ...project, addedLogs: follow(project.addedLogs, ''), analysisGroups: project.analysisGroups?.map((group) => ({ ...group, addedLogs: follow(group.addedLogs, group.id),
+        ...(group.definitionDependencies ? { definitionDependencies: { ...group.definitionDependencies, externalCsvSources: group.definitionDependencies.externalCsvSources.map((source) => { const next = relinked(group.id, source.path); return next === undefined ? source : { ...source, path: next }; }) } } : {}) })),
       // Clips follow their log. View settings made where the log is go with it; those made in a group it was added to stay in that group.
       clips: project.clips.map((clip) => { const next = moved(clip.sourcePath); return next === undefined ? clip : { ...clip, sourcePath: next }; }),
       // Settings follow the log into its new place. Where the log moves into a group it was added to, the settings made
       // in that group are the ones kept for it there.
-      viewStates: Object.fromEntries(Object.entries(project.viewStates).map(([key, value]) => { const parsed = parseLogViewKey(key); const next = parsed ? moved(parsed.path) : undefined;
+      viewStates: Object.fromEntries(Object.entries(project.viewStates).map(([key, value]) => { const parsed = parseLogViewKey(key); const next = parsed ? placed(parsed.level, parsed.path) : undefined;
         return [next === undefined ? key : logViewKey(this.levelFolders, next, parsed!.level), value, next !== undefined && parsed!.level !== undefined] as const; })
         .sort((a, b) => Number(a[2]) - Number(b[2])).map(([key, value]) => [key, value])) }));
   }
+
+  /** What identifies the Clip `id` of a log, named by its file or by its path as the project has it; see `ClipRef`. */
+  clipRef(id: string, fileOrSource: string): ClipRef { return { id, sourcePath: path.isAbsolute(fileOrSource) ? this.locate(fileOrSource) : fileOrSource }; }
+  /**
+   * The Clip `id` of that log, or undefined when that log has no such Clip (any more). The path is taken as it is given:
+   * nothing is guessed from the ID, and no earlier move is applied to it. A holder follows a move by rewriting the path it
+   * holds when `onDidMoveLogs` tells of it.
+   */
+  findClip(id: string, fileOrSource: string): ClipDefinition | undefined { return findClip(this.project.clips, this.clipRef(id, fileOrSource)); }
 
   /** The URI that opens a Clip from `level` (default: where its log is): the log's URI there, with the Clip named. */
   clipUri(clip: ClipDefinition, level?: string): vscode.Uri {
@@ -242,7 +289,7 @@ export class ProjectStore implements vscode.Disposable {
     await this.load();
   }
 
-  dispose(): void { this.changes.dispose(); }
+  dispose(): void { this.changes.dispose(); this.logMoves.dispose(); }
 
   private root(): vscode.Uri | undefined { return vscode.workspace.workspaceFolders?.[0]?.uri; }
   /** The start of every breadcrumb: the workspace's name, then the group folders down to `level` ('' = the workspace itself). */
@@ -260,16 +307,20 @@ export class ProjectStore implements vscode.Disposable {
       const text = `${JSON.stringify(levelJson(folder ? level : { ...level, analysisGroups: this.legacyGroups }), null, 2)}\n`;
       // An empty root file is not created just because the workspace was opened.
       if (text === this.written.get(folder) || (!this.written.has(folder) && !folder && isEmptyLevel(level) && !this.legacyGroups.length)) continue;
-      if (this.failed.has(folder)) throw new Error(`${this.label(folder)} could not be loaded. Recover it before saving changes.`);
-      const directory = vscode.Uri.joinPath(this.levelFolderUri(folder)!, LEVEL_DIRECTORY);
-      await vscode.workspace.fs.createDirectory(directory);
-      const original = this.migrationBytes.get(folder);
-      if (original) { await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(directory, `${LEVEL_FILE}.pre-v${CURRENT_PROJECT_SCHEMA_VERSION}-${Date.now()}.bak`), original); this.migrationBytes.delete(folder); }
-      const temporary = vscode.Uri.joinPath(directory, `${LEVEL_FILE}.tmp`);
-      await vscode.workspace.fs.writeFile(temporary, new TextEncoder().encode(text));
-      await vscode.workspace.fs.rename(temporary, vscode.Uri.joinPath(directory, LEVEL_FILE), { overwrite: true });
-      this.written.set(folder, text);
+      await this.writeLevel(folder, text);
     }
+  }
+
+  private async writeLevel(folder: string, text: string): Promise<void> {
+    if (this.failed.has(folder)) throw new Error(`${this.label(folder)} could not be loaded. Recover it before saving changes.`);
+    const directory = vscode.Uri.joinPath(this.levelFolderUri(folder)!, LEVEL_DIRECTORY);
+    await vscode.workspace.fs.createDirectory(directory);
+    const original = this.migrationBytes.get(folder);
+    if (original) { await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(directory, `${LEVEL_FILE}.pre-v${CURRENT_PROJECT_SCHEMA_VERSION}-${Date.now()}.bak`), original); this.migrationBytes.delete(folder); }
+    const temporary = vscode.Uri.joinPath(directory, `${LEVEL_FILE}.tmp`);
+    await vscode.workspace.fs.writeFile(temporary, new TextEncoder().encode(text));
+    await vscode.workspace.fs.rename(temporary, vscode.Uri.joinPath(directory, LEVEL_FILE), { overwrite: true });
+    this.written.set(folder, text);
   }
 
   /**
@@ -306,7 +357,7 @@ export class ProjectStore implements vscode.Disposable {
     if (nextAnalysisSignature !== this.analysisSignature) { this.analysisSignature = nextAnalysisSignature; this.analysisRevisionValue++; }
     this.project = project;
     this.revisionValue++;
-    this.changes.fire(project);
+    if (this.quiet) { this.unpublished = true; this.unpublishedFromDisk ||= this.readingDisk; } else this.changes.fire(project);
   }
 }
 
@@ -316,6 +367,7 @@ function levelJson(project: SigMixaProject): unknown {
   return analysisGroups?.length ? { ...rest, analysisGroups } : rest;
 }
 function isEmptyLevel(level: SigMixaProject): boolean {
-  return !level.frames.length && !level.plugins.length && !level.pluginBindings.length && !level.externalCsvSources.length && !level.clips.length && !level.lookupTables.length && !level.calculations.length && !Object.keys(level.viewStates).length;
+  // A link to a log elsewhere is content too: a level holding nothing but links must still be written.
+  return !level.addedLogs?.length && !level.frames.length && !level.plugins.length && !level.pluginBindings.length && !level.externalCsvSources.length && !level.clips.length && !level.lookupTables.length && !level.calculations.length && !Object.keys(level.viewStates).length;
 }
 function record(value: unknown): Record<string, unknown> { return value && typeof value === 'object' ? value as Record<string, unknown> : {}; }

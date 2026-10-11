@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyProject, migrateProject, serializeProject } from '../src/core/project/schema';
-import { groupUnusablePlugins, promoteGroupFrames, resolveGroupProject, resolvePackagePlugins } from '../src/core/project/analysisGroups';
+import { groupUnusablePlugins, promoteGroupFrames, resolveGroupProject, resolvePackagePlugins, sharedSignalIds } from '../src/core/project/analysisGroups';
 import type { ManualFrameDefinition } from '../src/core/manual/manualDefinition';
 
 const frame = (id: string, canId: number, extended = false): ManualFrameDefinition => ({ id, name: id, canId, extended, frameLength: 8, signals: [], expectedPeriodMs: 10 });
@@ -89,4 +89,19 @@ test('Plugin resolution rejects missing or incompatible registrations and never 
   const local = { ...required, source: '/receiver/code.js', config: { a: 1, b: 2 } };
   assert.equal(resolvePackagePlugins([required], [local])[0].source, local.source);
   for (const installed of [[], [{ ...local, version: '2' }], [{ ...local, enabled: false }]]) assert.throws(() => resolvePackagePlugins([required], installed), /register and enable/);
+});
+
+test('an override must stay on the CAN ID of the definition it started from, or two CAN IDs would feed one Signal', () => {
+  const signal = { id: 'sig-pressure', name: 'Brake Pressure' } as ManualFrameDefinition['signals'][number];
+  const above: ManualFrameDefinition = { ...frame('above', 0x300), signals: [signal] };
+  const overriding: ManualFrameDefinition = { ...frame('group-copy', 0x300), signals: [signal] };
+  const group = { id: 'g', name: 'g', sourcePaths: [], frames: [overriding] };
+  const fine = { ...emptyProject(), frames: [above], analysisGroups: [group] };
+  assert.deepEqual(sharedSignalIds(fine), [], 'on one CAN ID the override replaces the definition above');
+  // The group's copy is given another CAN ID: it no longer replaces the one above, and both apply in the group.
+  const moved = { ...fine, analysisGroups: [{ ...group, frames: [{ ...overriding, canId: 0x301 }] }] };
+  assert.deepEqual(sharedSignalIds(moved).map((item) => [item.place, item.signalId, item.frames.map((entry) => entry.id)]), [['g', 'sig-pressure', ['above', 'group-copy']]]);
+  // The same happens when the definition above is the one that changes its CAN ID. The workspace itself stays fine.
+  const aboveMoved = { ...fine, frames: [{ ...above, canId: 0x302 }] };
+  assert.deepEqual(sharedSignalIds(aboveMoved).map((item) => item.place), ['g']);
 });
