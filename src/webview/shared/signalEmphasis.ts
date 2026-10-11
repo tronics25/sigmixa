@@ -12,5 +12,5 @@ export function emphasizeSignal(element: HTMLElement, active: boolean, color: st
   }
   element.style.backgroundColor = `color-mix(in srgb, ${color} 12%, var(--vscode-editor-background))`;
   element.style.boxShadow = `inset 0 0 0 1px color-mix(in srgb, ${color} 45%, transparent)`;
-  element.style.borderRadius = '4px';
+  element.style.borderRadius = 'var(--sm-radius-md)';
 }

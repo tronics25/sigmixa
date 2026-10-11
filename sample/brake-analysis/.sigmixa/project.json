@@ -1,0 +1,244 @@
+{
+  "schemaVersion": 4,
+  "frames": [
+    {
+      "id": "ff-300",
+      "name": "Brake and Wheel Speed",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-brake-pressure",
+          "name": "Brake Pressure",
+          "unit": "bar",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-pedal",
+          "name": "Brake Pedal Position",
+          "unit": "%",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-speed-fl",
+          "name": "Front Left Wheel Speed",
+          "unit": "km/h",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-speed-fr",
+          "name": "Front Right Wheel Speed",
+          "unit": "km/h",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [
+        {
+          "id": "sig-pedal-pressure-ratio",
+          "name": "Pedal to Pressure Ratio",
+          "unit": "bar/%",
+          "operation": {
+            "type": "expression",
+            "expression": "[Brake Pressure] / max([Brake Pedal Position], 1)"
+          }
+        }
+      ],
+      "canId": "300"
+    }
+  ],
+  "plugins": [],
+  "pluginBindings": [],
+  "externalCsvSources": [],
+  "clips": [
+    {
+      "id": "clip-road-stop-1",
+      "name": "Stop 1",
+      "sourcePath": "road-test.asc",
+      "sourceFileName": "road-test.asc",
+      "range": {
+        "start": 2.5,
+        "end": 7
+      }
+    },
+    {
+      "id": "clip-road-stop-2",
+      "name": "Stop 2",
+      "sourcePath": "road-test.asc",
+      "sourceFileName": "road-test.asc",
+      "range": {
+        "start": 8.5,
+        "end": 13
+      }
+    },
+    {
+      "id": "clip-road-stop-3",
+      "name": "Stop 3",
+      "sourcePath": "road-test.asc",
+      "sourceFileName": "road-test.asc",
+      "range": {
+        "start": 14.5,
+        "end": 19
+      }
+    }
+  ],
+  "lookupTables": [],
+  "calculations": [],
+  "viewStates": {
+    "group-view": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-brake",
+          "kind": "graph",
+          "name": "Brake Analysis: Brake Pressure and Wheel Speed",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-brake-pressure",
+              "sig-wheel-speed-fl"
+            ],
+            "chartColors": {
+              "sig-brake-pressure": "#2563eb",
+              "sig-wheel-speed-fl": "#f97316"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:pressure",
+                "family:speed"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-pedal",
+          "kind": "graph",
+          "name": "Brake Pedal",
+          "height": 200,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-pedal"
+            ],
+            "chartColors": {
+              "sig-pedal": "#2563eb"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:percentage"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-pedal-ratio",
+          "kind": "graph",
+          "name": "Pedal to Pressure Ratio",
+          "height": 200,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-pedal-pressure-ratio"
+            ],
+            "chartColors": {
+              "sig-pedal-pressure-ratio": "#2563eb"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "unit:bar/%"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-brake",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
+      "traceSettings": {
+        "pinnedIds": [
+          "s:768",
+          "s:960"
+        ],
+        "defaultMode": "decoded",
+        "columns": [
+          "channel",
+          "direction",
+          "receivedAt",
+          "age",
+          "count",
+          "interval",
+          "minInterval",
+          "maxInterval",
+          "expected",
+          "deviation"
+        ],
+        "sort": "canId",
+        "descending": false
+      }
+    }
+  },
+  "addedLogs": [
+    "../sigmixa-basic.asc"
+  ]
+}

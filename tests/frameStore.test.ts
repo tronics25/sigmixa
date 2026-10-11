@@ -8,6 +8,15 @@ function frame(index: number, canId = index % 4): CanFrame {
   return { id: `s:${index}`, sourceId: 's', timestamp: 100 + index / 10, canId, extended: false, direction: index % 2 ? 'Tx' : 'Rx', channel: 1, dlcCode: Math.min(length, 15), dataLength: length, data: new Uint8Array(length).fill(index & 0xff) };
 }
 
+test('source time bounds include every frame regardless of arrival order or filter', () => {
+  const store = new ChunkedFrameStore(); assert.equal(store.timeRange, undefined);
+  store.append([{ ...frame(0), timestamp: 14.123456789 }, { ...frame(1), timestamp: 10.000000001 }]);
+  store.query({ offset: 0, limit: 1, filter: { canIds: [0] } });
+  store.append([{ ...frame(2), timestamp: 99.999999999 }]);
+  assert.deepEqual(store.timeRange, { start: 10.000000001, end: 99.999999999 });
+  store.clear(); assert.equal(store.timeRange, undefined);
+});
+
 test('chunked store pages and filters without exposing its backing collection', () => {
   const store = new ChunkedFrameStore(3); store.append(Array.from({ length: 20 }, (_, index) => frame(index)));
   const page = store.query({ offset: 2, limit: 3, filter: { canIds: [1] } });

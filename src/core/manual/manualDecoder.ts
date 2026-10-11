@@ -4,7 +4,7 @@ import type { CanFrame } from '../frame/canFrame';
 import type { SignalDefinition, SignalSample } from '../signal/signal';
 import { extractBits } from './bits';
 import type { ManualFrameDefinition, ManualSignalDefinition } from './manualDefinition';
-import { isSignalActive, signalDefinitionFor } from './manualDefinition';
+import { isSignalActive, signalDefinitionFor, valueLabelFor } from './manualDefinition';
 import type { ManualDerivedSignalDefinition } from './manualDefinition';
 import { compileExpression, type CompiledExpression } from '../calculation/expression';
 import { convertScaleOffset } from './scaleOffset';
@@ -77,7 +77,7 @@ export function decodeManualFrame(frame: CanFrame, definition: ManualFrameDefini
     decoded.push({
       signal,
       definition: signalDefinitionFor(definition, signal),
-      sample: { timestamp: frame.timestamp, value, quality: 'valid', ...(signal.valueLabels && Object.hasOwn(signal.valueLabels, raw.toString()) ? { valueLabel: signal.valueLabels[raw.toString()] } : {}) },
+      sample: { timestamp: frame.timestamp, value, quality: 'valid', ...(valueLabelFor(signal.valueLabels, raw) !== undefined ? { valueLabel: valueLabelFor(signal.valueLabels, raw) } : {}) },
       raw,
     });
     values[signal.name] = value;
@@ -85,8 +85,14 @@ export function decodeManualFrame(frame: CanFrame, definition: ManualFrameDefini
   for (const signal of definition.derivedSignals ?? []) {
     const location = { sourceId: frame.sourceId, frameId: frame.id };
     try {
+      const previous = context.filters.get(`${definition.id}:${signal.id}`);
+      const previousValue = previous?.value;
+      const deltaSeconds = previous?.lastTimestamp === undefined ? 0 : frame.timestamp - previous.lastTimestamp;
       const value = evaluateDerived(signal, values, frame.timestamp, definition.id, context);
-      decoded.push({ signal, definition: signalDefinitionFor(definition, signal), sample: { timestamp: frame.timestamp, value, quality: 'valid' } });
+      const state = context.filters.get(`${definition.id}:${signal.id}`);
+      const filterEvidence = signal.operation.type === 'filter' ? { previousValue: deltaSeconds > 0 ? previousValue : undefined, deltaSeconds,
+        ...(signal.operation.filter === 'moving-average' ? { sampleCount: state?.samples.length, sum: state?.sum } : {}) } : undefined;
+      decoded.push({ signal, definition: signalDefinitionFor(definition, signal), sample: { timestamp: frame.timestamp, value, quality: 'valid', ...(filterEvidence ? { filterEvidence } : {}) } });
       values[signal.name] = value;
     } catch (error) {
       diagnostics.push(createDiagnostic({ source: 'definition', code: 'DERIVED_SIGNAL_EVALUATION_ERROR', severity: 'warning', message: `${signal.name}: ${(error as Error).message}`, location, details: { signalId: signal.id, definitionId: definition.id } }));

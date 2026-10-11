@@ -113,3 +113,27 @@ function rectsOverlap(left: HoverLabelRect, right: HoverLabelRect): boolean {
 function overlapArea(candidate: HoverLabelRect, occupied: readonly HoverLabelRect[]): number {
   return occupied.reduce((sum, item) => sum + Math.max(0, Math.min(candidate.x + candidate.width, item.x + item.width) - Math.max(candidate.x, item.x)) * Math.max(0, Math.min(candidate.y + candidate.height, item.y + item.height) - Math.max(candidate.y, item.y)), 0);
 }
+
+/** One value box: the Signal's value at a marker or at the hover position. `emphasized` follows the legend's hover emphasis. */
+export interface ValueBox { readonly y: number; readonly sampleX: number; readonly sampleY: number; readonly text: string; readonly color: string; readonly lineDash?: number[]; readonly emphasized?: boolean }
+
+/**
+ * Draws value boxes next to `cursorX` without overlapping `occupied`, and adds their areas to it. An emphasized box has
+ * bolder text and a thicker border, and its width is measured in that font so the text is never cut off.
+ */
+export function paintValueBoxes(context: CanvasRenderingContext2D, cursorX: number, values: readonly ValueBox[], bounds: { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number }, occupied: HoverLabelRect[], fonts: { readonly family: string; readonly background: string }): void {
+  const font = (emphasized?: boolean) => `${emphasized ? 800 : 600} 11px ${fonts.family}`;
+  context.save(); context.textBaseline = 'middle';
+  const measured = values.map((value) => { context.font = font(value.emphasized); return { ...value, cursorX, width: context.measureText(value.text).width + 10, height: 16 }; });
+  const positioned = layoutHoverLabelBoxes(measured, bounds, occupied);
+  for (const value of positioned) {
+    context.setLineDash(value.lineDash ?? []); context.strokeStyle = value.color; context.lineWidth = 1; context.globalAlpha = .7; context.beginPath();
+    if (value.sampleX >= bounds.left && value.sampleX <= bounds.right && value.sampleY >= bounds.top && value.sampleY <= bounds.bottom) { context.arc(value.sampleX, value.sampleY, 3, 0, Math.PI * 2); context.fillStyle = value.color; context.fill(); context.moveTo(value.sampleX, value.sampleY); context.lineTo(value.placeLeft ? value.boxX + value.width : value.boxX, value.labelY); context.stroke(); }
+    context.setLineDash([]); context.globalAlpha = .92; context.fillStyle = fonts.background; context.fillRect(value.boxX, value.boxY, value.width, value.height);
+    context.globalAlpha = 1; context.strokeStyle = value.color; context.lineWidth = value.emphasized ? 2 : 1;
+    const inset = value.emphasized ? 1 : 0; context.strokeRect(value.boxX + inset, value.boxY + inset, value.width - inset * 2, value.height - inset * 2);
+    context.font = font(value.emphasized); context.fillStyle = value.color; context.fillText(value.text, value.boxX + 5, value.labelY);
+  }
+  occupied.push(...positioned.map((value) => value.rect));
+  context.restore();
+}

@@ -11,7 +11,7 @@
 
 Decode ASC or BLF captures with DBC, plot Signals, compare intervals across recordings and replay 2D/3D trajectories. SigMixa's built-in analysis runs offline and does not upload your captures.
 
-[![SigMixa in VS Code: add Signals and inspect their bits, pin chart values, create and compare Clips, and rotate a playing 3D Trajectory](media/demo.gif)](media/demo.mp4)
+[![SigMixa in VS Code: define Signals and watch the bit layout, pin graph values, follow the trace, create and compare Clips, and rotate a 3D trajectory](media/demo.gif)](media/demo.mp4)
 
 [Watch the video](media/demo.mp4)
 
@@ -20,14 +20,14 @@ A free, open-source alternative for offline CAN log analysis.
 ## Features
 
 - Import Vector ASC and BLF for Classic CAN and CAN FD, with progress, cancellation and diagnostics.
-- Define Signals visually with Intel/Motorola byte order, signed values, Scale/Offset and Multiplexing; import or export DBC definitions.
+- Define Signals visually with Intel/Motorola byte order, signed values, Scale/Offset, value labels and Multiplexing; import or export DBC definitions.
 - Create Derived Signals with expressions, linear interpolation, low-pass filters and moving averages.
-- Inspect virtualized RAW Logs and Signal Tables with filtering, automatic column sizing, multi-row copy, VS Code text-editor integration and CSV export.
-- Analyze Time Series with compatible-unit conversion, dual Y axes, drag-and-drop graph layout, zoom, CSV overlays, pinned value markers and SVG/PNG export.
-- Follow Derived Signal dependencies in a clickable flow diagram.
-- Save intervals as Clips and compare the same or different recordings with Signal selection and CAN Timestamp alignment.
-- Replay synchronized 2D/3D Trajectories with coordinate axes, grid values, point inspection, two-point measurements and SVG/PNG export.
-- Extend decoding through local Plugins with schema-generated settings.
+- Inspect RAW Logs and Signal Tables with filtering, multi-row copy, VS Code text-editor integration and CSV export.
+- Visualize any number of graphs and 2D/3D trajectories in one view, with unit conversion, pinned values and a trace of every CAN ID's latest values, intervals and expected periods.
+- Manage logs per analysis with **analysis groups**: folders that share Frame definitions and view settings, overlaid on the workspace's definitions.
+- Cut intervals out as Clips and compare logs and Clips side by side, shifting each target in time.
+- Export views as SVG/PNG or as an interactive, offline HTML report.
+- Extend decoding through local Plugins, including stateful ones, with schema-generated settings.
 - Use English or Japanese UI according to your VS Code display language.
 
 ## See SigMixa in action
@@ -52,27 +52,25 @@ Choose Signals by Frame and inspect their values at the original event timestamp
 
 [![SigMixa Signal Table showing decoded vehicle data](media/screenshots/signal-table.png)](media/screenshots/signal-table.png)
 
-### Explore behavior over time
+### Visualize graphs and trajectories together
 
-Plot multiple Signals with distinct colors, switch between actual and normalized scales, then zoom or pan through the capture. Drag unit families between graphs and left/right axes in **Graph Layout**. Hover or pin markers to inspect original samples, not interpolated values from the plotted line. Reference lines snap to the nearest original sample and show its timestamp below the graph. Value labels omit matching timestamps; asynchronous samples show only a compact signed offset such as `@-3ms` (3 ms before the line). Comparison uses time relative to each Clip's alignment anchor. **Connect gaps** affects lines only, not inspected values. Save every graph and legend as scalable SVG or fixed-resolution PNG.
+**Visualize** stacks any number of graph and trajectory views that share one time position. Each graph converts compatible units onto one axis (for example km/h from CAN and m/s from a CSV file) and shows up to two unit systems on real-value axes. Hover or pin markers to inspect original samples; hover a legend entry to emphasize a Signal. **Connect gaps** joins samples taken at different periods without changing the measured values.
 
-Compatible units share a scale, with the original unit retained when all Signals use it. Mixed units are converted to a common display unit. Up to two unit families share one fixed-height graph; additional graphs scroll vertically. Engineering units include `km/h`, `mph`, `degree`, `rad`, `Nm`, pressure units and both `m/s²` and `m/s^2`. Unknown units stay separate. Gap connection and Y-axis range settings apply across the graphs.
+Trajectories draw X/Y and optional Z Signals in 2D or 3D, with several series in one view, such as the four wheels of a vehicle. Rotate, zoom, use Top/Front/Side presets, inspect points or measure between two points.
 
-[![SigMixa Time Series chart showing vehicle Signals](media/screenshots/time-series.png)](media/screenshots/time-series.png)
+Below the views, the **trace** lists every CAN ID's latest values at the time position, with receive count, intervals and the deviation from an expected period. Play or step through time and every view follows. Export the views as SVG/PNG or as an HTML report.
 
-### Save intervals and compare recordings
+[![SigMixa Visualize: a graph converting km/h and m/s onto one speed axis, with the trace below](media/screenshots/time-series.png)](media/screenshots/time-series.png)
 
-Drag a time range in Time Series and create a Clip. Saved Clips appear under **CLIPS**, where you can reopen their RAW Log, Table, Time Series or Trajectory, navigate to the source file, or remove a Clip without changing the recording.
+[![SigMixa 3D trajectory of a car park drive: rear axle and GNSS antenna](media/screenshots/trajectory.png)](media/screenshots/trajectory.png)
 
-Compare Clips from one or several files. The initial Signal selection follows each Clip's graph selection; adjust it in the comparison pane. Align starts one CAN Timestamp at a time, distinguish Clips by line style, customize graph layout, pin values and save the comparison as SVG or PNG.
+### Analysis groups, Clips and comparison
 
-[![SigMixa Clip Comparison with aligned recordings and dual-axis graphs](media/screenshots/clip-comparison.png)](media/screenshots/clip-comparison.png)
+An analysis group is a folder with a `.sigmixa` folder: it holds the Frame definitions and view settings for one analysis and applies them to every log in it, on top of the workspace's definitions. Add a log stored elsewhere to a group and it appears there as well as where it is, using the definitions of the place it is opened from. Copy a group's folder to share it.
 
-### Replay synchronized trajectories
+When one recording holds several trials, cut each out as a Clip. Select logs and Clips in **ANALYSIS GROUPS** and compare them, shifting each one in time to line up events.
 
-Map synchronized Position X, Y and Z Signals onto 2D or 3D axes and replay the path against log time. Top, Front and Side presets use X as forward, Y as right and Z as up. Show grid values and data points, inspect coordinates, or select two points to measure elapsed time, coordinate differences, straight distance, path length and average speed. Save the current view as scalable SVG or fixed-resolution PNG.
-
-[![SigMixa 3D Trajectory view with playback controls](media/screenshots/trajectory.png)](media/screenshots/trajectory.png)
+[![SigMixa comparison of three Clips, shifted in time to line up the brake application](media/screenshots/clip-comparison.png)](media/screenshots/clip-comparison.png)
 
 ### Signal flow
 
@@ -83,16 +81,16 @@ In Frame Definition, use **Signal flow** beside a Derived Signal name. Only its 
 1. Install **SigMixa** from the VS Code Marketplace. A downloaded VSIX can also be installed from **Extensions → … → Install from VSIX…**.
 2. Open the folder containing your log files in VS Code.
 3. Open the SigMixa icon in the Activity Bar.
-4. Select **LOG FILES → Open CAN Log** and choose an ASC or BLF file.
-5. Add or edit definitions under **CAN FRAMES**, then use RAW Log, Table, Time Series or Trajectory.
+4. In **ANALYSIS GROUPS**, use **Open CAN Log**, or select a log already in the folder.
+5. Add or edit definitions under **FRAME DEFINITIONS**, then use RAW Log, Table and Visualize.
 
 For a guided tour of each analysis view, see the [User Guide](docs/user-guide.md). To explore every main workflow with prepared data and settings, open the [sample workspace](sample).
 
-Use the database button in **CAN FRAMES** to import `BO_`/`SG_` definitions from
+Use the database button in **FRAME DEFINITIONS** to import `BO_`/`SG_` definitions from
 a DBC file. The export button writes one selected Frame or all registered Frames
 back to DBC. Existing CAN IDs are never overwritten without confirmation.
 
-Project settings are saved in `.sigmixa/project.json` inside the workspace. This file contains Frame and Signal definitions, Plugin registrations, CSV sources, Clips and saved view selections.
+Settings are saved in `.sigmixa/project.json`: the workspace root's file holds the workspace's definitions, Plugin registrations, CSV sources, Clips and view settings, and each analysis group's folder has its own. Workspaces from SigMixa 1.x open as they are.
 
 ## CAN ID notation
 
@@ -108,11 +106,11 @@ Plugin authors can use the [SigMixa Plugin SDK](docs/plugin-sdk.md). Plugins are
 
 ## Sample workspace
 
-Open the [`sample`](sample) directory as a VS Code workspace and load `sigmixa-showcase.asc` or `sigmixa-showcase.blf`. The matching showcases cover log parsing, Signal decoding, Derived Signals, Plugins, External CSV, Table, Time Series, Trajectory and diagnostics. See the [sample guide](sample/README.md) for the included scenario.
+Open the [`sample`](sample) directory as a VS Code workspace. `sigmixa-basic.asc` (or `.blf`) shows the basic features: decoding, Plugins, External CSV, time series and the trace. `brake-analysis/` shows analysis groups and Clips, and `parking-drive/` shows 3D and 2D trajectories. See the [sample guide](sample/README.md).
 
 ## Compatibility notes
 
-- External CSV Signals are available in Time Series, but are not merged into the event-row Table.
+- External CSV Signals are available in graphs, but are not merged into the event-row Table.
 - Trajectory axes must come from one source and have exactly matching timestamps.
 - Plugin configuration uses SigMixa's standard schema editor; Plugin-specific custom views are not supported.
 - DBC Signal value labels (`VAL_`) are imported and exported. Edit them from the value-label button beside a Signal name; labels match RAW integers before Scale/Offset. RAW Log, Table and chart markers show the label alongside the numeric value. CSV exports remain numeric.

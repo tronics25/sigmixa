@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { parseAscFile } from '../src/parsers/asc/parseAscStream';
 
-test('stream adapter imports the ASC showcase in batches with Classic and FD frames', async () => {
+test('stream adapter imports the basic ASC log in batches with Classic and FD frames', async () => {
   const lengths = new Set<number>(); let batchCount = 0; let frames = 0;
-  const summary = await parseAscFile(path.resolve('sample/sigmixa-showcase.asc'), {
+  const summary = await parseAscFile(path.resolve('sample/sigmixa-basic.asc'), {
     sourceId: 'sample', batchSize: 64,
     onFrames: (batch) => { batchCount++; frames += batch.length; for (const frame of batch) lengths.add(frame.dataLength); },
   });
@@ -19,7 +19,7 @@ test('stream adapter imports the ASC showcase in batches with Classic and FD fra
 
 test('stream adapter cancellation keeps a valid partial result', async () => {
   const controller = new AbortController(); let frames = 0;
-  const summary = await parseAscFile(path.resolve('sample/sigmixa-showcase.asc'), {
+  const summary = await parseAscFile(path.resolve('sample/sigmixa-basic.asc'), {
     sourceId: 'cancel-sample', batchSize: 8, signal: controller.signal,
     onFrames: (batch) => { frames += batch.length; controller.abort(); },
   });

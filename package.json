@@ -2,7 +2,7 @@
   "name": "sigmixa",
   "displayName": "SigMixa — CAN Log Analyzer",
   "description": "%sigmixa.description%",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "publisher": "tronics25",
   "license": "MIT",
   "private": true,
@@ -60,10 +60,9 @@
   ],
   "activationEvents": [
     "onCustomEditor:sigmixa.rawLog",
-    "onView:sigmixa.logFiles",
-    "onView:sigmixa.clips",
     "onView:sigmixa.frames",
-    "onView:sigmixa.plugins"
+    "onView:sigmixa.plugins",
+    "onView:sigmixa.analysisGroups"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -94,12 +93,8 @@
     "views": {
       "sigmixa": [
         {
-          "id": "sigmixa.logFiles",
-          "name": "%sigmixa.views.logFiles%"
-        },
-        {
-          "id": "sigmixa.clips",
-          "name": "%sigmixa.views.clips%"
+          "id": "sigmixa.analysisGroups",
+          "name": "%sigmixa.views.analysisGroups%"
         },
         {
           "id": "sigmixa.frames",
@@ -139,7 +134,7 @@
         "command": "sigmixa.compareClips",
         "title": "%sigmixa.command.compareClips%",
         "category": "SigMixa",
-        "icon": "$(graph-line)"
+        "icon": "$(diff-multiple)"
       },
       {
         "command": "sigmixa.deleteClip",
@@ -157,7 +152,10 @@
         "command": "sigmixa.exportDbc",
         "title": "%sigmixa.command.exportDbc%",
         "category": "SigMixa",
-        "icon": "$(export)"
+        "icon": {
+          "light": "media/icons/export-light.svg",
+          "dark": "media/icons/export-dark.svg"
+        }
       },
       {
         "command": "sigmixa.openFrame",
@@ -186,18 +184,105 @@
         "title": "%sigmixa.command.refresh%",
         "category": "SigMixa",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "sigmixa.addGroup",
+        "title": "%sigmixa.command.addGroup%",
+        "category": "SigMixa",
+        "icon": "$(add)"
+      },
+      {
+        "command": "sigmixa.openGroupDefinitions",
+        "title": "%sigmixa.command.openGroupDefinitions%",
+        "category": "SigMixa",
+        "icon": "$(layers)"
+      },
+      {
+        "command": "sigmixa.makeFolderGroup",
+        "title": "%sigmixa.command.makeFolderGroup%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.revealInOS",
+        "title": "%sigmixa.command.revealInOS%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.revealInOSWindows",
+        "title": "%sigmixa.command.revealInOSWindows%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.revealInOSLinux",
+        "title": "%sigmixa.command.revealInOSLinux%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.removeAddedLog",
+        "title": "%sigmixa.command.removeAddedLog%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.openItem",
+        "title": "%sigmixa.command.openItem%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.renameItem",
+        "title": "%sigmixa.command.renameItem%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.trashLog",
+        "title": "%sigmixa.command.trashLog%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.trashLogWindows",
+        "title": "%sigmixa.command.trashLogWindows%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.deleteItem",
+        "title": "%sigmixa.command.deleteItem%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.copyPath",
+        "title": "%sigmixa.command.copyPath%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.dissolveGroup",
+        "title": "%sigmixa.command.dissolveGroup%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.transferLogs",
+        "title": "%sigmixa.command.transferLogs%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.pasteLogs",
+        "title": "%sigmixa.command.pasteLogs%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.editClipRange",
+        "title": "%sigmixa.command.editClipRange%",
+        "category": "SigMixa"
       }
     ],
     "menus": {
       "view/title": [
         {
           "command": "sigmixa.compareClips",
-          "when": "view == sigmixa.clips",
+          "when": "view == sigmixa.analysisGroups && sigmixa.canCompare",
           "group": "navigation"
         },
         {
           "command": "sigmixa.openLog",
-          "when": "view == sigmixa.logFiles",
+          "when": "view == sigmixa.analysisGroups",
           "group": "navigation"
         },
         {
@@ -219,22 +304,27 @@
           "command": "sigmixa.addPlugin",
           "when": "view == sigmixa.plugins",
           "group": "navigation"
+        },
+        {
+          "command": "sigmixa.addGroup",
+          "when": "view == sigmixa.analysisGroups",
+          "group": "navigation@1"
         }
       ],
       "view/item/context": [
         {
           "command": "sigmixa.openClipSource",
-          "when": "view == sigmixa.clips",
+          "when": "view == sigmixa.analysisGroups && viewItem == sigmixa.clip",
           "group": "navigation@1"
         },
         {
           "command": "sigmixa.compareClips",
-          "when": "view == sigmixa.clips && viewItem == sigmixa.clip",
+          "when": "view == sigmixa.analysisGroups && listMultiSelection && viewItem =~ /sigmixa\\.(clip|analysisFile|addedFile)/",
           "group": "navigation@2"
         },
         {
           "command": "sigmixa.deleteClip",
-          "when": "view == sigmixa.clips",
+          "when": "view == sigmixa.analysisGroups && viewItem == sigmixa.clip",
           "group": "inline"
         },
         {
@@ -246,12 +336,190 @@
           "command": "sigmixa.exportDbc",
           "when": "view == sigmixa.frames",
           "group": "navigation"
+        },
+        {
+          "command": "sigmixa.openGroupDefinitions",
+          "when": "view == sigmixa.analysisGroups && viewItem == sigmixa.analysisGroup",
+          "group": "inline"
+        },
+        {
+          "command": "sigmixa.addGroup",
+          "when": "view == sigmixa.analysisGroups && viewItem =~ /sigmixa\\.(analysisGroup|folder)/",
+          "group": "1_group@1"
+        },
+        {
+          "command": "sigmixa.makeFolderGroup",
+          "when": "view == sigmixa.analysisGroups && viewItem == sigmixa.folder",
+          "group": "1_group@2"
+        },
+        {
+          "command": "sigmixa.revealInOS",
+          "when": "view == sigmixa.analysisGroups && viewItem =~ /sigmixa\\.(analysisGroup|folder|analysisFile|addedFile)/ && isMac",
+          "group": "9_reveal"
+        },
+        {
+          "command": "sigmixa.revealInOSWindows",
+          "when": "view == sigmixa.analysisGroups && viewItem =~ /sigmixa\\.(analysisGroup|folder|analysisFile|addedFile)/ && isWindows",
+          "group": "9_reveal"
+        },
+        {
+          "command": "sigmixa.revealInOSLinux",
+          "when": "view == sigmixa.analysisGroups && viewItem =~ /sigmixa\\.(analysisGroup|folder|analysisFile|addedFile)/ && isLinux",
+          "group": "9_reveal"
+        },
+        {
+          "command": "sigmixa.removeAddedLog",
+          "when": "view == sigmixa.analysisGroups && viewItem == sigmixa.addedFile",
+          "group": "7_modification@2"
+        },
+        {
+          "command": "sigmixa.openLog",
+          "when": "view == sigmixa.analysisGroups && viewItem =~ /sigmixa\\.(analysisGroup|folder)/",
+          "group": "inline"
+        },
+        {
+          "command": "sigmixa.openItem",
+          "when": "view == sigmixa.analysisGroups && !listMultiSelection && viewItem =~ /sigmixa\\.(clip|analysisFile|addedFile)/",
+          "group": "navigation@0"
+        },
+        {
+          "command": "sigmixa.copyPath",
+          "when": "view == sigmixa.analysisGroups && viewItem =~ /sigmixa\\.(analysisFile|addedFile)/",
+          "group": "6_copypath"
+        },
+        {
+          "command": "sigmixa.renameItem",
+          "when": "view == sigmixa.analysisGroups && !listMultiSelection && viewItem =~ /sigmixa\\.(clip|analysisFile|analysisGroup|folder)/",
+          "group": "7_modification@1"
+        },
+        {
+          "command": "sigmixa.trashLog",
+          "when": "view == sigmixa.analysisGroups && viewItem == sigmixa.analysisFile && !isWindows",
+          "group": "7_modification@2"
+        },
+        {
+          "command": "sigmixa.trashLogWindows",
+          "when": "view == sigmixa.analysisGroups && viewItem == sigmixa.analysisFile && isWindows",
+          "group": "7_modification@2"
+        },
+        {
+          "command": "sigmixa.deleteClip",
+          "when": "view == sigmixa.analysisGroups && !listMultiSelection && viewItem == sigmixa.clip",
+          "group": "7_modification@2"
+        },
+        {
+          "command": "sigmixa.dissolveGroup",
+          "when": "view == sigmixa.analysisGroups && viewItem == sigmixa.analysisGroup",
+          "group": "7_modification@2"
+        },
+        {
+          "command": "sigmixa.transferLogs",
+          "when": "view == sigmixa.analysisGroups && viewItem =~ /sigmixa\\.(analysisFile|addedFile)/",
+          "group": "5_transfer"
+        },
+        {
+          "command": "sigmixa.editClipRange",
+          "when": "view == sigmixa.analysisGroups && !listMultiSelection && viewItem == sigmixa.clip",
+          "group": "7_modification@1"
+        },
+        {
+          "command": "sigmixa.pasteLogs",
+          "when": "view == sigmixa.analysisGroups && !listMultiSelection && viewItem =~ /sigmixa\\.(analysisGroup|folder)/",
+          "group": "5_transfer"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "sigmixa.makeFolderGroup",
+          "when": "explorerResourceIsFolder",
+          "group": "7_modification"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sigmixa.makeFolderGroup",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.revealInOS",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.revealInOSWindows",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.revealInOSLinux",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.removeAddedLog",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.openItem",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.renameItem",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.trashLog",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.trashLogWindows",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.deleteItem",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.copyPath",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.dissolveGroup",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.transferLogs",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.pasteLogs",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.editClipRange",
+          "when": "false"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "sigmixa.renameItem",
+        "key": "f2",
+        "when": "focusedView == sigmixa.analysisGroups"
+      },
+      {
+        "command": "sigmixa.deleteItem",
+        "key": "delete",
+        "mac": "cmd+backspace",
+        "when": "focusedView == sigmixa.analysisGroups"
+      },
+      {
+        "command": "sigmixa.pasteLogs",
+        "key": "ctrl+v",
+        "mac": "cmd+v",
+        "when": "focusedView == sigmixa.analysisGroups"
+      }
+    ]
   },
   "scripts": {
-    "sample:generate": "node scripts/generate-base-showcase.mjs && node scripts/add-plugin-diagnostic.mjs && node scripts/generate-reference-signals.mjs && node scripts/add-trajectory-data.mjs && node scripts/generate-showcase-blf.mjs && node scripts/generate-sample-project.mjs",
+    "sample:generate": "node scripts/generate-basic-log.mjs && node scripts/add-plugin-diagnostic.mjs && node scripts/generate-reference-signals.mjs && node scripts/add-trajectory-data.mjs && node scripts/add-2.0-coverage.mjs && node scripts/generate-basic-blf.mjs && node scripts/generate-sample-project.mjs && node scripts/generate-parking-sample.mjs && node scripts/generate-group-samples.mjs",
     "vscode:prepublish": "npm run compile",
     "compile": "node esbuild.js",
     "package:vsix": "npm run verify && npx --offline @vscode/vsce package --no-dependencies --out outputs/sigmixa-${npm_package_version}.vsix",

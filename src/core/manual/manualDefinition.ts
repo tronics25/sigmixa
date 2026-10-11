@@ -52,6 +52,7 @@ export interface ManualFrameDefinition {
   readonly extended: boolean;
   readonly name: string;
   readonly frameLength: number;
+  readonly expectedPeriodMs?: number;
   readonly multiplexing?: boolean;
   readonly signals: readonly ManualSignalDefinition[];
   readonly derivedSignals?: readonly ManualDerivedSignalDefinition[];
@@ -152,21 +153,38 @@ export function createManualSignal(
   frameLength = 8
 ): ManualSignalDefinition {
   const previousEnd = previous ? previous.byteOffset * 8 + previous.bitOffset + previous.lengthBits : 0;
+  // A new Signal takes over everything from the one above it except its name and its position: Signals next to each other
+  // are usually of the same kind. There can be only one Multiplexer, so that role is not taken over.
+  const { multiplexing, ...inherited } = previous ?? { unit: '', lengthBits: 8, signedness: 'unsigned' as const, byteOrder: 'little' as const, conversion: { type: 'scale-offset' as const, lsb: 1, lsbText: '1', offset: 0 }, multiplexing: undefined };
   return {
+    ...structuredClone(inherited),
+    ...(multiplexing?.type === 'conditional' ? { multiplexing: structuredClone(multiplexing) } : {}),
     id,
     name: 'New Signal',
-    unit: '',
     byteOffset: Math.min(Math.max(0, frameLength - 1), Math.floor(previousEnd / 8)),
     bitOffset: previousEnd % 8,
-    lengthBits: previous?.lengthBits ?? 8,
-    signedness: 'unsigned',
-    byteOrder: previous?.byteOrder ?? 'little',
-    conversion: { type: 'scale-offset', lsb: 1, lsbText: '1', offset: 0 },
   };
 }
 
 export function createManualDerivedSignal(id: string): ManualDerivedSignalDefinition {
   return { id, name: 'New Derived Signal', unit: '', operation: { type: 'expression', expression: '' } };
+}
+
+/** A value label's RAW key as written by the user: a decimal integer, or hexadecimal with a 0x prefix. */
+export function parseValueLabelRaw(key: string): bigint | undefined {
+  const text = key.trim();
+  if (/^-?(?:0|[1-9]\d*)$/.test(text) && text !== '-0') return BigInt(text);
+  const hex = /^(-?)0[xX]([0-9a-fA-F]+)$/.exec(text);
+  if (!hex) return undefined;
+  const value = BigInt(`0x${hex[2]}`); return hex[1] ? (value === 0n ? undefined : -value) : value;
+}
+const valueLabelLookups = new WeakMap<object, ReadonlyMap<string, string>>();
+/** The label for a decoded RAW value; keys may be written in decimal or hexadecimal. */
+export function valueLabelFor(labels: Readonly<Record<string, string>> | undefined, raw: bigint | number): string | undefined {
+  if (!labels) return undefined;
+  let lookup = valueLabelLookups.get(labels);
+  if (!lookup) { lookup = new Map(Object.entries(labels).flatMap(([key, label]) => { const value = parseValueLabelRaw(key); return value === undefined ? [] : [[value.toString(), label] as const]; })); valueLabelLookups.set(labels, lookup); }
+  return lookup.get(raw.toString());
 }
 
 export function validateFrameDefinition(frame: ManualFrameDefinition): ValidationResult {
@@ -182,6 +200,7 @@ export function validateFrameDefinition(frame: ManualFrameDefinition): Validatio
   if (!Number.isInteger(frame.canId) || frame.canId < 0 || frame.canId > maxCanId) add('FRAME_CAN_ID_RANGE', `CAN ID must fit the ${frame.extended ? '29' : '11'}-bit range.`);
   if (!Number.isInteger(frame.frameLength) || !VALID_FRAME_LENGTHS.has(frame.frameLength)) add('FRAME_LENGTH_RANGE', 'Frame length must be a valid Classic CAN or CAN FD payload length.');
 
+  if (frame.expectedPeriodMs !== undefined && (!Number.isFinite(frame.expectedPeriodMs) || frame.expectedPeriodMs <= 0)) add('FRAME_EXPECTED_PERIOD', 'Expected period must be a positive finite number of milliseconds.');
   const ids = new Set<string>(); const names = new Set<string>();
   const bits = new Map<number, ManualSignalDefinition[]>();
   const overlapPairs = new Set<string>();
@@ -193,8 +212,9 @@ export function validateFrameDefinition(frame: ManualFrameDefinition): Validatio
     const detail = { signalId: signal.id };
     const labelKeys = new Set<string>();
     for (const [key, label] of Object.entries(signal.valueLabels ?? {})) {
-      if (!/^-?(?:0|[1-9]\d*)$/.test(key) || key === '-0' || typeof label !== 'string') { add('SIGNAL_VALUE_LABEL_INVALID', `${signal.name}: value labels require decimal RAW integers and text labels.`, detail); continue; }
-      const raw = BigInt(key); const canonical = raw.toString();
+      const raw = parseValueLabelRaw(key);
+      if (raw === undefined || typeof label !== 'string') { add('SIGNAL_VALUE_LABEL_INVALID', `${signal.name}: value labels require decimal or hexadecimal (0x…) RAW integers and text labels.`, detail); continue; }
+      const canonical = raw.toString();
       if (labelKeys.has(canonical)) add('SIGNAL_VALUE_LABEL_DUPLICATE', `${signal.name}: duplicate RAW value ${key}.`, detail);
       labelKeys.add(canonical);
       if (Number.isInteger(signal.lengthBits) && signal.lengthBits >= 1 && signal.lengthBits <= 64) {

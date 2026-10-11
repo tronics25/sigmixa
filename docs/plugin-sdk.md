@@ -67,6 +67,12 @@ Plugins without `createSession()` retain the original stateless behavior.
 An output sample may include a source-defined `group` label. Selectors use it as
 an extra grouping level; SigMixa treats it only as display metadata.
 
+An output sample may also include a `valueLabel`, a state name for that value
+(for example `Set Failure`). Tables, the trace and reports show it next to the
+number, like a Frame's value label. `sample/.sigmixa/plugins/property-service`
+is a complete stateful example: it pairs request and response Frames, labels
+each result with the request it answers and measures the response time.
+
 ## Frame support and Bindings
 
 - `specific` declares CAN IDs and may declare `frameLength`. Registration reuses an existing matching Frame or adds a Plugin-owned Frame, then creates automatic Bindings.

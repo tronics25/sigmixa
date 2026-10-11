@@ -1,3 +1,9 @@
+import { stepperButtons } from '../shared/numberStepper';
+import { enhanceChoiceSelect } from '../shared/choiceGroup';
+import { bindColumnHover, bindResizeKeyboard, widthToFit } from '../shared/tableBehavior';
+import { COMPONENT_STYLES, DESIGN_TOKENS } from '../shared/designTokens';
+import { EDITABLE_TABLE_STYLES } from '../shared/dataTableStyle';
+import { ICON_BUTTON_STYLES, iconButton as styleIconButton } from '../shared/iconButton';
 import type { Diagnostic } from '../../core/diagnostics/diagnostic';
 import {
   createManualSignal,
@@ -7,6 +13,7 @@ import {
   occupiedBits,
   orderSignalsByDataPosition,
   parseMultiplexerActivation,
+  parseValueLabelRaw,
   validateFrameDefinition,
   type ManualFrameDefinition,
   type ManualDerivedSignalDefinition,
@@ -17,6 +24,7 @@ import type { FrameEditorToExtension, FrameEditorToWebview } from '../../extensi
 import { formatCanId, parseCanId } from '../../core/frame/canId';
 import { autoFitColumns as measureColumnWidths, type SizingColumn } from '../shared/columnSizing';
 import { t } from '../shared/i18n';
+import { isCellBlock, matchChoice, parseCopiedCells } from '../../core/manual/tablePaste';
 import { definitionControlKey, definitionSignalColor, signalBitEndpoints } from './definitionInteraction';
 import { createCurvePreview, filterStepPreview, lookupPreviewPoints } from './definitionPreview';
 import { dependencyDiagram } from './dependencyDiagram';
@@ -24,12 +32,24 @@ import { dependencyDiagram } from './dependencyDiagram';
 declare function acquireVsCodeApi(): { postMessage(message: FrameEditorToExtension): void; getState(): unknown; setState(value: unknown): void };
 const vscode = acquireVsCodeApi();
 const app = document.getElementById('app')!;
+/** Grid tables have no column attribute on cells, so a column is its position within the row. */
+const columnHover = bindColumnHover(app, (element) => {
+  const cellElement = element.closest<HTMLElement>('.signal-row>*,.derived-row>*,.signal-header>.head,.derived-header>.head'); const row = cellElement?.parentElement;
+  if (!cellElement || !row) return undefined;
+  return `${row.matches('.derived-row,.derived-header') ? 'derived' : 'signal'}:${Array.prototype.indexOf.call(row.children, cellElement)}`;
+}, (column) => {
+  const [kind, index] = column.split(':'); const head = app.querySelector(kind === 'derived' ? '.derived-header' : '.signal-header')?.children[Number(index)];
+  return head instanceof HTMLElement ? [head] : [];
+});
 let frame: ManualFrameDefinition | undefined;
+let scopeName: string | undefined;
+let bitLayoutExpanded = false;
 let serverDiagnostics: readonly Diagnostic[] = [];
 let editRevision = 0;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let multiplexerPreview = 0;
 let hoveredSignalId: string | undefined;
+let hoveredByteSignalIds: readonly string[] = [];
 let editingSignalId: string | undefined;
 let selectedSignalId: string | undefined;
 let renderPending = false;
@@ -54,23 +74,23 @@ const columnDefinitions: readonly SizingColumn<ManualSignalDefinition>[] = [
   { id: 'unit', label: 'UNIT', minWidth: 112, maxWidth: 4096, value: (signal) => signal.unit },
   { id: 'byte', label: 'BYTE', minWidth: 48, maxWidth: 48, value: (signal) => String(signal.byteOffset) },
   { id: 'bit', label: 'BIT', minWidth: 44, maxWidth: 44, value: (signal) => String(signal.bitOffset) },
-  { id: 'length', label: 'LENGTH', minWidth: 58, maxWidth: 58, value: (signal) => String(signal.lengthBits) },
+  { id: 'length', label: 'LENGTH', minWidth: 68, maxWidth: 68, value: (signal) => String(signal.lengthBits) },
   { id: 'signed', label: 'TYPE', minWidth: 96, maxWidth: 96, value: (signal) => signal.signedness },
-  { id: 'endian', label: 'BYTE ORDER', minWidth: 92, maxWidth: 92, value: (signal) => signal.byteOrder },
-  { id: 'scale', label: 'SCALE', minWidth: 100, maxWidth: 100, value: (signal) => scaleFor(signal).lsbText },
+  { id: 'endian', label: 'BYTE ORDER', minWidth: 96, maxWidth: 96, value: (signal) => signal.byteOrder },
+  { id: 'scale', label: 'SCALE', minWidth: 104, maxWidth: 104, value: (signal) => scaleFor(signal).lsbText },
   { id: 'offset', label: 'OFFSET', minWidth: 74, maxWidth: 74, value: (signal) => String(scaleFor(signal).offset) },
   { id: 'minimum', label: 'MIN', minWidth: 74, maxWidth: 74, value: (signal) => signal.minimum === undefined ? '' : String(signal.minimum) },
   { id: 'maximum', label: 'MAX', minWidth: 74, maxWidth: 74, value: (signal) => signal.maximum === undefined ? '' : String(signal.maximum) },
   { id: 'activation', label: 'ACTIVE WHEN', minWidth: 136, maxWidth: 136, value: formatMultiplexerActivation },
-  { id: 'actions', label: '', minWidth: 32, maxWidth: 32, value: () => '' },
+  { id: 'actions', label: '', minWidth: 36, maxWidth: 36, value: () => '' },
 ];
 
 const derivedColumnDefinitions: readonly SizingColumn<ManualDerivedSignalDefinition>[] = [
   { id: 'derivedName', label: 'NAME', minWidth: 160, maxWidth: 4096, flex: 1, value: (signal) => signal.name },
   { id: 'derivedUnit', label: 'UNIT', minWidth: 112, maxWidth: 4096, value: (signal) => signal.unit },
-  { id: 'derivedType', label: 'TYPE', minWidth: 140, maxWidth: 140, value: (signal) => signal.operation.type },
+  { id: 'derivedType', label: 'TYPE', minWidth: 112, maxWidth: 112, value: (signal) => signal.operation.type },
   { id: 'definition', label: 'DEFINITION', minWidth: 280, maxWidth: 4096, flex: 3, value: derivedSummary },
-  { id: 'derivedActions', label: '', minWidth: 32, maxWidth: 32, value: () => '' },
+  { id: 'derivedActions', label: '', minWidth: 36, maxWidth: 36, value: () => '' },
 ];
 
 const saved = (vscode.getState() ?? {}) as { widths?: Record<string, number> };
@@ -88,31 +108,194 @@ function derivedSummary(signal: ManualDerivedSignalDefinition): string {
   return `${signal.operation.input} · ${signal.operation.filter} · ${signal.operation.timeSeconds}s`;
 }
 
-app.innerHTML = `<style>
-*{box-sizing:border-box}body{margin:0;color:var(--vscode-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family)}#app{padding:14px;min-width:720px}h1{font-size:20px;margin:0 0 12px}h2{font-size:14px;margin:18px 0 8px}.toolbar,.header-fields{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}.field{display:flex;flex-direction:column;gap:4px}.field>label,.field>span:first-child{font-size:11px;color:var(--vscode-descriptionForeground)}
-input,select,button{font:inherit;color:inherit;background:var(--vscode-input-background);border:1px solid var(--vscode-input-border,transparent);border-radius:3px;padding:5px 7px;min-width:0}button{cursor:pointer;background:var(--vscode-button-secondaryBackground)}button:hover{background:var(--vscode-button-secondaryHoverBackground)}button.primary{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}input:focus-visible,select:focus-visible,button:focus-visible{outline:1px solid var(--vscode-focusBorder);outline-offset:1px}.spacer{flex:1}.muted{color:var(--vscode-descriptionForeground);font-size:12px}.error{color:var(--vscode-errorForeground);font-size:12px}.success{color:var(--vscode-testing-iconPassed);font-size:12px}
-.check-field{display:flex;align-items:center;gap:6px;height:29px}.check-field input{margin:0;width:auto}.bit-heading{display:flex;align-items:center;gap:8px;margin-top:18px}.bit-heading h2{margin:0}.mux-preview{display:flex;align-items:center;gap:4px}.mux-preview .icon{width:25px;height:25px}.mux-value{min-width:72px;text-align:center;font:12px var(--vscode-editor-font-family)}
-.bit-layout{border:1px solid var(--vscode-panel-border);border-radius:4px;padding:8px;overflow:auto}.byte-grid{display:grid;grid-template-columns:repeat(8,minmax(70px,1fr));gap:6px;min-width:620px}.byte{border:1px solid var(--vscode-panel-border);border-radius:3px;padding:4px}.byte-label{text-align:center;font:11px var(--vscode-editor-font-family);color:var(--vscode-descriptionForeground)}.bits{display:grid;grid-template-columns:repeat(8,1fr);gap:1px;margin-top:4px}.bit{height:15px;border:1px dashed var(--vscode-panel-border);font-size:8px;text-align:center;overflow:hidden}.overlap{background:var(--vscode-inputValidation-errorBackground)!important;border-color:var(--vscode-inputValidation-errorBorder)!important}
-.table-wrap{overflow:auto;border:1px solid var(--vscode-panel-border);border-radius:4px}.signal-header,.signal-row,.derived-header,.derived-row{display:grid;min-width:max-content;align-items:center}.derived-row{align-items:start}.signal-header,.derived-header{position:sticky;top:0;z-index:2;background:var(--vscode-editor-background);border-bottom:1px solid var(--vscode-panel-border)}.head{position:relative;padding:7px;font-size:10px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.resize{position:absolute;right:-3px;top:0;width:7px;height:100%;cursor:col-resize}.signal-row,.derived-row{border-bottom:1px solid color-mix(in srgb,var(--vscode-panel-border) 55%,transparent)}.cell{position:relative;padding:4px;overflow:visible}.cell input,.cell select{width:100%}.resolution{display:flex;align-items:center;gap:3px}.resolution>input{min-width:70px}.scale-spinner{display:flex;flex-direction:column;flex:0 0 18px}.scale-spinner button{height:13px;min-width:18px;padding:0 2px;border-radius:2px;line-height:9px;color:var(--vscode-foreground)}.scale-spinner button:hover{color:var(--vscode-foreground)}.scale-spinner .codicon{font-size:9px}.icon{display:flex;align-items:center;justify-content:center;min-width:0;padding:4px;color:var(--vscode-descriptionForeground);background:transparent}.icon:hover{color:var(--vscode-errorForeground);background:var(--vscode-toolbar-hoverBackground)}.diagnostics{margin:8px 0;padding:8px 10px;border:1px solid var(--vscode-inputValidation-errorBorder);background:var(--vscode-inputValidation-errorBackground);border-radius:4px}.diagnostics ul{margin:4px 0 0;padding-left:20px}.hidden{display:none}
-.expression-wrap{position:relative}.expression-suggestions{position:static;margin-top:3px;max-height:160px;overflow:auto;border:1px solid var(--vscode-widget-border,var(--vscode-panel-border));background:var(--vscode-editorSuggestWidget-background,var(--vscode-editor-background));box-shadow:0 4px 12px #0006}.expression-suggestions button{display:block;width:100%;padding:5px 7px;text-align:left;border:0;border-radius:0;background:transparent}.expression-suggestions button:hover,.expression-suggestions button.active{background:var(--vscode-editorSuggestWidget-selectedBackground,var(--vscode-list-activeSelectionBackground))}
-.definition-stack{display:flex;flex-direction:column;gap:5px}.definition-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:5px}.lookup-table{display:grid;grid-template-columns:minmax(100px,1fr) minmax(100px,1fr) 30px;gap:3px;align-items:center}.lookup-head{font-size:10px;font-weight:650;color:var(--vscode-descriptionForeground);padding:2px 5px}.lookup-table .icon{height:27px}.definition-stack>.secondary{align-self:flex-start}
-.invalid-row{box-shadow:inset 3px 0 var(--vscode-inputValidation-errorBorder)}.inline-error{display:block;margin-top:3px;color:var(--vscode-errorForeground);font-size:11px;white-space:normal}
-#app{min-width:0}.section-heading{display:flex;align-items:center;gap:9px;margin:16px 0 7px}.section-heading h2{margin:0}.section-heading button{padding:3px 7px}.icon:hover{color:var(--vscode-foreground)}.icon.danger:hover{color:var(--vscode-errorForeground)}
-.signal-row,.derived-row{position:relative;border-left:3px solid transparent}.signal-row{border-left-color:var(--signal-color)}.signal-header,.derived-header{border-left:3px solid transparent}.signal-row.is-hovered,.derived-row.is-hovered{background:var(--vscode-list-hoverBackground)}.signal-row.is-editing,.derived-row.is-editing{box-shadow:inset 0 0 0 1px var(--vscode-focusBorder)}.signal-row.is-selected,.derived-row.is-selected{border-left-color:var(--vscode-focusBorder)}.signal-row.invalid-row,.derived-row.invalid-row{border-left-color:var(--vscode-inputValidation-errorBorder)}
-.bit{height:22px;padding:0;min-width:0;border-radius:2px;font:11px var(--vscode-editor-font-family);color:var(--vscode-foreground);background:transparent;cursor:default}.bit.owned{background:color-mix(in srgb,var(--signal-color) 22%,var(--vscode-editor-background));border-color:color-mix(in srgb,var(--signal-color) 55%,var(--vscode-panel-border));cursor:pointer}.bit.owned:hover{background:color-mix(in srgb,var(--signal-color) 40%,var(--vscode-editor-background))}.bit.is-hovered{outline:1px solid var(--signal-color,var(--vscode-focusBorder));outline-offset:-1px}.bit.is-editing,.bit.is-selected{box-shadow:inset 0 0 0 2px var(--signal-color,var(--vscode-focusBorder))}.bit.is-msb{border-top:3px solid var(--vscode-foreground)}.bit.is-lsb{border-bottom:3px solid var(--vscode-foreground)}.bit-detail{min-height:23px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px var(--vscode-editor-font-family);color:var(--vscode-descriptionForeground);padding:4px 0 0}.bit.overlap{background:var(--vscode-inputValidation-errorBackground)!important;border-color:var(--vscode-inputValidation-errorBorder)!important}.bit:disabled{opacity:1}.definition-summary{cursor:pointer;min-height:29px;line-height:29px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.definition-details[open]>.definition-summary{color:var(--vscode-descriptionForeground)}
-.definition-visual{display:grid;grid-template-columns:minmax(140px,1fr) minmax(200px,1fr);gap:10px;align-items:start}.definition-visual .lookup-table{grid-template-columns:minmax(45px,1fr) minmax(45px,1fr) 27px}.definition-preview{min-width:0}.definition-preview svg{display:block;width:100%;height:150px;overflow:visible}.definition-preview text{font:11px var(--vscode-editor-font-family);fill:var(--vscode-descriptionForeground)}.preview-grid{stroke:var(--vscode-panel-border);stroke-width:.6;fill:none}.preview-output,.preview-extension{stroke:var(--vscode-charts-blue);stroke-width:1.7;fill:none}.preview-input{stroke:var(--vscode-descriptionForeground);stroke-dasharray:4 3;stroke-width:1.2;fill:none}.preview-extension{stroke-dasharray:3 3;opacity:.65}.preview-point{fill:var(--vscode-charts-blue);stroke:var(--vscode-editor-background);stroke-width:1;cursor:pointer}.lookup-table input.is-point-active{border-color:var(--vscode-focusBorder)}.preview-caption{font-size:11px;color:var(--vscode-descriptionForeground);margin:0 0 3px}
+app.innerHTML = `<style>${DESIGN_TOKENS}
+*{box-sizing:border-box}body{margin:0;color:var(--vscode-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family)}#app{padding:var(--sm-space-lg);min-width:720px}h1{font-size:var(--sm-font-page-title);font-weight:var(--sm-weight-semibold);margin:0 0 var(--sm-space-lg)}h2{font-size:var(--sm-font-section);font-weight:var(--sm-weight-semibold);margin:var(--sm-space-xl) 0 var(--sm-space-md)}.toolbar,.header-fields{display:flex;align-items:flex-end;gap:var(--sm-space-md);flex-wrap:wrap}.field{display:flex;flex-direction:column;gap:var(--sm-space-xs)}.field>label,.field>span:first-child{font-size:var(--sm-font-caption);color:var(--vscode-descriptionForeground)}
+input,select,button{min-width:0}button{cursor:pointer;background:var(--vscode-button-secondaryBackground)}button:hover{background:var(--vscode-button-secondaryHoverBackground)}.spacer{flex:1}.muted{color:var(--vscode-descriptionForeground);font-size:var(--sm-font-small)}.error{color:var(--vscode-errorForeground);font-size:var(--sm-font-small)}.success{color:var(--vscode-testing-iconPassed);font-size:var(--sm-font-small)}
+.check-field{display:flex;align-items:center;gap:var(--sm-space-sm);height:29px}.check-field input{margin:0;width:auto}.bit-heading{display:flex;align-items:center;gap:var(--sm-space-md);margin-top:var(--sm-space-xl)}.bit-heading h2{margin:0}.mux-preview{display:flex;align-items:center;gap:var(--sm-space-xs)}.mux-preview .icon{width:25px;height:25px}.mux-value{min-width:72px;text-align:center;font:var(--sm-font-small) var(--vscode-editor-font-family)}
+.bit-layout{border:1px solid var(--vscode-panel-border);border-radius:var(--sm-radius-md);padding:var(--sm-space-md);overflow:auto}.byte-grid{display:grid;grid-template-columns:repeat(8,minmax(70px,1fr));gap:var(--sm-space-sm);min-width:620px}.byte{border:1px solid var(--vscode-panel-border);border-radius:var(--sm-radius-legacy-3);padding:var(--sm-space-xs)}.byte-label{text-align:center;font:var(--sm-font-caption) var(--vscode-editor-font-family);color:var(--vscode-descriptionForeground)}.bits{display:grid;grid-template-columns:repeat(8,1fr);gap:1px;margin-top:var(--sm-space-xs)}.bit{height:15px;border:1px dashed var(--vscode-panel-border);font-size:var(--sm-font-legacy-8);text-align:center;overflow:hidden}.overlap{background:var(--vscode-inputValidation-errorBackground)!important;border-color:var(--vscode-inputValidation-errorBorder)!important}
+.table-wrap{overflow:auto;border:1px solid var(--vscode-panel-border);border-radius:var(--sm-radius-md)}.signal-header,.signal-row,.derived-header,.derived-row{display:grid;min-width:max-content;align-items:center}.derived-row{align-items:start}.signal-header,.derived-header{position:sticky;top:0;z-index:2;background:var(--vscode-editor-background);border-bottom:1px solid var(--vscode-panel-border)}.head{position:relative;padding:var(--sm-space-md);font-size:var(--sm-font-legacy-10);font-weight:var(--sm-weight-legacy-650);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.resize{position:absolute;right:-3px;top:0;width:7px;height:100%;cursor:col-resize}.signal-row,.derived-row{border-bottom:1px solid color-mix(in srgb,var(--vscode-panel-border) 55%,transparent)}.cell{position:relative;padding:var(--sm-space-xs);overflow:visible}.cell input,.cell select{width:100%}.resolution{display:flex;align-items:center;gap:var(--sm-space-xs)}.resolution>input{min-width:70px}.icon{display:flex;align-items:center;justify-content:center;min-width:0;padding:var(--sm-space-xs);color:var(--vscode-descriptionForeground);background:transparent}.diagnostics{margin:var(--sm-space-md) 0;padding:var(--sm-space-md) var(--sm-space-md);border:1px solid var(--vscode-inputValidation-errorBorder);background:var(--vscode-inputValidation-errorBackground);border-radius:var(--sm-radius-md)}.diagnostics ul{margin:var(--sm-space-xs) 0 0;padding-left:var(--sm-space-xl)}.hidden{display:none}
+.expression-wrap{position:relative}.expression-suggestions{position:static;margin-top:var(--sm-space-xs);max-height:160px;overflow:auto;border:1px solid var(--vscode-widget-border,var(--vscode-panel-border));background:var(--vscode-editorSuggestWidget-background,var(--vscode-editor-background));box-shadow:0 4px 12px #0006}.expression-suggestions button{display:block;width:100%;padding:var(--sm-space-xs) var(--sm-space-md);text-align:left;border:0;border-radius:0;background:transparent}.expression-suggestions button:hover,.expression-suggestions button.active{background:var(--vscode-editorSuggestWidget-selectedBackground,var(--vscode-list-activeSelectionBackground))}
+.definition-stack{display:flex;flex-direction:column;gap:var(--sm-space-xs)}.definition-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:var(--sm-space-xs)}.lookup-table{display:grid;grid-template-columns:minmax(100px,1fr) minmax(100px,1fr) 30px;gap:var(--sm-space-xs);align-items:center}.lookup-head{font-size:var(--sm-font-legacy-10);font-weight:var(--sm-weight-legacy-650);color:var(--vscode-descriptionForeground);padding:var(--sm-space-2xs) var(--sm-space-xs)}.lookup-table .icon{height:27px}.definition-stack>.secondary{align-self:flex-start}
+.invalid-row{box-shadow:inset 3px 0 var(--vscode-inputValidation-errorBorder)}.inline-error{display:block;margin-top:var(--sm-space-xs);color:var(--vscode-errorForeground);font-size:var(--sm-font-caption);white-space:normal}
+#app{min-width:0}.section-heading{display:flex;align-items:center;gap:var(--sm-space-md);margin:var(--sm-space-xl) 0 var(--sm-space-md)}.section-heading h2{margin:0}.section-heading button{padding:var(--sm-space-xs) var(--sm-space-md)}.icon:hover{color:var(--vscode-foreground)}.icon.danger:hover{color:var(--vscode-errorForeground)}
+.signal-row,.derived-row{position:relative;border-left:3px solid transparent}.signal-row{border-left-color:var(--signal-color)}.signal-header,.derived-header{border-left:3px solid transparent}.signal-row.is-hovered,.derived-row.is-hovered{background:var(--vscode-list-hoverBackground)}.signal-row.is-selected,.derived-row.is-selected{border-left-color:var(--vscode-focusBorder)}.signal-row.invalid-row,.derived-row.invalid-row{border-left-color:var(--vscode-inputValidation-errorBorder)}
+.bit{display:flex;align-items:center;justify-content:center;height:var(--sm-control-height-compact);padding:0;min-width:0;border-radius:var(--sm-radius-sm);font:var(--sm-font-caption) var(--vscode-editor-font-family);color:var(--vscode-foreground);background:transparent;cursor:default}.bit.owned{background:color-mix(in srgb,var(--signal-color) 22%,var(--vscode-editor-background));border-color:color-mix(in srgb,var(--signal-color) 55%,var(--vscode-panel-border));cursor:pointer}.bit.owned:hover{background:color-mix(in srgb,var(--signal-color) 40%,var(--vscode-editor-background))}.bit.is-hovered{outline:1px solid var(--signal-color,var(--vscode-focusBorder));outline-offset:-1px}.bit.is-editing,.bit.is-selected{box-shadow:inset 0 0 0 2px var(--signal-color,var(--vscode-focusBorder))}.bit.is-msb{border-top:3px solid var(--vscode-foreground)}.bit.is-lsb{border-bottom:3px solid var(--vscode-foreground)}.bit-detail{min-height:23px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:var(--sm-font-small) var(--vscode-editor-font-family);color:var(--vscode-descriptionForeground);padding:var(--sm-space-xs) 0 0}.bit.overlap{background:var(--vscode-inputValidation-errorBackground)!important;border-color:var(--vscode-inputValidation-errorBorder)!important}.bit:disabled{opacity:1}.definition-summary{cursor:pointer;min-height:29px;line-height:29px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.definition-details[open]>.definition-summary{color:var(--vscode-descriptionForeground)}
+.definition-visual{display:grid;grid-template-columns:minmax(140px,1fr) minmax(200px,1fr);gap:var(--sm-space-md);align-items:start}.definition-visual .lookup-table{grid-template-columns:minmax(45px,1fr) minmax(45px,1fr) 27px}.definition-preview{min-width:0}.definition-preview svg{display:block;width:100%;height:150px;overflow:visible}.definition-preview text{font:var(--sm-font-caption) var(--vscode-editor-font-family);fill:var(--vscode-descriptionForeground)}.preview-grid{stroke:var(--vscode-panel-border);stroke-width:.6;fill:none}.preview-output,.preview-extension{stroke:var(--vscode-charts-blue);stroke-width:1.7;fill:none}.preview-input{stroke:var(--vscode-descriptionForeground);stroke-dasharray:4 3;stroke-width:1.2;fill:none}.preview-extension{stroke-dasharray:3 3;opacity:.65}.preview-point{fill:var(--vscode-charts-blue);stroke:var(--vscode-editor-background);stroke-width:1;cursor:pointer}.lookup-table input.is-point-active{border-color:var(--vscode-focusBorder)}.preview-caption{font-size:var(--sm-font-caption);color:var(--vscode-descriptionForeground);margin:0 0 var(--sm-space-xs)}
 body{font-size:var(--vscode-font-size,13px)}
 .header-fields>.field{flex:0 0 auto;min-width:0}.header-fields>.frame-name-field{flex:1 1 240px;min-width:180px}.frame-name-field>input{width:100%!important}.frame-length-field select{width:160px}.header-fields .check-field{height:29px;min-width:90px}
 .signal-header,.signal-row,.derived-header,.derived-row{width:100%;min-width:var(--definition-min-width)}
-.cell{min-width:0}.head{padding:7px 4px}.cell input,.cell select{padding:5px 4px;font-size:12px;height:29px}.cell:first-child input,.expression-wrap>input{font-size:inherit}
+.cell{min-width:0}.head{padding:var(--sm-space-md) var(--sm-space-xs)}.cell input,.cell select{padding:var(--sm-space-xs) var(--sm-space-xs);font-size:var(--sm-font-small);height:29px}.cell:first-child input,.expression-wrap>input{font-size:inherit}
 .cell input[type=number]{appearance:textfield;font-variant-numeric:tabular-nums}.cell input[type=number]::-webkit-inner-spin-button,.cell input[type=number]::-webkit-outer-spin-button{appearance:none;margin:0}
-.resolution>input{flex:1 1 0;min-width:0}.scale-spinner{flex:0 0 16px}.scale-spinner button{min-width:16px}
+.resolution>input{flex:1 1 0;min-width:0}
 .definition-visual{grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr))}.definition-controls{grid-template-columns:repeat(auto-fit,minmax(min(100%,110px),1fr))}
-.definition-stack .field input[type=number]{width:100px;max-width:100%}.definition-visual .lookup-table{grid-template-columns:repeat(2,minmax(0,112px)) 24px;max-width:254px}
-.bit-heading,.section-heading{flex-wrap:wrap}.value-label-editor{width:100%}.dependency-diagram{max-width:100%}
-</style><div id="content"><p class="muted">${t('Loading frame definition…', 'フレーム定義を読み込み中…')}</p></div>`;
+.definition-stack .field input[type=number]{width:100px;max-width:100%}.definition-visual .lookup-table{grid-template-columns:repeat(2,minmax(0,112px)) 28px;max-width:258px}
+.bit-heading,.section-heading{flex-wrap:wrap}.value-label-editor{width:100%}.value-label-editor .definition-subtable.data-table{width:auto}.value-label-editor th:first-child{width:112px}.value-label-editor th:nth-child(2){width:240px}.dependency-diagram{max-width:100%}
+.bit-details{border:1px solid var(--vscode-panel-border);border-radius:var(--sm-radius-card);margin-top:var(--sm-space-xl);padding:var(--sm-space-md)}.bit-details summary{display:flex;align-items:center;gap:var(--sm-space-lg);cursor:pointer}.bit-minimap{display:block;flex:1;min-width:0}.bit-minimap .byte-grid{min-width:0}.bit-minimap .byte,.bit-minimap .byte-label{display:block}.bit-minimap .bit{cursor:inherit}.bit-minimap .bit.is-msb,.bit-minimap .bit.is-lsb{border-top:1px dashed var(--vscode-panel-border);border-bottom:1px dashed var(--vscode-panel-border)}.bit-details>.bit-layout{margin-top:var(--sm-space-md)}.signal-insert-row{display:grid;grid-template-columns:var(--definition-template);grid-template-rows:minmax(0,1fr);width:100%;min-width:var(--definition-min-width);border-left:3px solid transparent;height:5px;position:relative}.signal-insert-row>span{grid-row:1;align-self:stretch}.signal-insert-row>button.insert-zone{--insert-color:var(--vscode-charts-blue);position:absolute;left:0;right:0;top:-3px;z-index:1;display:flex;align-items:center;justify-content:center;width:auto;height:11px;padding:0;border:0;border-radius:0;background:transparent;opacity:0;overflow:visible;cursor:pointer}.signal-insert-row>button.insert-zone.is-full{--insert-color:var(--vscode-errorForeground)}
+.definition-add-row>button.add-row-button.is-full{color:var(--vscode-errorForeground);border-color:var(--vscode-errorForeground);background:color-mix(in srgb,var(--vscode-errorForeground) 8%,transparent)}.signal-insert-row>button.insert-zone:hover,.signal-insert-row>button.insert-zone:focus-visible{opacity:1;outline:0}.insert-zone::before{content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:var(--insert-color)}.insert-pill{position:relative;pointer-events:none;padding:0 var(--sm-space-lg);height:var(--sm-control-height-compact);line-height:var(--sm-control-height-compact);border-radius:999px;font-size:var(--sm-font-caption);white-space:nowrap;color:color-mix(in srgb,var(--insert-color) 70%,var(--vscode-foreground));background:color-mix(in srgb,var(--insert-color) 18%,var(--vscode-editor-background));border:1px solid color-mix(in srgb,var(--insert-color) 55%,var(--vscode-editor-background))}.signal-row.is-new,.derived-row.is-new{background:color-mix(in srgb,var(--vscode-charts-green) 14%,transparent)}.definition-add-row{position:sticky;left:0;padding:var(--sm-space-sm) var(--sm-space-md)}.signal-row>.cell{align-self:stretch;display:flex;align-items:center}.signal-row>.cell>*{flex:1 1 auto;min-width:0}.derived-row>.cell:last-child{display:flex}.derived-row>.cell:last-child>*{flex:1 1 auto;min-width:0}.column-position{background:color-mix(in srgb,var(--vscode-charts-blue) 6%,transparent)}.column-conversion{background:color-mix(in srgb,var(--vscode-charts-green) 6%,transparent)}.column-range{background:color-mix(in srgb,var(--vscode-charts-orange) 6%,transparent)}
+.bit-details[open] > summary > .bit-minimap{display:none}
+.bit-details > summary{min-height:28px;border-radius:var(--sm-radius-legacy-3);list-style:none}
+.bit-details > summary::-webkit-details-marker{display:none}
+.bit-details > summary:hover{background:var(--vscode-list-hoverBackground)}
+.bit-details > summary:focus-visible{outline:1px solid var(--vscode-focusBorder);outline-offset:2px}
+.bit-summary-label{display:inline-flex;align-items:center;gap:var(--sm-space-xs);flex-shrink:0;white-space:nowrap}
+.bit-summary-label .codicon{font-size:var(--sm-font-heading)}
+.bit-details[open] .bit-summary-label .codicon{transform:rotate(90deg)}
+${ICON_BUTTON_STYLES}${EDITABLE_TABLE_STYLES}${COMPONENT_STYLES}</style><div id="content"><p class="muted">${t('Loading frame definition…', 'フレーム定義を読み込み中…')}</p></div>`;
 
 const content = document.getElementById('content')!;
+
+// ---- Keyboard entry in the Signal tables, as in a spreadsheet ----
+// ↑/↓ and Enter/Shift+Enter move within a column, Tab/Shift+Tab along a row and on to the next row, Esc puts back the value
+// the cell had. A cell is ready to type into as soon as it is entered (its text is selected); there is no separate edit mode.
+// In a cell with choices, ←/→ change the choice, so ↑/↓ always mean "another row".
+const ROW_SELECTOR = '.signal-row,.derived-row';
+const valueAtFocus = new WeakMap<HTMLElement, string>();
+let keyboardMoveAt = 0;
+const cellControls = (cell: Element): HTMLElement[] => Array.from(cell.querySelectorAll<HTMLElement>('input,select,button,summary')).filter((element) => element.tabIndex >= 0 && !element.matches(':disabled') && element.getClientRects().length > 0);
+const rowControls = (row: Element): HTMLElement[] => Array.from(row.children).flatMap((cell) => cellControls(cell));
+function enterCell(control: HTMLElement | undefined): void {
+  if (!control) return;
+  control.focus({ preventScroll: true }); if (control instanceof HTMLInputElement && control.type !== 'checkbox') control.select();
+  control.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+/** Leaves the current cell (which commits it and may redraw the table), then enters the cell that had `key`. */
+function moveToControl(from: HTMLElement, target: HTMLElement | undefined, otherwise?: () => void): void {
+  const key = target?.dataset.controlKey; keyboardMoveAt = performance.now();
+  from.blur();
+  requestAnimationFrame(() => {
+    const next = key === undefined ? undefined : Array.from(content.querySelectorAll<HTMLElement>('[data-control-key]')).find((item) => item.dataset.controlKey === key);
+    if (next) enterCell(next); else otherwise?.();
+  });
+}
+content.addEventListener('focusin', (event) => {
+  const control = event.target as HTMLElement; if (!control.closest(ROW_SELECTOR)) return;
+  if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) valueAtFocus.set(control, control.value);
+  // Reached with Tab: the text is selected, so typing replaces it.
+  if (control instanceof HTMLInputElement && control.type !== 'checkbox' && performance.now() - keyboardMoveAt < 150) control.select();
+});
+// Noted before any cell's own handler moves the focus, so the cell reached with Tab selects its text.
+content.addEventListener('keydown', (event) => { if (event.key === 'Tab') keyboardMoveAt = performance.now(); }, { capture: true });
+content.addEventListener('keydown', (event) => {
+  if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+  const control = event.target as HTMLElement; const row = control.closest<HTMLElement>(ROW_SELECTOR); if (!row) return;
+  const cell = Array.from(row.children).find((item) => item.contains(control)); if (!cell) return;
+  const rows = Array.from((row.closest('.table-wrap') ?? content).querySelectorAll<HTMLElement>(row.classList.contains('signal-row') ? '.signal-row' : '.derived-row'));
+  const rowIndex = rows.indexOf(row); const column = Array.from(row.children).indexOf(cell);
+  const typing = control instanceof HTMLInputElement && control.type !== 'checkbox'; const choice = control instanceof HTMLSelectElement || !!control.closest('.choice-group');
+  const inColumn = (target: HTMLElement | undefined) => { const controls = target ? cellControls(target.children[column]) : []; return controls.find((item) => item.getAttribute('aria-pressed') === 'true') ?? controls[0]; };
+  if (event.key === 'Tab') {
+    keyboardMoveAt = performance.now();
+    // The row's own handler moves within the row; from its last (or first) cell, Tab goes on to the next (or previous) row.
+    const controls = rowControls(row); const index = controls.indexOf(control); const target = rows[rowIndex + (event.shiftKey ? -1 : 1)];
+    if (index < 0 || !target || (event.shiftKey ? index !== 0 : index !== controls.length - 1)) return;
+    event.preventDefault(); const next = rowControls(target); moveToControl(control, event.shiftKey ? next[next.length - 1] : next[0]); return;
+  }
+  if (event.key === 'Escape') {
+    if (!(control instanceof HTMLInputElement || control instanceof HTMLSelectElement) || !valueAtFocus.has(control) || control.value === valueAtFocus.get(control)) return;
+    // Text cells apply what is typed at once, so putting the value back is applied the same way.
+    event.preventDefault(); control.value = valueAtFocus.get(control)!; control.dispatchEvent(new Event('input', { bubbles: true })); if (control instanceof HTMLInputElement) control.select(); return;
+  }
+  if (control instanceof HTMLSelectElement && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+    const next = control.selectedIndex + (event.key === 'ArrowLeft' ? -1 : 1); if (next < 0 || next >= control.options.length) return;
+    event.preventDefault(); control.selectedIndex = next; control.dispatchEvent(new Event('change', { bubbles: true })); return;
+  }
+  const vertical = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : event.key === 'Enter' && (typing || choice) ? (event.shiftKey ? -1 : 1) : 0;
+  if (!vertical || (event.shiftKey && event.key !== 'Enter') || !(typing || choice)) return;
+  event.preventDefault();
+  const target = rows[rowIndex + vertical];
+  if (target) { moveToControl(control, inColumn(target)); return; }
+  // Enter in the last row starts the next one, like typing down a column.
+  if (event.key === 'Enter' && vertical === 1) {
+    const signalTable = row.classList.contains('signal-row');
+    // Where the Frame has no free bits left, a Signal is only added on purpose, with the button.
+    moveToControl(control, undefined, () => { const add = Array.from(content.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.dataset.addRow === (signalTable ? 'signal' : 'derived')); if (add?.classList.contains('is-full')) add.focus({ preventScroll: true }); else add?.click(); });
+  }
+});
+// ---- Cells from a spreadsheet, and the value of the cell above ----
+// Pasting more than one cell fills the table from the focused cell: across the columns as they are shown, and down the rows,
+// adding rows after the last one. Ctrl+D (⌘D) copies the cell above into the focused cell.
+const tableOf = (row: HTMLElement) => { const selector = row.classList.contains('signal-row') ? '.signal-row' : '.derived-row'; const wraps = Array.from(content.querySelectorAll('.table-wrap')); return { selector, wrap: wraps.indexOf(row.closest('.table-wrap') as Element) }; };
+// Setting a cell redraws the table, so rows are always looked up again.
+const tableRows = (table: { selector: string; wrap: number }) => Array.from((content.querySelectorAll('.table-wrap')[table.wrap] ?? content).querySelectorAll<HTMLElement>(table.selector));
+/**
+ * The row's values in the order shown: text and number boxes, checkboxes and choices. A choice shown as buttons counts once,
+ * as its (hidden) select. Buttons such as delete are not values, so pasted columns never land on them.
+ */
+const rowFields = (row: Element | undefined): (HTMLInputElement | HTMLSelectElement)[] => !row ? [] : Array.from(row.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input,select'))
+  .filter((field) => field instanceof HTMLSelectElement ? field.dataset.choiceEnhanced !== undefined || field.getClientRects().length > 0 || !!field.parentElement?.querySelector('.choice-group') : field.type !== 'hidden' && field.getClientRects().length > 0);
+/** The value the focused control belongs to: itself, or the select behind a choice button. */
+const fieldOf = (control: HTMLElement): HTMLInputElement | HTMLSelectElement | undefined => control instanceof HTMLInputElement || control instanceof HTMLSelectElement ? control
+  : control.closest('.choice-group')?.parentElement?.querySelector<HTMLSelectElement>('select') ?? undefined;
+const fieldValue = (field: HTMLInputElement | HTMLSelectElement): string => field instanceof HTMLInputElement && field.type === 'checkbox' ? String(field.checked) : field.value;
+/** Puts a text into a value the way typing or choosing would. False when it cannot take it. */
+function setField(field: HTMLInputElement | HTMLSelectElement | undefined, text: string): boolean {
+  if (!field || field.disabled) return false;
+  if (field instanceof HTMLSelectElement) {
+    const value = matchChoice(text, Array.from(field.options).filter((option) => !option.disabled).map((option) => ({ value: option.value, label: option.textContent ?? '' }))); if (value === undefined) return false;
+    if (field.value !== value) { field.value = value; field.dispatchEvent(new Event('change', { bubbles: true })); } return true;
+  }
+  if (field.readOnly) return false;
+  if (field.type === 'checkbox') {
+    const on = /^(true|1|yes|on|✓|✔|○)$/i.test(text.trim()); const off = /^(false|0|no|off|×|)$/i.test(text.trim()); if (!on && !off) return false;
+    if (field.checked !== on) field.click(); return true;
+  }
+  if (field.type === 'number' && text.trim() !== '' && !Number.isFinite(Number(text.trim()))) return false;
+  if (field.value !== text) { field.value = text; field.dispatchEvent(new Event('input', { bubbles: true })); field.dispatchEvent(new Event('change', { bubbles: true })); }
+  return true;
+}
+/** Focuses a value: the box itself, or the pressed button of a choice. */
+function enterField(field: HTMLInputElement | HTMLSelectElement | undefined): void {
+  if (!field) return; const shown = field.getClientRects().length > 0 ? field : field.parentElement?.querySelector<HTMLElement>('.choice-group>button[aria-pressed=true]') ?? undefined; enterCell(shown);
+}
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+let pasteNote: HTMLElement | undefined;
+/** A line under the table saying what a paste could not place. It goes away with the next redraw of the editor. */
+function showPasteNote(table: { selector: string; wrap: number }, text: string): void {
+  pasteNote?.remove(); pasteNote = undefined; if (!text) return;
+  const wrap = content.querySelectorAll('.table-wrap')[table.wrap]; if (!wrap) return;
+  pasteNote = document.createElement('p'); pasteNote.className = 'paste-note'; pasteNote.setAttribute('role', 'status'); pasteNote.style.cssText = 'margin:var(--sm-space-sm) 0 0;color:var(--vscode-errorForeground)'; pasteNote.textContent = text; wrap.after(pasteNote);
+}
+async function pasteCells(row: HTMLElement, column: number, cells: readonly (readonly string[])[]): Promise<void> {
+  const table = tableOf(row); const first = tableRows(table).indexOf(row); if (first < 0 || table.wrap < 0) return;
+  let refused = 0; let rowsLeft = 0;
+  for (let r = 0; r < cells.length; r++) {
+    if (!tableRows(table)[first + r]) {
+      // Past the last row: a row is added, unless the Frame has no free bits (then adding is only done on purpose).
+      const add = Array.from(content.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.dataset.addRow === (table.selector === '.signal-row' ? 'signal' : 'derived'));
+      if (!add || add.disabled || add.classList.contains('is-full')) { rowsLeft = cells.length - r; break; }
+      add.click(); await nextFrame();
+      if (!tableRows(table)[first + r]) { rowsLeft = cells.length - r; break; }
+    }
+    for (let c = 0; c < cells[r].length; c++) {
+      // Anything right of the last column is dropped.
+      const field = rowFields(tableRows(table)[first + r])[column + c]; if (!field) break;
+      if (!setField(field, cells[r][c])) refused++;
+    }
+  }
+  await nextFrame();
+  enterField(rowFields(tableRows(table)[first])[column]);
+  showPasteNote(table, [
+    refused ? t(`${refused} value(s) could not be pasted.`, `${refused}件は貼り付けできませんでした。`) : '',
+    rowsLeft ? t(`${rowsLeft} row(s) were not added: the Frame has no free bits.`, `空きビットがないため、${rowsLeft}行は追加していません。`) : '',
+  ].filter(Boolean).join(' '));
+}
+content.addEventListener('paste', (event) => {
+  const control = event.target as HTMLElement; const row = control.closest<HTMLElement>(ROW_SELECTOR); const text = event.clipboardData?.getData('text/plain') ?? '';
+  // One cell of text is typed into the focused cell as usual.
+  if (!row || !isCellBlock(text)) return;
+  const field = fieldOf(control); const column = field ? rowFields(row).indexOf(field) : -1; if (column < 0) return;
+  event.preventDefault(); void pasteCells(row, column, parseCopiedCells(text));
+});
+content.addEventListener('keydown', (event) => {
+  if (event.defaultPrevented || event.isComposing || event.altKey || event.shiftKey || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'd') return;
+  const control = event.target as HTMLElement; const row = control.closest<HTMLElement>(ROW_SELECTOR); if (!row) return;
+  const field = fieldOf(control); const column = field ? rowFields(row).indexOf(field) : -1; if (!field || column < 0) return;
+  const table = tableOf(row); const rows = tableRows(table); const rowIndex = rows.indexOf(row);
+  const above = rowFields(rows[rowIndex - 1])[column]; if (!above) return;
+  event.preventDefault(); event.stopPropagation();
+  setField(field, fieldValue(above));
+  requestAnimationFrame(() => enterField(rowFields(tableRows(table)[rowIndex])[column]));
+});
 const template = (columns: readonly { readonly id: string }[]) => columns.map((column) => {
   const flex = allColumns.find((item) => item.id === column.id)?.flex;
   return flex ? `minmax(${Math.round(widths[column.id])}px,${flex}fr)` : `${Math.round(widths[column.id])}px`;
@@ -123,7 +306,25 @@ function setTableMinimum(table: HTMLElement, columns: readonly { readonly id: st
 function applyTableWidths(columns: readonly { readonly id: string }[], selector: string): void {
   for (const row of Array.from(document.querySelectorAll<HTMLElement>(selector))) {
     row.style.gridTemplateColumns = template(columns);
-    if (row.parentElement) setTableMinimum(row.parentElement, columns);
+    if (row.parentElement) { setTableMinimum(row.parentElement, columns); row.parentElement.style.setProperty('--definition-template', template(columns)); }
+  }
+}
+/** No resizable column cuts off its header or cell values: widen overflowing ones after each render. */
+function fitRenderedColumns(): void {
+  const tables: [readonly SizingColumn<unknown>[], string, string][] = [
+    [signalColumns() as readonly SizingColumn<unknown>[], '.signal-header', '.signal-row'],
+    [derivedColumnDefinitions as readonly SizingColumn<unknown>[], '.derived-header', '.derived-row'],
+  ];
+  for (const [columns, headerSelector, rowSelector] of tables) {
+    const header = app.querySelector<HTMLElement>(headerSelector); if (!header) continue; let changed = false;
+    columns.forEach((column, index) => {
+      if (column.minWidth === column.maxWidth) return;
+      const head = header.children[index] as HTMLElement | undefined; if (!head) return;
+      const cells = [head, ...Array.from(app.querySelectorAll<HTMLElement>(rowSelector)).map((row) => row.children[index] as HTMLElement).filter(Boolean)];
+      const width = widthToFit(cells, head.getBoundingClientRect().width);
+      if (width !== undefined) { widths[column.id] = Math.max(widths[column.id] ?? 0, width); changed = true; }
+    });
+    if (changed) applyTableWidths(columns, `${headerSelector},${rowSelector}`);
   }
 }
 const persist = () => { vscode.setState({ widths }); vscode.postMessage({ type: 'saveViewState', widths }); };
@@ -175,9 +376,9 @@ function renderNow(viewport: { windowX: number; windowY: number }): void {
   const view = { ...captureRenderView(), ...viewport };
   previewDisposers.splice(0).forEach((dispose) => dispose());
   bitOwners.clear();
-  hoveredSignalId = undefined;
+  hoveredSignalId = undefined; hoveredByteSignalIds = [];
   content.replaceChildren();
-  const title = document.createElement('h1'); title.textContent = t('Frame Definition', 'フレーム定義');
+  const title = document.createElement('h1'); title.textContent = `${scopeName ?? t('Workspace', 'ワークスペース')} › ${t('Frame Definition', 'フレーム定義')} › ${formatCanId(frame.canId, frame.extended)} ${frame.name}`;
   const fields = document.createElement('div'); fields.className = 'header-fields';
   const pluginOwned = frame.origin?.type === 'plugin';
   fields.append(
@@ -199,10 +400,11 @@ function renderNow(viewport: { windowX: number; windowY: number }): void {
   const multiplexingText = document.createElement('span'); multiplexingText.textContent = multiplexing.checked ? 'ON' : 'OFF';
   multiplexing.addEventListener('change', () => { updateFrame({ multiplexing: multiplexing.checked || undefined, ...(!multiplexing.checked ? { signals: frame?.signals.map((signal) => ({ ...signal, multiplexing: undefined })) } : {}) }); multiplexerPreview = 0; render(); });
   multiplexingControl.append(multiplexing, multiplexingText); multiplexingField.append(multiplexingCaption, multiplexingControl); fields.appendChild(multiplexingField);
-  if (pluginOwned) { const ownership = document.createElement('div'); ownership.className = 'muted'; const pluginId = frame.origin?.type === 'plugin' ? frame.origin.pluginId : ''; ownership.textContent = t(`Provided by ${pluginId} · CAN ID is read-only`, `${pluginId} が提供 · CAN IDは読み取り専用`); fields.appendChild(ownership); }
+  if (pluginOwned) { const ownership = document.createElement('div'); ownership.className = 'muted'; const pluginId = frame.origin?.type === 'plugin' ? frame.origin.pluginId : ''; ownership.textContent = t(`Provided by ${pluginId}`, `${pluginId} が提供`); fields.appendChild(ownership); }
+  fields.appendChild(inputField(t('Expected period (ms)', '期待周期 (ms)'), frame.expectedPeriodMs === undefined ? '' : String(frame.expectedPeriodMs), (value) => updateFrame({ expectedPeriodMs: value.trim() ? Number(value) : undefined }), { width: '120px' }));
   content.append(title, fields);
 
-  const bitHeading = document.createElement('div'); bitHeading.className = 'bit-heading'; const bitTitle = document.createElement('h2'); bitTitle.textContent = t('Bit Layout', 'ビット配置'); bitHeading.appendChild(bitTitle);
+  const bitHeading = document.createElement('div'); bitHeading.className = 'bit-heading';
   if (frame.multiplexing) {
     const selector = frame.signals.find((signal) => signal.multiplexing?.type === 'multiplexer'); const maximum = selector ? Math.min(2 ** Math.min(selector.lengthBits, 32) - 1, Number.MAX_SAFE_INTEGER) : 0;
     multiplexerPreview = Math.max(0, Math.min(maximum, multiplexerPreview));
@@ -212,19 +414,51 @@ function renderNow(viewport: { windowX: number; windowY: number }): void {
     const next = iconButton('chevron-right', t('Next Multiplexer value', '次のMultiplexer値'), () => { multiplexerPreview = Math.min(maximum, multiplexerPreview + 1); render(); }); next.disabled = multiplexerPreview >= maximum;
     preview.append(previous, value, next); bitHeading.appendChild(preview);
   }
-  content.append(bitHeading, buildBitLayout(frame));
-  const signalTitle = document.createElement('h2'); signalTitle.textContent = t('Signal Definitions', 'Signal定義');
+  const bitDetails = document.createElement('details'); bitDetails.className = 'bit-details'; bitDetails.open = bitLayoutExpanded;
+  const summary = document.createElement('summary');
+  const summaryLabel = document.createElement('span'); summaryLabel.className = 'bit-summary-label';
+  const chevron = document.createElement('span'); chevron.className = 'codicon codicon-chevron-right'; chevron.setAttribute('aria-hidden', 'true');
+  const summaryText = document.createElement('span');
+  const updateSummary = () => { summaryText.textContent = bitDetails.open ? t('Bit layout', 'ビット配置') : t('Byte layout', 'バイト配置'); summary.setAttribute('aria-label', summaryText.textContent); };
+  updateSummary();
+  summaryLabel.append(chevron, summaryText); summary.appendChild(summaryLabel);
+  const mini = document.createElement('span'); mini.className = 'bit-minimap';
+  const miniGrid = document.createElement('span'); miniGrid.className = 'byte-grid'; mini.append(miniGrid);
+  let byteCells: HTMLElement | undefined;
+  for (let byte = 0; byte < frame.frameLength; byte++) {
+    if (byte % 8 === 0) {
+      const last = Math.min(byte + 7, frame.frameLength - 1);
+      const box = document.createElement('span'); box.className = 'byte'; const label = document.createElement('span'); label.className = 'byte-label'; label.textContent = last > byte ? `BYTE ${byte}–${last}` : `BYTE ${byte}`;
+      byteCells = document.createElement('span'); byteCells.className = 'bits'; box.append(label, byteCells); miniGrid.appendChild(box);
+    }
+    const swatch = document.createElement('span'); swatch.className = 'bit';
+    const owners = frame.signals.filter((signal) => signalBitEndpoints(signal).start !== undefined && (!frame?.multiplexing || isSignalActive(signal, multiplexerPreview)) && occupiedBits(signal).some((bit) => Math.floor(bit / 8) === byte));
+    if (owners[0]) { swatch.classList.add('owned'); swatch.style.setProperty('--signal-color', definitionSignalColor(owners[0].id)); }
+    swatch.title = `BYTE ${byte} · ${owners.length ? owners.map((signal) => signal.name).join(' / ') : t('Unassigned', '未割り当て')}`; swatch.setAttribute('aria-label', swatch.title);
+    bitOwners.set(swatch, owners.map((signal) => signal.id));
+    swatch.addEventListener('mouseenter', () => { hoveredSignalId = owners[0]?.id; hoveredByteSignalIds = owners.map((signal) => signal.id); updateLinkedHighlights(); });
+    swatch.addEventListener('mouseleave', () => { hoveredSignalId = undefined; hoveredByteSignalIds = []; updateLinkedHighlights(); });
+    byteCells!.appendChild(swatch);
+  }
+  summary.appendChild(mini); bitDetails.append(summary); if (bitHeading.childElementCount) bitDetails.append(bitHeading); bitDetails.append(buildBitLayout(frame)); bitDetails.addEventListener('toggle', () => { bitLayoutExpanded = bitDetails.open; updateSummary(); }); content.appendChild(bitDetails);
+  const signalTitle = document.createElement('h2'); signalTitle.textContent = t('Signal Definitions', 'シグナル定義');
   const toolbar = document.createElement('div'); toolbar.className = 'section-heading';
-  const add = button(t('+ Add Signal', '+ Signalを追加'), () => { const previous = frame?.signals[frame.signals.length - 1]; if (frame) updateFrame({ signals: [...frame.signals, createManualSignal(uuid(), previous, frame.frameLength)] }); render(); }, true);
-  toolbar.append(signalTitle, add); content.append(toolbar, buildSignalTable(frame));
-  const derivedTitle = document.createElement('h2'); derivedTitle.textContent = t('Derived Signal Definitions', '派生Signal定義');
+  const add = button(t('+ Add Signal', '+ シグナルを追加'), () => { if (!frame) return; const added = newSignalAt(frame, frame.signals.length, uuid()).signal; addedSignalId = added.id; updateFrame({ signals: [...frame.signals, added] }); render(); }, false);
+  add.dataset.addRow = 'signal';
+  if (!newSignalAt(frame, frame.signals.length, 'probe').fits) { add.classList.add('is-full'); add.title = frameFullMessage(); }
+  toolbar.append(signalTitle); const signalTable = buildSignalTable(frame); signalTable.appendChild(addRow(add)); content.append(toolbar, signalTable);
+  const derivedTitle = document.createElement('h2'); derivedTitle.textContent = t('Derived Signal Definitions', '派生シグナル定義');
   const derivedToolbar = document.createElement('div'); derivedToolbar.className = 'section-heading';
-  const addDerived = button(t('+ Add Derived Signal', '+ 派生Signalを追加'), () => { expandedDerivedId = uuid(); if (frame) updateFrame({ derivedSignals: [...(frame.derivedSignals ?? []), createManualDerivedSignal(expandedDerivedId)] }); render(); }, true);
-  derivedToolbar.append(derivedTitle, addDerived); content.append(derivedToolbar, buildDerivedTable(frame));
+  const addDerived = button(t('+ Add Derived Signal', '+ 派生シグナルを追加'), () => { expandedDerivedId = uuid(); addedSignalId = expandedDerivedId; if (frame) updateFrame({ derivedSignals: [...(frame.derivedSignals ?? []), createManualDerivedSignal(expandedDerivedId)] }); render(); }, false);
+  addDerived.dataset.addRow = 'derived';
+  derivedToolbar.append(derivedTitle); const derivedTable = buildDerivedTable(frame); derivedTable.appendChild(addRow(addDerived)); content.append(derivedToolbar, derivedTable);
   const validation = validationDiagnostics();
   if (validation.length) content.appendChild(buildDiagnostics(validation));
   content.querySelectorAll<HTMLElement>('.header-fields input,.header-fields select').forEach((control, index) => { control.dataset.controlKey = `frame:${index}`; });
+  content.querySelectorAll<HTMLSelectElement>('select[data-finite-choice]').forEach((select) => enhanceChoiceSelect(select));
   restoreRenderView(view);
+  fitRenderedColumns();
+  columnHover.refresh();
   updateLinkedHighlights();
 }
 
@@ -302,8 +536,11 @@ function buildBitLayout(value: ManualFrameDefinition): HTMLElement {
   wrap.append(grid, detail); return wrap;
 }
 
+let addedSignalId: string | undefined;
 function linkSignalRow(row: HTMLElement, id: string, columns: readonly { id: string }[]): void {
   row.dataset.signalId = id; row.style.setProperty('--signal-color', definitionSignalColor(id));
+  // A row just added is tinted and its name takes the focus, so it is found at once and can be typed into.
+  if (id === addedSignalId) { addedSignalId = undefined; row.classList.add('is-new'); requestAnimationFrame(() => { const name = row.querySelector<HTMLInputElement>('input'); name?.focus({ preventScroll: true }); name?.select(); row.scrollIntoView({ block: 'nearest' }); }); }
   Array.from(row.children).forEach((cell, column) => cell.querySelectorAll<HTMLElement>('input,select,button,summary').forEach((control, index) => { control.dataset.controlKey = definitionControlKey(id, columns[column].id, index); }));
   row.querySelectorAll<HTMLInputElement>('input').forEach((input) => { input.addEventListener('mouseenter', () => { input.title = input.value; }); });
   row.addEventListener('mouseenter', () => { hoveredSignalId = id; updateLinkedHighlights(); });
@@ -325,12 +562,12 @@ function updateLinkedHighlights(): void {
   const direct = frame?.signals.find((signal) => signal.id === (editingSignalId ?? hoveredSignalId ?? selectedSignalId));
   const endpoints = direct ? signalBitEndpoints(direct) : {};
   for (const row of Array.from(content.querySelectorAll<HTMLElement>('[data-signal-id]'))) {
-    row.classList.toggle('is-hovered', row.dataset.signalId === hoveredSignalId);
+    row.classList.toggle('is-hovered', row.dataset.signalId === hoveredSignalId || hoveredByteSignalIds.includes(row.dataset.signalId ?? ''));
     row.classList.toggle('is-editing', row.dataset.signalId === editingSignalId);
     row.classList.toggle('is-selected', row.dataset.signalId === selectedSignalId);
   }
   for (const [element, owners] of bitOwners) {
-    element.classList.toggle('is-hovered', !!hoveredSignalId && owners.includes(hoveredSignalId));
+    element.classList.toggle('is-hovered', (!!hoveredSignalId && owners.includes(hoveredSignalId)) || hoveredByteSignalIds.some((id) => owners.includes(id)));
     element.classList.toggle('is-editing', !!editingSignalId && owners.includes(editingSignalId));
     element.classList.toggle('is-selected', !!selectedSignalId && owners.includes(selectedSignalId));
     const bit = Number(element.dataset.bit);
@@ -345,35 +582,70 @@ function updateLinkedHighlights(): void {
   }
 }
 
+/** The last row of a definition table: one button as wide as the table, so adding is always under the last row. */
+function addRow(add: HTMLButtonElement): HTMLElement { const row = document.createElement('div'); row.className = 'definition-add-row'; add.type = 'button'; add.classList.add('add-row-button'); row.appendChild(add); return row; }
+/**
+ * The Signal that adding at `index` creates: it starts right after the previous Signal and keeps that Signal's length,
+ * shortened to the free bits there. `fits` is false when not even one bit is free (it overlaps or leaves the Frame).
+ */
+function newSignalAt(value: ManualFrameDefinition, index: number, id: string): { signal: ManualSignalDefinition; fits: boolean } {
+  const layoutErrors = (signals: readonly ManualSignalDefinition[]) => validateFrameDefinition({ ...value, signals: [...signals] }).diagnostics.filter((item) => item.code === 'SIGNAL_OVERLAP' || item.code === 'SIGNAL_OUTSIDE_FRAME').length;
+  const base = createManualSignal(id, value.signals[index - 1], value.frameLength); const before = layoutErrors(value.signals);
+  for (let lengthBits = base.lengthBits; lengthBits >= 1; lengthBits--) {
+    const signal = { ...base, lengthBits };
+    if (layoutErrors([...value.signals.slice(0, index), signal, ...value.signals.slice(index)]) <= before) return { signal, fits: true };
+  }
+  return { signal: base, fits: false };
+}
+function frameFullMessage(): string { return t('No free bits here: the new Signal would overlap another Signal or exceed the Frame length. It can still be added; review the bit layout.', 'ここには空きビットがありません。追加したシグナルは他のシグナルと重なるか、フレーム長を超えます。追加はできますが、ビット配置を見直してください。'); }
+
+/** Signal columns are tinted by what they describe: position in the Frame, conversion, valid range. */
+function columnGroupClass(index: number): string | undefined {
+  return index >= 2 && index <= 6 ? 'column-position' : index === 7 || index === 8 ? 'column-conversion' : index === 9 || index === 10 ? 'column-range' : undefined;
+}
+
 function buildSignalTable(value: ManualFrameDefinition): HTMLElement {
   const columns = signalColumns(); const wrap = document.createElement('div'); wrap.className = 'table-wrap'; wrap.dataset.scrollKey = 'signal-table'; const header = document.createElement('div'); header.className = 'signal-header'; header.style.gridTemplateColumns = template(columns);
-  setTableMinimum(wrap, columns);
-  columns.forEach((column) => header.appendChild(definitionHeader(column, columns, () => frame?.signals ?? [], '.signal-header,.signal-row'))); wrap.appendChild(header);
+  setTableMinimum(wrap, columns); wrap.style.setProperty('--definition-template', template(columns));
+  columns.forEach((column, index) => { const head = definitionHeader(column, columns, () => frame?.signals ?? [], '.signal-header,.signal-row'); const group = columnGroupClass(index); if (group) head.classList.add(group); header.appendChild(head); }); wrap.appendChild(header);
   const validation = validateFrameDefinition(value).diagnostics;
-  for (const signal of value.signals) { const row = document.createElement('div'); const signalErrors = validation.filter((item) => item.details?.signalId === signal.id); row.className = `signal-row${signalErrors.length ? ' invalid-row' : ''}`; row.title = signalErrors.map((item) => item.message).join('\n'); row.style.gridTemplateColumns = template(columns);
+  for (const [signalIndex, signal] of value.signals.entries()) {
+    const insertRow = document.createElement('div'); insertRow.className = 'signal-insert-row';
+    const insert = button('', () => {
+      if (!frame) return; const added = newSignalAt(frame, signalIndex, uuid()).signal; addedSignalId = added.id;
+      updateFrame({ signals: [...frame.signals.slice(0, signalIndex), added, ...frame.signals.slice(signalIndex)] }); render();
+    });
+    // The gap between rows carries the column-group tints too, so each tinted band runs unbroken down the table.
+    columns.forEach((_, index) => { const group = columnGroupClass(index); if (!group) return; const band = document.createElement('span'); band.className = group; band.style.gridColumn = String(index + 1); insertRow.appendChild(band); });
+    const pill = document.createElement('span'); pill.className = 'insert-pill'; pill.textContent = t('+ Insert Signal', '+ 挿入'); insert.append(pill);
+    insert.type = 'button'; insert.className = 'insert-zone'; insert.setAttribute('aria-label', pill.textContent);
+    if (!newSignalAt(value, signalIndex, 'probe').fits) { insert.classList.add('is-full'); insert.title = frameFullMessage(); }
+    insertRow.appendChild(insert); wrap.appendChild(insertRow);
+    const row = document.createElement('div'); const signalErrors = validation.filter((item) => item.details?.signalId === signal.id); row.className = `signal-row${signalErrors.length ? ' invalid-row' : ''}`; row.title = signalErrors.map((item) => item.message).join('\n'); row.style.gridTemplateColumns = template(columns);
     const cells = [
       cell(signalNameInput(signal)),
       cell(sizedTextInput(signal.unit, (next) => updateSignal(signal.id, (current) => ({ ...current, unit: next })), 'unit', columns, '.signal-header,.signal-row')),
       cell(numberInput(signal.byteOffset, 0, 63, (next) => updateSignal(signal.id, (current) => ({ ...current, byteOffset: next })))),
       cell(numberInput(signal.bitOffset, 0, 7, (next) => updateSignal(signal.id, (current) => ({ ...current, bitOffset: next })))),
       cell(numberInput(signal.lengthBits, 1, 64, (next) => updateSignal(signal.id, (current) => ({ ...current, lengthBits: next })))),
-      cell(selectInput([['unsigned',t('Unsigned','符号なし')],['signed',t('Signed','符号あり')]], signal.signedness, (next) => updateSignal(signal.id, (current) => ({ ...current, signedness: next as 'unsigned' | 'signed' })))),
-      cell(selectInput([['little','LITTLE'],['big','BIG']], signal.byteOrder, (next) => updateSignal(signal.id, (current) => ({ ...current, byteOrder: next as 'little' | 'big' })))),
+      cell(selectInput([['unsigned',t('Unsigned','符号なし')],['signed',t('Signed','符号あり')]], signal.signedness, (next) => updateSignal(signal.id, (current) => ({ ...current, signedness: next as 'unsigned' | 'signed' })), false)),
+      cell(selectInput([['little','LITTLE'],['big','BIG']], signal.byteOrder, (next) => updateSignal(signal.id, (current) => ({ ...current, byteOrder: next as 'little' | 'big' })), false)),
       cell(scaleInput(signal)), cell(offsetInput(signal)),
       cell(optionalNumberInput(signal.minimum, (next) => updateSignal(signal.id, (current) => ({ ...current, minimum: next })))),
       cell(optionalNumberInput(signal.maximum, (next) => updateSignal(signal.id, (current) => ({ ...current, maximum: next }))))
     ];
     if (value.multiplexing) cells.push(cell(multiplexerActivationInput(signal)));
     cells.push(cell(trashButton(`Delete ${signal.name}`, () => { if (frame) updateFrame({ signals: frame.signals.filter((item) => item.id !== signal.id) }); render(); })));
+    cells.forEach((element, index) => { const group = columnGroupClass(index); if (group) element.classList.add(group); });
     row.append(...cells); linkSignalRow(row, signal.id, columns); wrap.appendChild(row);
     if (expandedValueLabelsId === signal.id) wrap.appendChild(valueLabelsEditor(signal));
   }
-  if (!value.signals.length) { const empty = document.createElement('p'); empty.className = 'muted'; empty.style.padding = '8px'; empty.textContent = t('No manual signals are defined.', 'Signalが定義されていません。'); wrap.appendChild(empty); }
+  if (!value.signals.length) { const empty = document.createElement('p'); empty.className = 'muted'; empty.style.padding = '8px'; empty.textContent = t('No manual signals are defined.', 'シグナルが定義されていません。'); wrap.appendChild(empty); }
   return wrap;
 }
 
 function signalNameInput(signal: ManualSignalDefinition): HTMLElement {
-  const wrap = document.createElement('div'); wrap.style.cssText = 'display:flex;align-items:center;gap:3px';
+  const wrap = document.createElement('div'); wrap.style.cssText = 'display:flex;align-items:center;gap:var(--sm-space-xs)';
   const input = sizedTextInput(signal.name, (next) => updateSignal(signal.id, (current) => ({ ...current, name: next })), 'name', signalColumns(), '.signal-header,.signal-row');
   const toggle = iconButton('symbol-enum', t('Value labels', '値ラベル'), () => { expandedValueLabelsId = expandedValueLabelsId === signal.id ? undefined : signal.id; render(); });
   toggle.setAttribute('aria-expanded', String(expandedValueLabelsId === signal.id)); toggle.style.flex = '0 0 24px'; toggle.style.color = 'var(--vscode-descriptionForeground)';
@@ -384,40 +656,50 @@ function signalNameInput(signal: ManualSignalDefinition): HTMLElement {
     toggle.style.color = 'var(--vscode-textLink-foreground)';
     const indicator = document.createElement('span');
     indicator.className = 'value-label-indicator'; indicator.setAttribute('aria-hidden', 'true');
-    indicator.style.cssText = 'position:absolute;right:1px;top:1px;width:4px;height:4px;border-radius:50%;background:currentColor;pointer-events:none';
+    indicator.style.cssText = 'position:absolute;right:1px;top:1px;width:4px;height:4px;border-radius:var(--sm-radius-round);background:currentColor;pointer-events:none';
     toggle.append(indicator);
   }
   wrap.append(input, toggle); return wrap;
 }
 
+
+function definitionSubtable(labels: readonly string[], numeric: readonly number[]): { table: HTMLTableElement; appendRow: (...controls: HTMLElement[]) => void; appendAddRow: (add: HTMLButtonElement) => void } {
+  const table = document.createElement('table'); table.className = 'data-table definition-subtable';
+  const head = table.createTHead().insertRow();
+  for (const [index, label] of labels.entries()) { const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = label; cell.className = !label ? 'actions' : numeric.includes(index) ? 'table-number' : ''; if (!label) cell.setAttribute('aria-label', t('Actions', '操作')); head.append(cell); }
+  const body = table.createTBody();
+  return { table, appendRow: (...controls) => { const row = body.insertRow(); controls.forEach((control, index) => { const cell = row.insertCell(); cell.className = !labels[index] ? 'actions' : numeric.includes(index) ? 'table-number' : 'table-name'; cell.append(control); }); },
+    // Adding a row is always the table's own last row: one button as wide as the table.
+    appendAddRow: (add) => { const cell = table.createTFoot().insertRow().insertCell(); cell.colSpan = labels.length; cell.className = 'add-row-cell'; add.type = 'button'; add.className = 'add-row-button'; cell.append(add); } };
+}
+
 function valueLabelsEditor(signal: ManualSignalDefinition): HTMLElement {
-  const panel = document.createElement('div'); panel.className = 'value-label-editor'; panel.style.cssText = 'padding:8px 12px;border-bottom:1px solid var(--vscode-panel-border);max-width:560px';
-  const title = document.createElement('div'); title.textContent = `${signal.name} · ${t('Value labels', '値ラベル')}`; title.style.cssText = 'font-size:12px;margin-bottom:6px'; panel.append(title);
+  const panel = document.createElement('div'); panel.className = 'value-label-editor'; panel.style.cssText = 'padding:var(--sm-space-md) var(--sm-space-lg);border-bottom:1px solid var(--vscode-panel-border);max-width:420px';
+  const title = document.createElement('div'); title.textContent = `${signal.name} · ${t('Value labels', '値ラベル')}`; title.style.cssText = 'font-size:var(--sm-font-small);margin-bottom:var(--sm-space-sm)'; panel.append(title);
   const entries = valueLabelDrafts.get(signal.id) ?? Object.entries(signal.valueLabels ?? {}).map(([raw, label]) => ({ raw, label })); valueLabelDrafts.set(signal.id, entries);
   const error = document.createElement('div'); error.className = 'inline-error'; error.setAttribute('role', 'status');
   const commit = (save = true) => {
     const labels: Record<string, string> = {}; const seen = new Set<string>(); let message = '';
     for (const entry of entries) {
-      if (!/^-?(?:0|[1-9]\d*)$/.test(entry.raw) || entry.raw === '-0') { message = t('Enter a decimal RAW integer.', 'RAW値は10進整数で入力してください。'); break; }
-      if (seen.has(entry.raw)) { message = t('RAW values must be unique.', 'RAW値が重複しています。'); break; }
-      seen.add(entry.raw); labels[entry.raw] = entry.label;
+      const value = parseValueLabelRaw(entry.raw);
+      if (value === undefined) { message = t('Enter the RAW value as a decimal or hexadecimal (0x…) integer.', 'RAW値は10進または16進（0x…）の整数で入力してください。'); break; }
+      if (seen.has(value.toString())) { message = t('RAW values must be unique.', 'RAW値が重複しています。'); break; }
+      seen.add(value.toString()); labels[entry.raw.trim()] = entry.label;
     }
     const current = frame?.signals.find((item) => item.id === signal.id);
     if (!message && frame && current) message = validateFrameDefinition({ ...frame, signals: [{ ...current, valueLabels: labels }], derivedSignals: [] }).diagnostics.find((item) => item.code.startsWith('SIGNAL_VALUE_LABEL'))?.message ?? '';
     error.textContent = message;
     if (!message && save) updateSignal(signal.id, (current) => ({ ...current, valueLabels: Object.keys(labels).length ? labels : undefined }));
   };
-  const headings = document.createElement('div'); headings.style.cssText = 'display:grid;grid-template-columns:120px 1fr 24px;gap:6px;font-size:11px;color:var(--vscode-descriptionForeground)'; headings.append(document.createTextNode('RAW'));
-  const labelHeading = document.createElement('span'); labelHeading.textContent = t('Label', 'ラベル'); headings.append(labelHeading); panel.append(headings);
+  const { table, appendRow, appendAddRow } = definitionSubtable(['RAW', t('Label', 'ラベル'), ''], [0]); panel.append(table);
   entries.forEach((entry, index) => {
-    const row = document.createElement('div'); row.style.cssText = 'display:grid;grid-template-columns:120px 1fr 24px;gap:6px;margin-top:4px';
     const raw = document.createElement('input'); raw.value = entry.raw; raw.setAttribute('aria-label', `RAW ${index + 1}`); raw.dataset.controlKey = `value-label:${signal.id}:${index}:raw`;
     const label = document.createElement('input'); label.value = entry.label; label.setAttribute('aria-label', `${t('Label', 'ラベル')} ${index + 1}`); label.dataset.controlKey = `value-label:${signal.id}:${index}:label`;
     raw.addEventListener('input', () => { entry.raw = raw.value; commit(); }); label.addEventListener('input', () => { entry.label = label.value; commit(); });
-    row.append(raw, label, trashButton(t('Delete value label', '値ラベルを削除'), () => { entries.splice(index, 1); commit(); render(); })); panel.append(row);
+    appendRow(raw, label, trashButton(t('Delete value label', '値ラベルを削除'), () => { entries.splice(index, 1); commit(); render(); }));
   });
   const add = button(t('+ Add value label', '+ 値ラベルを追加'), () => { const used = new Set(entries.map((entry) => entry.raw)); let raw = signal.signedness === 'signed' ? -(2n ** BigInt(signal.lengthBits - 1)) : 0n; if (!used.has('0')) raw = 0n; while (used.has(raw.toString())) raw++; entries.push({ raw: raw.toString(), label: '' }); commit(); render(); });
-  add.style.marginTop = '6px'; panel.append(add, error); commit(false); return panel;
+  appendAddRow(add); panel.append(error); commit(false); return panel;
 }
 
 function buildDerivedTable(value: ManualFrameDefinition): HTMLElement {
@@ -431,20 +713,20 @@ function buildDerivedTable(value: ManualFrameDefinition): HTMLElement {
     row.append(
       cell(derivedNameInput(signal)),
       cell(sizedTextInput(signal.unit, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, unit: next })), 'derivedUnit', derivedColumnDefinitions, '.derived-header,.derived-row')),
-      cell(selectInput([['expression',t('Expression','計算式')],['lookup',t('Linear interpolation','線形補間')],['filter',t('Filter','フィルター')]], signal.operation.type, (next) => { expandedDerivedId = signal.id; updateDerivedSignal(signal.id, (current) => ({ ...current, operation: operationForType(next as ManualDerivedSignalDefinition['operation']['type'], current.operation, available) })); })),
+      cell(selectInput([['expression',t('Expression','計算式')],['lookup',t('Linear interpolation','線形補間')],['filter',t('Filter','フィルター')]], signal.operation.type, (next) => { expandedDerivedId = signal.id; updateDerivedSignal(signal.id, (current) => ({ ...current, operation: operationForType(next as ManualDerivedSignalDefinition['operation']['type'], current.operation, available) })); }, false)),
       cell(derivedDefinitionInput(signal, available)),
       cell(trashButton(`Delete ${signal.name}`, () => { if (frame) updateFrame({ derivedSignals: (frame.derivedSignals ?? []).filter((item) => item.id !== signal.id) }); render(); }))
     ); linkSignalRow(row, signal.id, derivedColumnDefinitions); wrap.appendChild(row);
     if (expandedDependencyId === signal.id) wrap.appendChild(makeDependencyDiagram(value, signal.id));
   });
-  if (!derived.length) { const empty = document.createElement('p'); empty.className = 'muted'; empty.style.padding = '8px'; empty.textContent = t('No Derived Signals are defined.', '派生Signalが定義されていません。'); wrap.appendChild(empty); }
+  if (!derived.length) { const empty = document.createElement('p'); empty.className = 'muted'; empty.style.padding = '8px'; empty.textContent = t('No Derived Signals are defined.', '派生シグナルが定義されていません。'); wrap.appendChild(empty); }
   return wrap;
 }
 
 function derivedNameInput(signal: ManualDerivedSignalDefinition): HTMLElement {
-  const wrap = document.createElement('div'); wrap.style.cssText = 'display:flex;align-items:center;gap:3px';
+  const wrap = document.createElement('div'); wrap.style.cssText = 'display:flex;align-items:center;gap:var(--sm-space-xs)';
   const input = sizedTextInput(signal.name, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, name: next })), 'derivedName', derivedColumnDefinitions, '.derived-header,.derived-row');
-  const toggle = iconButton('type-hierarchy-sub', t('Signal flow', 'Signal接続図'), () => { expandedDependencyId = expandedDependencyId === signal.id ? undefined : signal.id; render(); }); toggle.setAttribute('aria-expanded', String(expandedDependencyId === signal.id)); toggle.style.cssText = 'flex:0 0 24px;color:var(--vscode-descriptionForeground)'; wrap.append(input, toggle); return wrap;
+  const toggle = iconButton('type-hierarchy-sub', t('Signal flow', 'シグナル接続図'), () => { expandedDependencyId = expandedDependencyId === signal.id ? undefined : signal.id; render(); }); toggle.setAttribute('aria-expanded', String(expandedDependencyId === signal.id)); toggle.style.cssText = 'flex:0 0 28px;color:var(--vscode-descriptionForeground)'; wrap.append(input, toggle); return wrap;
 }
 function makeDependencyDiagram(value: ManualFrameDefinition, id: string): HTMLElement {
   return dependencyDiagram(value, id, (selected) => {
@@ -478,8 +760,8 @@ function derivedDefinitionInput(signal: ManualDerivedSignalDefinition, available
 }
 
 function signalNameSelect(names: readonly string[], value: string, change: (value: string) => void): HTMLSelectElement {
-  const options: Array<readonly [string, string]> = [['', t('Select input Signal…', '入力Signalを選択…')], ...names.map((name) => [name, name] as const)];
-  return selectInput(options, value, change);
+  const options: Array<readonly [string, string]> = [['', t('Select input Signal…', '入力シグナルを選択…')], ...names.map((name) => [name, name] as const)];
+  return selectInput(options, value, change, false);
 }
 
 function lookupInput(signal: ManualDerivedSignalDefinition, available: readonly string[]): HTMLElement {
@@ -489,13 +771,10 @@ function lookupInput(signal: ManualDerivedSignalDefinition, available: readonly 
     signalNameSelect(available, operation.input, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, operation: current.operation.type === 'lookup' ? { ...current.operation, input: next } : current.operation }))),
     selectInput([['clamp',t('Clamp outside range','範囲外を端値に固定')],['error',t('Error outside range','範囲外をエラー')]], operation.outOfRange, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, operation: current.operation.type === 'lookup' ? { ...current.operation, outOfRange: next as 'clamp' | 'error' } : current.operation })))
   );
-  const table = document.createElement('div'); table.className = 'lookup-table';
+  const { table, appendRow, appendAddRow } = definitionSubtable(['INPUT', 'OUTPUT', ''], [0, 1]); table.classList.add('lookup-table');
   const pointInputs: Array<{ input: HTMLInputElement; output: HTMLInputElement }> = [];
   const preview = createCurvePreview({ title: t('Linear interpolation', '線形補間'), xLabel: t('INPUT', '入力'), yLabel: signal.unit ? `${t('OUTPUT', '出力')} (${signal.unit})` : t('OUTPUT', '出力'), lines: [{ points: lookupPreviewPoints(operation.points) }], clamp: operation.outOfRange === 'clamp', onSelect: (index) => pointInputs[index]?.output.focus({ preventScroll: true }) });
   previewDisposers.push(preview.dispose);
-  const inputHead = document.createElement('span'); inputHead.className = 'lookup-head'; inputHead.textContent = 'INPUT';
-  const outputHead = document.createElement('span'); outputHead.className = 'lookup-head'; outputHead.textContent = 'OUTPUT';
-  table.append(inputHead, outputHead, document.createElement('span'));
   operation.points.forEach((point, index) => {
     const input = numberInput(point.input, -Number.MAX_VALUE, Number.MAX_VALUE, (next) => updateLookupPoint(signal.id, index, { input: next }));
     const output = numberInput(point.output, -Number.MAX_VALUE, Number.MAX_VALUE, (next) => updateLookupPoint(signal.id, index, { output: next }));
@@ -504,14 +783,14 @@ function lookupInput(signal: ManualDerivedSignalDefinition, available: readonly 
       control.addEventListener('focus', () => { preview.select(index); pointInputs.forEach((pair, row) => { pair.input.classList.toggle('is-point-active', row === index); pair.output.classList.toggle('is-point-active', row === index); }); });
       control.addEventListener('input', () => preview.update([{ points: lookupPreviewPoints(pointInputs.map((pair) => ({ input: pair.input.valueAsNumber, output: pair.output.valueAsNumber }))) }]));
     }
-    table.append(
+    appendRow(
       input,
       output,
       trashButton(`Delete Lookup point ${index + 1}`, () => { updateDerivedSignal(signal.id, (current) => ({ ...current, operation: current.operation.type === 'lookup' ? { ...current.operation, points: current.operation.points.filter((_, pointIndex) => pointIndex !== index) } : current.operation })); render(); })
     );
   });
-  const add = button(t('+ Add Point', '+ 点を追加'), () => { updateDerivedSignal(signal.id, (current) => { if (current.operation.type !== 'lookup') return current; const last = current.operation.points.at(-1); return { ...current, operation: { ...current.operation, points: [...current.operation.points, { input: (last?.input ?? 0) + 1, output: last?.output ?? 0 }] } }; }); render(); }); add.className = 'secondary';
-  const visual = document.createElement('div'); visual.className = 'definition-visual'; const editing = document.createElement('div'); editing.append(table, add); visual.append(editing, preview.element);
+  const add = button(t('+ Add Point', '+ 点を追加'), () => { updateDerivedSignal(signal.id, (current) => { if (current.operation.type !== 'lookup') return current; const last = current.operation.points.at(-1); return { ...current, operation: { ...current.operation, points: [...current.operation.points, { input: (last?.input ?? 0) + 1, output: last?.output ?? 0 }] } }; }); render(); }); appendAddRow(add);
+  const visual = document.createElement('div'); visual.className = 'definition-visual'; const editing = document.createElement('div'); editing.append(table); visual.append(editing, preview.element);
   wrap.append(controls, visual); return wrap;
 }
 
@@ -546,9 +825,9 @@ function multiplexerActivationInput(signal: ManualSignalDefinition): HTMLInputEl
 }
 function numberInput(value: number, min: number, max: number, change: (value: number) => void): HTMLInputElement { const input = document.createElement('input'); input.type = 'number'; input.min = String(min); input.max = String(max); input.value = String(value); input.addEventListener('change', () => { change(Number(input.value)); serverDiagnostics = []; render(); }); return input; }
 function optionalNumberInput(value: number | undefined, change: (value: number | undefined) => void): HTMLInputElement { const input = document.createElement('input'); input.type = 'number'; input.value = value === undefined ? '' : String(value); input.addEventListener('change', () => { change(input.value.trim() ? Number(input.value) : undefined); serverDiagnostics = []; render(); }); return input; }
-function selectInput(options: readonly (readonly [string,string])[], value: string, change: (value: string) => void): HTMLSelectElement { const select = document.createElement('select'); for (const [id,label] of options) { const option = document.createElement('option'); option.value = id; option.textContent = label; option.selected = id === value; select.appendChild(option); } select.addEventListener('change', () => { change(select.value); serverDiagnostics = []; render(); }); return select; }
+function selectInput(options: readonly (readonly [string,string])[], value: string, change: (value: string) => void, finite = true): HTMLSelectElement { const select = document.createElement('select'); if (finite) select.dataset.finiteChoice = 'true'; for (const [id,label] of options) { const option = document.createElement('option'); option.value = id; option.textContent = label; option.selected = id === value; select.appendChild(option); } select.addEventListener('change', () => { change(select.value); serverDiagnostics = []; render(); }); return select; }
 function scaleFor(signal: ManualSignalDefinition): { readonly type: 'scale-offset'; readonly lsb: number; readonly lsbText: string; readonly offset: number } { return signal.conversion; }
-function scaleInput(signal: ManualSignalDefinition): HTMLElement { const conversion = scaleFor(signal); const container = document.createElement('div'); const wrap = document.createElement('div'); wrap.className = 'resolution'; const factor = resolutionStepFactor(conversion.lsbText); const input = document.createElement('input'); input.value = conversion.lsbText; input.setAttribute('aria-label', `Scale for ${signal.name}`); const parsed = parseResolution(input.value); if (!parsed.valid) input.setAttribute('aria-invalid','true'); input.addEventListener('change', () => { const result = parseResolution(input.value); updateSignal(signal.id, (current) => ({ ...current, conversion: { ...scaleFor(current), lsbText: input.value, ...(result.valid ? { lsb: result.resolution.value } : {}) } })); render(); }); const spinner = document.createElement('span'); spinner.className = 'scale-spinner'; const up = iconButton('chevron-up', `Scale ×${factor}`, () => stepScale(signal, 'increase')); const down = iconButton('chevron-down', `Scale ÷${factor}`, () => stepScale(signal, 'decrease')); spinner.append(up, down); wrap.append(input, spinner); container.appendChild(wrap); if (!parsed.valid) { const error = document.createElement('span'); error.className = 'inline-error'; error.textContent = parsed.error; container.appendChild(error); } return container; }
+function scaleInput(signal: ManualSignalDefinition): HTMLElement { const conversion = scaleFor(signal); const container = document.createElement('div'); const wrap = document.createElement('div'); wrap.className = 'resolution'; const factor = resolutionStepFactor(conversion.lsbText); const input = document.createElement('input'); input.value = conversion.lsbText; input.setAttribute('aria-label', `Scale for ${signal.name}`); const parsed = parseResolution(input.value); if (!parsed.valid) input.setAttribute('aria-invalid','true'); input.addEventListener('change', () => { const result = parseResolution(input.value); updateSignal(signal.id, (current) => ({ ...current, conversion: { ...scaleFor(current), lsbText: input.value, ...(result.valid ? { lsb: result.resolution.value } : {}) } })); render(); }); wrap.append(input, stepperButtons(() => stepScale(signal, 'increase'), () => stepScale(signal, 'decrease'), { up: `Scale ×${factor}`, down: `Scale ÷${factor}` })); container.appendChild(wrap); if (!parsed.valid) { const error = document.createElement('span'); error.className = 'inline-error'; error.textContent = parsed.error; container.appendChild(error); } return container; }
 function stepScale(signal: ManualSignalDefinition, direction: 'increase'|'decrease'): void { const current = scaleFor(signal); const adjusted = adjustResolution(current.lsbText, direction); if (!adjusted.valid) return; updateSignal(signal.id, (item) => ({ ...item, conversion: { ...scaleFor(item), lsb: adjusted.resolution.value, lsbText: adjusted.resolution.text } })); render(); }
 function offsetInput(signal: ManualSignalDefinition): HTMLElement { const conversion = scaleFor(signal); return numberInput(conversion.offset, -Number.MAX_VALUE, Number.MAX_VALUE, (next) => updateSignal(signal.id, (current) => ({ ...current, conversion: { ...scaleFor(current), offset: next } }))); }
 function expressionInput(signal: ManualDerivedSignalDefinition, names: readonly string[]): HTMLElement {
@@ -589,16 +868,15 @@ function definitionHeader<Row>(column: SizingColumn<Row>, columns: readonly Sizi
   if (column.minWidth !== column.maxWidth) {
     const resize = document.createElement('span'); resize.className = 'resize';
     resize.addEventListener('mousedown', (event) => startResize(event, column, columns, selector));
-    resize.addEventListener('dblclick', () => {
-      widths[column.id] = autoFitColumns([column], rows(), measureText)[column.id];
-      applyTableWidths(columns, selector); persist();
-    });
+    const fit = () => { widths[column.id] = autoFitColumns([column], rows(), measureText)[column.id]; applyTableWidths(columns, selector); persist(); };
+    resize.addEventListener('dblclick', fit);
+    bindResizeKeyboard(resize, { label: column.label, width: () => head.getBoundingClientRect().width, setWidth: (width) => { widths[column.id] = Math.max(column.minWidth, Math.min(column.maxWidth, width)); applyTableWidths(columns, selector); persist(); }, fit });
     head.append(resize);
   }
   return head;
 }
 function button(label: string, click: () => void, primary = false): HTMLButtonElement { const element = document.createElement('button'); element.textContent = label; if (primary) element.className = 'primary'; element.addEventListener('click', click); return element; }
-function iconButton(icon: string, title: string, click: () => void): HTMLButtonElement { const element = document.createElement('button'); element.type = 'button'; element.className = 'icon'; element.title = title; element.setAttribute('aria-label', title); const glyph = document.createElement('span'); glyph.className = `codicon codicon-${icon}`; glyph.setAttribute('aria-hidden', 'true'); element.appendChild(glyph); element.addEventListener('click', click); return element; }
+function iconButton(icon: string, title: string, click: () => void): HTMLButtonElement { const element = styleIconButton(document.createElement('button'), icon, title); element.type = 'button'; element.classList.add('icon'); element.addEventListener('click', click); return element; }
 function trashButton(title: string, click: () => void): HTMLButtonElement { const result = iconButton('trash', title, click); result.classList.add('danger'); return result; }
 const textMeasureContext = document.createElement('canvas').getContext('2d');
 function measureText(text: string): number { if (!textMeasureContext) return text.length * 8; textMeasureContext.font = getComputedStyle(document.body).font; return textMeasureContext.measureText(text).width; }
@@ -698,6 +976,7 @@ function sortSignalsForPageEntry(): void {
 window.addEventListener('message', (event: MessageEvent<FrameEditorToWebview>) => {
   const message = event.data;
   if (message.type === 'init') {
+    scopeName = message.scopeName;
     expandedDependencyId = undefined;
     valueLabelDrafts.clear(); expandedValueLabelsId = undefined;
     const initial = structuredClone(message.frame); frame = { ...initial, signals: orderSignalsByDataPosition(initial.signals) };

@@ -1,7 +1,21 @@
 import type { ManualDerivedSignalDefinition, ManualFrameDefinition, ManualSignalDefinition } from '../manual/manualDefinition';
 import { formatCanId, parseCanId } from '../frame/canId';
 
-export const CURRENT_PROJECT_SCHEMA_VERSION = 2 as const;
+export const CURRENT_PROJECT_SCHEMA_VERSION = 4 as const;
+
+export interface AnalysisGroup {
+  readonly id: string;
+  readonly name: string;
+  /** Folder-based levels: the workspace-relative folder holding this level's `.sigmixa`, and the level directly above (none = common). */
+  readonly folder?: string;
+  readonly parentId?: string;
+  /** Logs outside the workspace listed by this level (absolute paths). */
+  readonly addedLogs?: readonly string[];
+  readonly sourcePaths: readonly string[];
+  readonly viewState?: unknown;
+  readonly definitionDependencies?: Pick<SigMixaProject, 'plugins' | 'pluginBindings' | 'externalCsvSources' | 'lookupTables' | 'calculations'>;
+  readonly frames: readonly ManualFrameDefinition[];
+}
 
 export type FrameDefinitionStub = ManualFrameDefinition;
 
@@ -39,14 +53,14 @@ export interface ExternalCsvSourceDefinition {
   readonly valueColumns: readonly ExternalCsvValueColumn[];
 }
 
+/** A Clip is a time range of a log: a name with a start and an end. It follows the log and has no view settings of its own. */
 export interface ClipDefinition {
   readonly id: string;
   readonly name: string;
   readonly sourcePath: string;
   readonly sourceFileName: string;
-  readonly startTimestamp: number;
-  readonly endTimestamp: number;
-  readonly signalIds: readonly string[];
+  readonly startTimestamp?: number;
+  readonly endTimestamp?: number;
 }
 
 export interface LookupTableDefinition {
@@ -74,6 +88,10 @@ export interface CalculationDefinition {
 export interface SigMixaProjectV1 {
   readonly schemaVersion: typeof CURRENT_PROJECT_SCHEMA_VERSION;
   readonly frames: readonly ManualFrameDefinition[];
+  readonly analysisGroups?: readonly AnalysisGroup[];
+  readonly logPaths?: readonly string[];
+  /** Logs outside the workspace that belong to this level (absolute paths). */
+  readonly addedLogs?: readonly string[];
   readonly plugins: readonly PluginRegistration[];
   readonly pluginBindings: readonly PluginBinding[];
   readonly externalCsvSources: readonly ExternalCsvSourceDefinition[];
@@ -94,8 +112,14 @@ export function serializeProject(project: SigMixaProject): unknown {
   return {
     ...project,
     schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION,
-    frames: project.frames.map(({ canId, extended, ...frame }) => ({ ...frame, canId: formatCanId(canId, extended) })),
+    frames: project.frames.map(serializeFrame),
+    clips: project.clips.map(({ startTimestamp, endTimestamp, ...clip }) => ({ ...clip, ...(startTimestamp !== undefined && endTimestamp !== undefined ? { range: { start: startTimestamp, end: endTimestamp } } : {}) })),
+    analysisGroups: (project.analysisGroups ?? []).map((group) => ({ ...group, frames: group.frames.map(serializeFrame) })),
   };
+}
+
+function serializeFrame({ canId, extended, ...frame }: ManualFrameDefinition): unknown {
+  return { ...frame, canId: formatCanId(canId, extended) };
 }
 
 /** Unregisters an External CSV source without touching its file or unrelated project definitions. */
@@ -115,12 +139,6 @@ export function removeExternalCsvSignal(project: SigMixaProject, sourceId: strin
   };
 }
 
-/** Updates the graph/comparison Signal selection stored by one Clip. */
-export function updateClipSignals(project: SigMixaProject, clipId: string, signalIds: readonly string[]): SigMixaProject {
-  const selected = [...new Set(signalIds.filter((id) => id.trim()))];
-  return { ...project, clips: project.clips.map((clip) => clip.id === clipId ? { ...clip, signalIds: selected } : clip) };
-}
-
 export function upsertCalculation(project: SigMixaProject, calculation: CalculationDefinition): SigMixaProject {
   return { ...project, calculations: [...project.calculations.filter((item) => item.id !== calculation.id), calculation] };
 }
@@ -129,41 +147,64 @@ export function removeCalculation(project: SigMixaProject, calculationId: string
   return { ...project, calculations: project.calculations.filter((item) => item.id !== calculationId) };
 }
 
-export function migrateProject(value: unknown): SigMixaProject {
+/**
+ * Invalid Clips and analysis groups are skipped (and reported through `issues`) so one
+ * broken entry cannot hide the rest of the project.
+ */
+export function migrateProject(value: unknown, issues?: string[]): SigMixaProject {
   if (!value || typeof value !== 'object') throw new Error('Project file must contain a JSON object.');
   const candidate = value as Record<string, unknown>;
-  if (candidate.schemaVersion !== 1 && candidate.schemaVersion !== CURRENT_PROJECT_SCHEMA_VERSION) {
+  if (candidate.schemaVersion !== 1 && candidate.schemaVersion !== 2 && candidate.schemaVersion !== 3 && candidate.schemaVersion !== CURRENT_PROJECT_SCHEMA_VERSION) {
     throw new Error(`Unsupported project schema version: ${String(candidate.schemaVersion)}`);
   }
   const frames = Array.isArray(candidate.frames) ? candidate.frames.map(coerceFrame) : [];
   return {
     schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION,
     frames,
+    analysisGroups: Array.isArray(candidate.analysisGroups) ? skipInvalid(candidate.analysisGroups, (value) => {
+      const group = record(value);
+      if (typeof group.id !== 'string' || !group.id || typeof group.name !== 'string') throw new Error('Invalid analysis group.');
+      return { id: group.id, name: group.name, ...(typeof group.folder === 'string' ? { folder: group.folder } : {}), ...(typeof group.parentId === 'string' ? { parentId: group.parentId } : {}), ...(Array.isArray(group.addedLogs) ? { addedLogs: group.addedLogs.map(String) } : {}), sourcePaths: Array.isArray(group.sourcePaths) ? group.sourcePaths.map(String) : [], frames: Array.isArray(group.frames) ? group.frames.map(coerceFrame) : [], viewState: group.viewState, definitionDependencies: group.definitionDependencies ? dependencySettings(group.definitionDependencies) : undefined };
+    }, issues) : [],
+    logPaths: Array.isArray(candidate.logPaths) ? [...new Set(candidate.logPaths.map(String))] : [],
+    ...(Array.isArray(candidate.addedLogs) ? { addedLogs: [...new Set(candidate.addedLogs.map(String).filter(Boolean))] } : {}),
     plugins: Array.isArray(candidate.plugins) ? candidate.plugins.map(coercePlugin) : [],
     pluginBindings: Array.isArray(candidate.pluginBindings) ? candidate.pluginBindings.map(coerceBinding) : [],
     externalCsvSources: Array.isArray(candidate.externalCsvSources) ? candidate.externalCsvSources.map(coerceExternalSource) : [],
-    clips: Array.isArray(candidate.clips) ? candidate.clips.map(coerceClip).filter((clip) => clip.id && clip.sourcePath && clip.endTimestamp >= clip.startTimestamp) : [],
+    clips: Array.isArray(candidate.clips) ? skipInvalid(candidate.clips, coerceClip, issues).filter((clip) => clip.id && clip.sourcePath) : [],
     lookupTables: Array.isArray(candidate.lookupTables) ? candidate.lookupTables.map(coerceLookupTable) : [],
     calculations: Array.isArray(candidate.calculations) ? candidate.calculations.map(coerceCalculation) : [],
     viewStates: candidate.viewStates && typeof candidate.viewStates === 'object' ? candidate.viewStates as Readonly<Record<string, unknown>> : {},
   };
 }
 
+function skipInvalid<T>(values: readonly unknown[], coerce: (value: unknown) => T, issues?: string[]): T[] {
+  return values.flatMap((value, index) => {
+    try { return [coerce(value)]; }
+    catch (error) { issues?.push(`${(error as Error).message} (entry ${index + 1}, id: ${String(record(value).id ?? '?')})`); return []; }
+  });
+}
+
 function coerceClip(value: unknown): ClipDefinition {
-  const clip = record(value); const start = Number(clip.startTimestamp); const end = Number(clip.endTimestamp);
+  const clip = record(value);
+  const range = clip.range === undefined ? undefined : record(clip.range);
+  const rawStart = range ? range.start : clip.startTimestamp; const rawEnd = range ? range.end : clip.endTimestamp;
+  const hasRange = clip.range !== undefined || rawStart !== undefined || rawEnd !== undefined;
+  if (hasRange && (typeof rawStart !== 'number' || !Number.isFinite(rawStart) || typeof rawEnd !== 'number' || !Number.isFinite(rawEnd))) throw new Error('Invalid Clip range: both finite endpoints are required.');
+  const start = Number(rawStart); const end = Number(rawEnd);
+  if (range && start > end) throw new Error('Invalid Clip range: start must not exceed end.');
   return {
     id: String(clip.id ?? ''), name: String(clip.name ?? ''), sourcePath: String(clip.sourcePath ?? ''), sourceFileName: String(clip.sourceFileName ?? ''),
-    startTimestamp: Math.min(start, end), endTimestamp: Math.max(start, end),
-    signalIds: Array.isArray(clip.signalIds) ? [...new Set(clip.signalIds.map(String).filter(Boolean))] : [],
+    ...(hasRange ? { startTimestamp: Math.min(start, end), endTimestamp: Math.max(start, end) } : {}),
   };
 }
 
 /** Parses persisted JSON separately so callers can preserve corrupt source bytes before recovery. */
-export function parseProjectJson(text: string): SigMixaProject {
+export function parseProjectJson(text: string, issues?: string[]): SigMixaProject {
   let value: unknown;
   try { value = JSON.parse(text); }
   catch (error) { throw new Error(`Project JSON is invalid: ${(error as Error).message}`); }
-  return migrateProject(value);
+  return migrateProject(value, issues);
 }
 
 function coerceExternalSource(value: unknown): ExternalCsvSourceDefinition {
@@ -274,9 +315,24 @@ function coerceFrame(value: unknown): ManualFrameDefinition {
     extended: parsedCanId?.extended ?? frame.extended === true,
     name: String(frame.name ?? ''),
     frameLength: Number(frame.frameLength ?? 8),
+    expectedPeriodMs: frame.expectedPeriodMs === undefined ? undefined : Number(frame.expectedPeriodMs),
     multiplexing: frame.multiplexing === true || undefined,
     signals: Array.isArray(frame.signals) ? frame.signals.map(coerceSignal) : [],
     derivedSignals: Array.isArray(frame.derivedSignals) ? frame.derivedSignals.map(coerceDerivedSignal) : [],
     origin,
   };
+}
+
+function dependencySettings(value: unknown): NonNullable<AnalysisGroup['definitionDependencies']> {
+  const data = record(value);
+  const parsed = migrateProject({ ...data, schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION, analysisGroups: [], frames: [] });
+  return { plugins: parsed.plugins, pluginBindings: parsed.pluginBindings, externalCsvSources: parsed.externalCsvSources, lookupTables: parsed.lookupTables, calculations: parsed.calculations };
+}
+
+export function clipRange(clip: Pick<ClipDefinition, 'startTimestamp' | 'endTimestamp'>): { start: number; end: number } | undefined {
+  return clip.startTimestamp === undefined || clip.endTimestamp === undefined ? undefined : { start: clip.startTimestamp, end: clip.endTimestamp };
+}
+/** `wholeFile` is the caller's localized label for a Clip without a range. */
+export function clipRangeLabel(clip: Pick<ClipDefinition, 'startTimestamp' | 'endTimestamp'>, wholeFile = 'Whole file'): string {
+  const range = clipRange(clip); return range ? `${range.start.toFixed(3)}–${range.end.toFixed(3)} s` : wholeFile;
 }

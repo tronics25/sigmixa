@@ -1,5 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { graph, logView, pinned, TRACE_COLUMNS, trajectory } from './sample-views.mjs';
+import { parkingFrames } from './sample-frames.mjs';
 
 const output = path.resolve('sample/.sigmixa/project.json');
 const formatCanId = (canId, extended) => `${canId.toString(16).toUpperCase()}${extended && canId <= 0x7ff ? 'x' : ''}`;
@@ -112,25 +114,52 @@ const frames = [
       { id: 'sig-time-to-collision', name: 'Time To Collision', unit: 's', operation: { type: 'expression', expression: '[Object Distance] / max(-[Relative Speed], 0.1)' } },
     ],
   },
+  {
+    // 100 ms with jitter, a 41-50 s dropout: the trace shows the stop and the interval spread.
+    id: 'ff-3c0', canId: 0x3c0, extended: false, name: 'Door Module Heartbeat', frameLength: 8, expectedPeriodMs: 100, origin: { type: 'manual' },
+    signals: [
+      extracted('sig-heartbeat-counter', 'Heartbeat Counter', '', 0, 8, 1),
+      extracted('sig-door-module-state', 'Door Module State', '', 1, 8, 1, 0, { valueLabels: { 0: 'Sleep', 1: 'Awake', 2: 'Recovered' } }),
+    ],
+    derivedSignals: [],
+  },
+  // The car park log (parking-drive/parking-garage.asc).
+  ...parkingFrames(),
+  // Owned by the property-service Plugin, as its registration creates them.
+  { id: 'plugin-frame:sample.property-service:s:6a0', canId: 0x6a0, extended: false, name: 'Property Request', frameLength: 8, signals: [], derivedSignals: [], origin: { type: 'plugin', pluginId: 'sample.property-service' } },
+  { id: 'plugin-frame:sample.property-service:s:6a8', canId: 0x6a8, extended: false, name: 'Property Response', frameLength: 8, signals: [], derivedSignals: [], origin: { type: 'plugin', pluginId: 'sample.property-service' } },
 ];
 
 const pluginBindings = [
   { id: 'plugin-binding:sample.byte-scaler:ff-2a0', pluginId: 'sample.byte-scaler', frameId: 'ff-2a0', enabled: true, automatic: true },
   { id: 'plugin-binding:sample.payload-metric:ff-2a0', pluginId: 'sample.payload-metric', frameId: 'ff-2a0', enabled: true, automatic: true },
+  ...['6a0', '6a8'].map((id) => ({ id: `plugin-binding:sample.property-service:${encodeURIComponent(`plugin-frame:sample.property-service:s:${id}`)}`, pluginId: 'sample.property-service', frameId: `plugin-frame:sample.property-service:s:${id}`, enabled: true, automatic: true })),
 ];
 const pluginSignalId = (pluginId, bindingId, signalId) => `plugin:${encodeURIComponent(pluginId)}:${encodeURIComponent(bindingId)}:${encodeURIComponent(signalId)}`;
 const counterId = pluginSignalId('sample.byte-scaler', pluginBindings[0].id, 'scaled-byte');
 const metricId = pluginSignalId('sample.payload-metric', pluginBindings[1].id, 'payload-metric');
+const propertyResponseSignal = (signalId) => pluginSignalId('sample.property-service', pluginBindings[3].id, signalId);
+const propertyRequestSignal = (signalId) => pluginSignalId('sample.property-service', pluginBindings[2].id, signalId);
+const propertyConfig = {
+  responseTimeoutMs: 500,
+  properties: [
+    { id: 1, name: 'Target Cabin Temperature', unit: '°C', scale: 0.5, offset: -40 },
+    { id: 2, name: 'Fan Level', unit: '', scale: 1, offset: 0 },
+    { id: 3, name: 'Seat Heater Level', unit: '', scale: 1, offset: 0 },
+    { id: 4, name: 'Display Brightness', unit: '%', scale: 0.5, offset: 0 },
+  ],
+};
 const externalSignalId = (sourceId, column) => `external:${encodeURIComponent(sourceId)}:${encodeURIComponent(column)}`;
 const externalSourceId = 'reference-signals';
 const referenceSpeedId = externalSignalId(externalSourceId, 'Reference Speed');
 const ambientTemperatureId = externalSignalId(externalSourceId, 'Ambient Temperature');
 const project = {
-  schemaVersion: 2,
+  schemaVersion: 4,
   frames,
   plugins: [
     { id: 'sample.byte-scaler', version: '1.1.0', source: '.sigmixa/plugins/byte-scaler', enabled: true, configSchemaVersion: '1', config: { byteIndex: 10, factor: 1, label: 'Coolant Raw Byte' } },
     { id: 'sample.payload-metric', version: '1.0.0', source: '.sigmixa/plugins/payload-metric', enabled: true, configSchemaVersion: '1', config: { mode: 'average', throwOnMarker: true } },
+    { id: 'sample.property-service', version: '1.0.0', source: '.sigmixa/plugins/property-service', enabled: true, configSchemaVersion: '1', config: propertyConfig },
   ],
   pluginBindings,
   externalCsvSources: [{
@@ -140,34 +169,32 @@ const project = {
     timestampColumn: 'Time_ms',
     timestampUnit: 'milliseconds',
     valueColumns: [
-      { column: 'Reference Speed', name: 'Reference Speed', unit: 'km/h' },
+      { column: 'Reference Speed', name: 'Reference Speed', unit: 'm/s' },
       { column: 'Ambient Temperature', name: 'Ambient Temperature', unit: '°C' },
     ],
   }],
-  clips: [
-    { id: 'clip-acceleration', name: 'Acceleration', sourcePath: 'sigmixa-showcase.asc', sourceFileName: 'sigmixa-showcase.asc', startTimestamp: 2, endTimestamp: 8, signalIds: ['sig-speed', 'sig-engine-speed', 'sig-accelerator'] },
-    { id: 'clip-braking', name: 'Braking', sourcePath: 'sigmixa-showcase.asc', sourceFileName: 'sigmixa-showcase.asc', startTimestamp: 18, endTimestamp: 24, signalIds: ['sig-speed', 'sig-brake-pressure', 'sig-pedal'] },
-  ],
+  // The basic log has no Clips: Clips are shown on brake-analysis/road-test.asc, which holds three trials.
+  clips: [],
   lookupTables: [],
   calculations: [],
   viewStates: {
     'frame-definition-columns': { name: 203, unit: 112, byte: 48, bit: 44, length: 58, signed: 96, endian: 92, scale: 100, offset: 74, minimum: 74, maximum: 74, activation: 136, actions: 32, derivedName: 235, derivedUnit: 112, derivedType: 140, definition: 520, derivedActions: 32 },
-    'log-view-default': {
-      tableSelectedIds: ['sig-speed', 'sig-engine-speed', 'sig-engine-torque', 'sig-mechanical-power', 'sig-brake-pressure', 'sig-wheel-speed-difference', 'sig-headlight', 'sig-gear-position', 'sig-object-distance', 'sig-time-to-collision', counterId, metricId],
-      tableWidths: { time: 118, 'sig-speed': 130, 'sig-engine-speed': 130, 'sig-accelerator': 145, 'sig-engine-torque': 135, 'sig-coolant-temp': 150, 'sig-mechanical-power': 140, 'sig-brake-pressure': 130, 'sig-pedal': 145, 'sig-wheel-speed-difference': 180, 'sig-headlight': 110, 'sig-gear-position': 120, 'sig-object-distance': 130, 'sig-relative-speed': 130, 'sig-time-to-collision': 130, [counterId]: 140, [metricId]: 140 },
-      chartSelectedIds: ['sig-speed', 'sig-smoothed-speed', referenceSpeedId, 'sig-engine-speed', 'sig-engine-torque', 'sig-brake-pressure', 'sig-temp', ambientTemperatureId, 'sig-yaw-rate', 'sig-lateral-accel', 'sig-object-distance', 'sig-time-to-collision'],
-      chartColors: { 'sig-speed': '#2563eb', 'sig-smoothed-speed': '#0891b2', [referenceSpeedId]: '#f97316', 'sig-engine-speed': '#7c3aed', 'sig-accelerator': '#84cc16', 'sig-engine-torque': '#dc2626', 'sig-mechanical-power': '#eab308', 'sig-brake-pressure': '#ef4444', 'sig-wheel-speed-fl': '#0ea5e9', 'sig-wheel-speed-fr': '#22c55e', 'sig-temp': '#a855f7', 'sig-ambient-can': '#f59e0b', [ambientTemperatureId]: '#16a34a', 'sig-yaw-rate': '#ec4899', 'sig-lateral-accel': '#14b8a6', 'sig-object-distance': '#3b82f6', 'sig-relative-speed': '#f43f5e', 'sig-time-to-collision': '#8b5cf6', [counterId]: '#7c3aed', [metricId]: '#0891b2' },
-      chartMode: 'raw', chartPaneWidth: 270, chartPaneCollapsed: false, chartSignalGrouping: 'frame', tableSignalGrouping: 'frame',
-      chartConnectGaps: true, chartAxisRange: { mode: 'visible', includeZero: false },
-      chartGroupLayout: [['family:speed', 'family:rotational-speed'], ['family:torque', 'family:pressure'], ['family:temperature'], ['family:angular-speed', 'family:acceleration'], ['family:length', 'family:time']],
-      trajectoryXId: 'sig-position-x', trajectoryYId: 'sig-position-y', trajectoryZId: 'sig-position-z',
-      trajectoryInvert: { x: false, y: false, z: false }, trajectoryEqualAspect: true,
-      trajectoryTrail: 'all', trajectoryTrailSeconds: 10, trajectorySpeed: 1,
-      trajectoryConnectGaps: true, trajectoryShowGrid: true, trajectoryShowPoints: true,
-    },
+    // Opened at the workspace level, every log starts from these views (2.0.0: several graphs and trajectories).
+    'log-view-default': logView([
+      graph('view-speed-engine', 'Speed and Engine', ['sig-speed', 'sig-smoothed-speed', referenceSpeedId, 'sig-engine-speed'], ['family:speed', 'family:rotational-speed']),
+      graph('view-torque-brake', 'Torque and Brake', ['sig-engine-torque', 'sig-brake-pressure'], ['family:torque', 'family:pressure']),
+      graph('view-temperatures', 'Temperatures', ['sig-temp', 'sig-coolant-temp', ambientTemperatureId], ['family:temperature']),
+      graph('view-states', 'Drive and Module States', ['sig-gear-position', 'sig-drive-state', 'sig-door-module-state'], ['empty'], 200),
+      graph('view-property-service', 'Property Service', [propertyResponseSignal('p1-value'), propertyRequestSignal('p1-requested'), propertyResponseSignal('p4-value'), propertyRequestSignal('p4-requested')], ['family:temperature', 'family:percentage']),
+      trajectory('view-path-3d', 'Vehicle Path (3D)', [{ id: 'series-vehicle', name: 'Vehicle Position', xId: 'sig-position-x', yId: 'sig-position-y', zId: 'sig-position-z' }], { view: { yaw: 5.374, pitch: 0.419, zoom: 1.49, panX: -4.11, panY: 0.58 } }),
+    ], {
+      tableSelectedIds: ['sig-speed', 'sig-engine-speed', 'sig-engine-torque', 'sig-mechanical-power', 'sig-brake-pressure', 'sig-wheel-speed-difference', 'sig-headlight', 'sig-gear-position', 'sig-object-distance', 'sig-time-to-collision', counterId, metricId,
+        'sig-door-module-state', propertyRequestSignal('request'), propertyResponseSignal('p2-value'), propertyResponseSignal('p2-result'), propertyResponseSignal('p2-response-time')],
+      traceSettings: { pinnedIds: pinned(0x3c0, 0x6a0, 0x6a8), defaultMode: 'decoded', columns: TRACE_COLUMNS, sort: 'canId', descending: false },
+    }),
   },
 };
 
 const persistedProject = { ...project, frames: project.frames.map(({ canId, extended, ...frame }) => ({ ...frame, canId: formatCanId(canId, extended) })) };
 writeFileSync(output, `${JSON.stringify(persistedProject, null, 2)}\n`, 'utf8');
-console.log(`Generated ${output}: ${frames.length} frames / ${frames.reduce((sum, frame) => sum + frame.signals.length, 0)} extracted Signals / ${frames.reduce((sum, frame) => sum + frame.derivedSignals.length, 0)} Derived Signals / 2 Clips / 2 Plugins / 1 External CSV`);
+console.log(`Generated ${output}: ${frames.length} frames / ${frames.reduce((sum, frame) => sum + frame.signals.length, 0)} extracted Signals / ${frames.reduce((sum, frame) => sum + frame.derivedSignals.length, 0)} Derived Signals / 0 Clips / 3 Plugins / 1 External CSV`);

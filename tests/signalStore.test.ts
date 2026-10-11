@@ -67,6 +67,24 @@ test('Clip range also bounds nearest values and exported event rows', () => {
   assert.deepEqual([...store.eventRows([speed.id], { start: 0.5, end: 1.5 })].map((row) => row.timestamp), [1]);
 });
 
+test('a Clip gets the nearest sample outside each edge as a separate carried sample', () => {
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed]);
+  for (let index = 0; index < 6; index++) store.appendFrame(`a:${index}`, index, [decoded(speed, index, index * 10)]);
+  const clip = { start: 1.5, end: 4.5 };
+  // A viewport in a whole file keeps one real neighbour on each side.
+  assert.deepEqual(store.seriesSlice([speed.id], clip, 100)[0].samples.map((sample) => sample.timestamp), [1, 2, 3, 4, 5]);
+  // A Clip: the nearest sample outside each edge keeps its own time and value (so the slopes at the edges are true) and is marked carried.
+  const clipped = store.seriesSlice([speed.id], clip, 100, clip)[0];
+  assert.deepEqual(clipped.samples.map((sample) => [sample.timestamp, sample.value, sample.carried === true]), [[1, 10, true], [2, 20, false], [3, 30, false], [4, 40, false], [5, 50, true]]);
+  assert.equal(clipped.totalSamplesInRange, 3);
+  // Zooming inside the Clip keeps edge context, still without leaving the Clip.
+  assert.deepEqual(store.seriesSlice([speed.id], { start: 2.5, end: 3.5 }, 100, clip)[0].samples.map((sample) => sample.timestamp), [2, 3, 4]);
+  // A Clip that starts exactly on a sample, or before any sample, has no carried value.
+  // A Clip whose edges fall exactly on samples has no carried samples.
+  assert.deepEqual(store.seriesSlice([speed.id], { start: 2, end: 4 }, 100, { start: 2, end: 4 })[0].samples.map((sample) => [sample.timestamp, sample.carried === true]), [[2, false], [3, false], [4, false]]);
+  assert.deepEqual(store.seriesSlice([speed.id], { start: -1, end: 1 }, 100, { start: -1, end: 1 })[0].samples.map((sample) => sample.timestamp), [0, 1]);
+});
+
 test('bounded sampling preserves the true first and last items and exact hover uses original samples', () => {
   const samples = Array.from({ length: 10_001 }, (_, index) => ({ timestamp: index / 10, value: index }));
   const bounded = downsampleEven(samples, 4000);
@@ -134,4 +152,10 @@ test('incremental replacement preserves unrelated Signals and merges the same Fr
   assert.equal(page.rows[0].values.get(speed.id)?.value, 99);
   assert.equal(page.rows[0].values.get(temperature.id)?.value, 20);
   assert.equal(store.catalog().find((definition) => definition.id === speed.id)?.name, 'Updated speed');
+});
+
+test('measuredSignalIds lists only the Signals that have samples', () => {
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed, temperature]);
+  store.appendFrame('a:0', 0, [decoded(speed, 0, 10)]); store.finalize();
+  assert.deepEqual(store.measuredSignalIds(), [speed.id]); assert.equal(store.catalog().length, 2, 'the catalog still has every definition');
 });

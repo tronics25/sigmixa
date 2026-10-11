@@ -49,18 +49,18 @@ test('synthetic BLF performance smoke parses 20,000 Classic frames', { timeout: 
   assert.equal(result.framesParsed, 20_000); assert.equal(frames, 20_000); assert.ok(performance.now() - started < 8_000);
 });
 
-test('bundled BLF showcase mirrors every supported ASC frame', async () => {
+test('bundled basic BLF log mirrors every supported ASC frame', async () => {
   const frames: CanFrame[] = []; const diagnostics: Diagnostic[] = [];
-  const result = parseBlfBuffer(readFileSync('sample/sigmixa-showcase.blf'), { sourceId: 'sample/sigmixa-showcase.blf', onFrames: (items) => { frames.push(...items); }, onDiagnostics: (items) => diagnostics.push(...items) });
+  const result = parseBlfBuffer(readFileSync('sample/sigmixa-basic.blf'), { sourceId: 'sample/sigmixa-basic.blf', onFrames: (items) => { frames.push(...items); }, onDiagnostics: (items) => diagnostics.push(...items) });
   const ascFrames: CanFrame[] = [];
-  await parseAscFile('sample/sigmixa-showcase.asc', { sourceId: 'sample/sigmixa-showcase.asc', onFrames: (items) => ascFrames.push(...items) });
+  await parseAscFile('sample/sigmixa-basic.asc', { sourceId: 'sample/sigmixa-basic.asc', onFrames: (items) => ascFrames.push(...items) });
   const supportedAscFrames = ascFrames.filter((frame) => !(frame.canId === 0x400 && frame.dataLength === 0));
   const comparable = (frame: CanFrame) => ({
     timestampNs: Math.round(frame.timestamp * 1_000_000_000), channel: frame.channel, direction: frame.direction,
     canId: frame.canId, extended: frame.extended, dlcCode: frame.dlcCode,
     dataLength: frame.dataLength, data: [...frame.data],
   });
-  assert.equal(result.framesParsed, 3159); assert.equal(frames.length, result.framesParsed);
+  assert.equal(result.framesParsed, 3699); assert.equal(frames.length, result.framesParsed);
   assert.deepEqual(frames.map(comparable), supportedAscFrames.map(comparable));
   assert.deepEqual(diagnostics, []);
 });

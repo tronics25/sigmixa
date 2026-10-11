@@ -88,6 +88,7 @@ export class ChunkedFrameStore implements FrameStore {
   private readonly chunks: CanFrame[][] = [];
   private count = 0;
   private version = 0;
+  private bounds?: { start: number; end: number };
   private cachedFilterKey: string | undefined;
   private cachedFilter: FrameFilter | undefined;
   private cachedContext: FrameQueryContext | undefined;
@@ -105,6 +106,7 @@ export class ChunkedFrameStore implements FrameStore {
 
   get size(): number { return this.count; }
   get generation(): number { return this.version; }
+  get timeRange(): { readonly start: number; readonly end: number } | undefined { return this.bounds && { ...this.bounds }; }
 
   *frames(): IterableIterator<CanFrame> { for (const chunk of this.chunks) yield* chunk; }
 
@@ -114,6 +116,10 @@ export class ChunkedFrameStore implements FrameStore {
 
   append(frames: readonly CanFrame[]): void {
     for (const frame of frames) {
+      if (Number.isFinite(frame.timestamp)) {
+        this.bounds ??= { start: frame.timestamp, end: frame.timestamp };
+        this.bounds.start = Math.min(this.bounds.start, frame.timestamp); this.bounds.end = Math.max(this.bounds.end, frame.timestamp);
+      }
       const ordinal = this.count;
       let chunk = this.chunks[this.chunks.length - 1];
       if (!chunk || chunk.length >= this.chunkSize) {
@@ -248,6 +254,7 @@ export class ChunkedFrameStore implements FrameStore {
   }
 
   clear(): void {
+    this.bounds = undefined;
     this.chunks.length = 0;
     this.count = 0;
     this.version++;

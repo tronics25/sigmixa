@@ -1,7 +1,11 @@
 import type { SignalSample } from '../signal/signal';
 import { downsampleEven } from '../timeline/timeline';
 
-export interface TrajectoryPoint { readonly timestamp: number; readonly x: number; readonly y: number; readonly z?: number; }
+export interface TrajectoryPoint {
+  readonly timestamp: number; readonly x: number; readonly y: number; readonly z?: number;
+  /** The position held from before a Clip's range: where the path starts from, not a measured point. */
+  readonly carried?: boolean;
+}
 export interface TrajectoryMeasurement {
   readonly first: TrajectoryPoint;
   readonly second: TrajectoryPoint;
@@ -32,7 +36,7 @@ export function buildTrajectoryPoints(
     const alignedSamples = indexes.map((index, axis) => sources[axis][index]); indexes.forEach((_, axis) => indexes[axis]++);
     if (!alignedSamples.every((sample) => Number.isFinite(sample.value) && (sample.quality === undefined || sample.quality === 'valid'))) continue;
     const values = alignedSamples.map((sample) => sample.value);
-    points.push({ timestamp: target, x: invert.x ? -values[0] : values[0], y: invert.y ? -values[1] : values[1], ...(z ? { z: invert.z ? -values[2] : values[2] } : {}) });
+    points.push({ timestamp: target, x: invert.x ? -values[0] : values[0], y: invert.y ? -values[1] : values[1], ...(z ? { z: invert.z ? -values[2] : values[2] } : {}), ...(alignedSamples.some((sample) => sample.carried) ? { carried: true } : {}) });
   }
   return downsampleEven(points, limit);
 }

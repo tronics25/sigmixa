@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-const output = path.resolve('sample/sigmixa-showcase.asc');
+const output = path.resolve('sample/sigmixa-basic.asc');
 const lines = readFileSync(output, 'utf8').split('\n');
 const target = lines.findIndex((line) => line.includes('30.001000 CANFD') && line.includes(' 2A0 '));
 if (target < 0) throw new Error('Could not find the deterministic Plugin failure frame.');

@@ -64,6 +64,8 @@ export interface PluginSignalSampleOutput {
   /** Optional source-defined label used only to group Signals in selectors. */
   readonly group?: string;
   readonly value: number;
+  /** Optional state name for this value (e.g. "Set", "Failure"), shown next to the number like a Frame value label. */
+  readonly valueLabel?: string;
   readonly quality?: SignalSample['quality'];
   readonly events?: readonly Omit<SignalEvent, 'timestamp'>[];
 }

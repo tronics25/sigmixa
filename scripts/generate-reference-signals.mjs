@@ -13,7 +13,8 @@ function speedAt(time) {
 const csvLines = ['Time_ms,Reference Speed,Ambient Temperature'];
 for (let index = 0; index <= 200; index++) {
   const time = 5 + index * 0.25;
-  const reference = Math.max(0, speedAt(time) + Math.sin(time * 0.7) * 2.5);
+  // In m/s, while the CAN speed is in km/h: the graph converts both onto one speed axis.
+  const reference = Math.max(0, speedAt(time) + Math.sin(time * 0.7) * 2.5) / 3.6;
   const ambient = 21.5 + Math.sin(time / 8) * 1.8;
   csvLines.push(`${Math.round(time * 1000)},${reference.toFixed(3)},${ambient.toFixed(3)}`);
 }

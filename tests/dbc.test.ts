@@ -96,8 +96,8 @@ test('normalizes names on export and reports skipped Derived Signals', () => {
   assert.deepEqual(result.diagnostics.map((item) => item.code), ['DBC_DERIVED_SIGNALS_SKIPPED']);
 });
 
-test('bundled DBC showcase imports as valid standard and extended definitions', () => {
-  const result = importDbc(readFileSync(path.resolve('sample/sigmixa-showcase.dbc'), 'utf8'), 'sample/sigmixa-showcase.dbc');
+test('bundled basic DBC imports as valid standard and extended definitions', () => {
+  const result = importDbc(readFileSync(path.resolve('sample/sigmixa-basic.dbc'), 'utf8'), 'sample/sigmixa-basic.dbc');
   assert.deepEqual(result.diagnostics, []);
   assert.deepEqual(result.frames.map((frame) => [frame.canId, frame.extended, frame.frameLength, frame.signals.length]), [
     [0x2a0, false, 8, 4],

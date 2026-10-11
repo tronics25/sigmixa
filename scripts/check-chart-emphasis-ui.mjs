@@ -22,7 +22,7 @@ try {
       const strokeRect = CanvasRenderingContext2D.prototype.strokeRect;
       CanvasRenderingContext2D.prototype.strokeRect = function(...args) { window.labelBorders.push({ color: this.strokeStyle, dash: this.getLineDash(), width: this.lineWidth, exported: !this.canvas.isConnected }); return strokeRect.apply(this, args); };
     });
-    const bundle = await build({ entryPoints: [comparison ? 'src/webview/clips/clipComparison.ts' : 'src/webview/raw/rawLog.ts'], bundle: true, write: false, platform: 'browser', format: 'iife' });
+    const bundle = await build({ entryPoints: [comparison ? 'src/webview/comparison/comparison.ts' : 'src/webview/raw/rawLog.ts'], bundle: true, write: false, platform: 'browser', format: 'iife' });
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
     const send = (message) => page.evaluate((data) => window.dispatchEvent(new MessageEvent('message', { data })), message);
     const settle = () => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));

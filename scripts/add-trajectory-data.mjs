@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-const output = path.resolve('sample/sigmixa-showcase.asc');
+const output = path.resolve('sample/sigmixa-basic.asc');
 const lines = readFileSync(output, 'utf8').split('\n');
 let points = 0;
 

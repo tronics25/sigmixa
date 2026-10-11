@@ -4,6 +4,18 @@ export interface ChartLayoutGroup {
   readonly key: string;
 }
 
+/** Collapse legacy rows into one plot, preserving axis order and every selected unit system. */
+export function arrangeSingleChartGroups<T extends ChartLayoutGroup>(groups: readonly T[], layout?: ChartGroupLayout): readonly T[] {
+  const byKey = new Map(groups.map((group) => [group.key, group]));
+  const result: T[] = [];
+  for (const key of layout?.flat() ?? []) {
+    const group = byKey.get(key);
+    if (group) { result.push(group); byKey.delete(key); }
+  }
+  result.push(...byKey.values());
+  return result;
+}
+
 export function arrangeChartGroups<T extends ChartLayoutGroup>(groups: readonly T[], layout?: ChartGroupLayout): readonly (readonly T[])[] {
   if (!layout?.length) return chunkPairs(groups);
   const byKey = new Map(groups.map((group) => [group.key, group]));

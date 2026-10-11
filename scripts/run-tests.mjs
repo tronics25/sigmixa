@@ -15,6 +15,8 @@ await build({
   target: 'node18',
   sourcemap: true,
   logLevel: 'silent',
+  // Extension-side storage tests run against a small stand-in for the VS Code API.
+  alias: { vscode: path.resolve('tests/support/vscode.js') },
 });
 const testFiles = (await fs.readdir(output)).filter((name) => name.endsWith('.test.js')).map((name) => path.join(output, name));
 const result = spawnSync(process.execPath, ['--test', ...testFiles], { stdio: 'inherit' });

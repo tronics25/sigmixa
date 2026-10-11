@@ -1,13 +1,17 @@
+import { DATA_TABLE_ROW_HEIGHT, measureTableText } from '../shared/dataTableStyle';
+import { iconButton } from '../shared/iconButton';
 import type { SignalDefinition } from '../../core/signal/signal';
 import type { LogViewState, SignalTableRowDto, ToExtensionMessage, ToWebviewMessage } from '../../extension/editors/rawLogProtocol';
 import { autoFitColumns, fitColumnsToView, type SizingColumn } from '../shared/columnSizing';
 import { SignalSelector } from '../shared/signalSelector';
 import { computeVirtualRange } from '../shared/virtualization';
 import { emphasizeSignal } from '../shared/signalEmphasis';
+import { bindResizeKeyboard, blurTableFocus, widthToFit } from '../shared/tableBehavior';
+import { closeActionMenu, showActionMenu } from '../shared/contextMenu';
 import { t } from '../shared/i18n';
 import { addSelectionRange, removeSelectionIndex, selectionContains, selectionCount, type SelectionRange } from '../raw/selectionRanges';
 
-const ROW_HEIGHT = 28;
+const ROW_HEIGHT = DATA_TABLE_ROW_HEIGHT;
 const PAGE_SIZE = 240;
 
 export class SignalTableView {
@@ -44,6 +48,7 @@ export class SignalTableView {
   private parsing = false;
   private analysisProgress: { processed: number; total: number } | undefined;
   private selectionRanges: SelectionRange[] = [];
+  private rowsGeneration = -1;
   private selectionAnchor: number | undefined;
   private focusedIndex: number | undefined;
   private copyFeedbackTimer: number | undefined;
@@ -61,7 +66,7 @@ export class SignalTableView {
     this.widths = { time: 118, ...(initial?.tableWidths ?? {}) };
     this.fittedWidths = new Set(Object.keys(initial?.tableWidths ?? {}));
     this.paneWidth = Math.max(180, Math.min(440, initial?.tablePaneWidth ?? 250)); this.paneCollapsed = initial?.tablePaneCollapsed ?? false;
-    host.innerHTML = `<div class="signal-layout"><aside class="signal-pane table-pane"><div class="table-selector"></div></aside><div class="pane-separator table-pane-separator"></div><section class="signal-main"><div class="view-toolbar"><button class="table-pane-toggle">${t('Signals', 'Signal')}</button><button class="table-export">${t('Export CSV…', 'CSVへ出力…')}</button><span class="spacer"></span><span class="table-selection-status status selection-status" hidden></span><span class="table-status muted">${t('Select Signals', 'Signalを選択')}</span><button class="table-analysis-cancel" hidden>${t('Cancel analysis', '解析を中止')}</button></div><div class="signal-grid" role="table" aria-multiselectable="true" tabindex="0"><div class="signal-grid-header" role="row"></div><div class="signal-grid-sizer"><div class="signal-grid-window"></div></div><div class="table-empty raw-empty" hidden><span></span></div></div></section></div><div class="context-menu table-context-menu" hidden></div>`;
+    host.innerHTML = `<div class="signal-layout"><aside class="signal-pane table-pane"><div class="table-selector"></div></aside><div class="pane-separator table-pane-separator"></div><section class="signal-main"><div class="view-toolbar"><button class="table-pane-toggle">${t('Signals', 'シグナル')}</button><button class="table-clip" disabled>✂ ${t('Create Clip from selection', '選択範囲からクリップ作成')}</button><button class="table-export">${t('Export CSV…', 'CSVへ出力…')}</button><span class="spacer"></span><span class="table-selection-status status selection-status" hidden></span><span class="table-status muted">${t('Select Signals', 'シグナルを選択')}</span><button class="table-analysis-cancel" hidden>${t('Cancel analysis', '解析を中止')}</button></div><div class="signal-grid" role="table" aria-multiselectable="true" tabindex="0"><div class="signal-grid-header" role="row"></div><div class="signal-grid-sizer"><div class="signal-grid-window"></div></div><div class="table-empty raw-empty" hidden><span></span></div></div></section></div><div class="context-menu table-context-menu" hidden></div>`;
     this.grid = host.querySelector('.signal-grid')!; this.header = host.querySelector('.signal-grid-header')!; this.sizer = host.querySelector('.signal-grid-sizer')!; this.rowWindow = host.querySelector('.signal-grid-window')!;
     this.exportButton = host.querySelector('.table-export')!; this.status = host.querySelector('.table-status')!; this.selectionStatus = host.querySelector('.table-selection-status')!; this.empty = host.querySelector('.table-empty')!; this.pane = host.querySelector('.table-pane')!; this.separator = host.querySelector('.table-pane-separator')!; this.contextMenu = host.querySelector('.table-context-menu')!; this.analysisCancel = host.querySelector('.table-analysis-cancel')!;
     this.selector = new SignalSelector({ host: host.querySelector('.table-selector')!, selected: this.selected, grouping: initial?.tableSignalGrouping, onGroupingChange: () => this.persist(), onSelectionChange: () => this.selectionChanged(), onHighlightChange: (id) => this.highlightColumn(id) });
@@ -69,6 +74,9 @@ export class SignalTableView {
     this.grid.addEventListener('mouseover', (event) => { const cell = (event.target as HTMLElement).closest<HTMLElement>('[data-column-id]'); this.highlightColumn(cell?.dataset.columnId); });
     this.grid.addEventListener('mouseleave', () => this.highlightColumn(undefined));
     window.addEventListener('resize', () => { if (this.visible) { this.applyWidths(); this.draw(); } });
+    host.querySelector('.table-clip')!.addEventListener('click', () => { const range = this.selectionRanges[0]; if (this.selectionRanges.length === 1 && range.end > range.start && !this.parsing && !this.analysisProgress) this.post({ type: 'createTableClip', startRow: range.start, endRow: range.end, generation: this.rowsGeneration, signalIds: [...this.selected] }); });
+    iconButton(this.exportButton, 'export', t('Export CSV', 'CSVへ出力'));
+    iconButton(host.querySelector<HTMLButtonElement>('.table-clip')!, 'new-file', t('Create Clip from selection', '選択範囲からクリップ作成'));
     this.exportButton.addEventListener('click', () => this.post({ type: 'exportSignalCsv', selectedIds: this.columnOrder.filter((id) => this.selected.has(id)) }));
     host.querySelector('.table-pane-toggle')!.addEventListener('click', () => { this.paneCollapsed = !this.paneCollapsed; this.applyPane(); this.persist(); });
     this.analysisCancel.addEventListener('click', () => this.post({ type: 'cancelAnalysis' }));
@@ -81,16 +89,14 @@ export class SignalTableView {
   }
 
   show(): void { this.visible = true; if (!this.catalogRequested) { this.catalogRequested = true; this.latestCatalogRequest = ++this.counter; this.post({ type: 'signalCatalogRequest', requestId: this.latestCatalogRequest, view: 'table' }); } this.applyPane(); this.draw(); }
-  hide(): void { this.visible = false; this.contextMenu.hidden = true; }
+  hide(): void { this.visible = false; this.contextMenu.hidden = true; closeActionMenu(); }
 
   handle(message: ToWebviewMessage): void {
     if (message.type === 'signalCatalog' && message.requestId === this.latestCatalogRequest) {
       this.definitions.clear(); for (const definition of message.definitions) this.definitions.set(definition.id, definition);
-      let selectionChanged = false; for (const id of [...this.selected]) if (!this.definitions.has(id)) { this.selected.delete(id); selectionChanged = true; }
-      this.syncColumnOrder(); this.selector.setCatalog(message.definitions, message.groups); this.buildHeader(); this.updateActions(); this.pagePending = this.selected.size > 0; this.requestPage(true); this.requestMissingWidths(); this.updatePresentation();
-      if (selectionChanged) this.persist();
+      this.syncColumnOrder(); this.selector.setCatalog(message.definitions, message.groups, message); this.buildHeader(); this.updateActions(); this.pagePending = this.selected.size > 0; this.requestPage(true); this.requestMissingWidths(); this.updatePresentation();
     } else if (message.type === 'signalTablePage' && message.requestId === this.latestPageRequest) {
-      this.pagePending = false; this.total = message.total; for (let index = 0; index < message.rows.length; index++) this.rows.set(message.offset + index, message.rows[index]);
+      if (this.rowsGeneration !== message.generation) { this.rows.clear(); this.clearSelection(); } this.rowsGeneration = message.generation; this.pagePending = false; this.total = message.total; for (let index = 0; index < message.rows.length; index++) this.rows.set(message.offset + index, message.rows[index]);
       this.pruneRows(); this.draw();
     } else if (message.type === 'signalTableSample' && message.requestId === this.latestSampleRequest) {
       const columns = this.sizingColumns(); const fitted = autoFitColumns(columns, message.rows, measureText);
@@ -127,7 +133,7 @@ export class SignalTableView {
 
   private sizingColumns(): readonly SizingColumn<SignalTableRowDto>[] {
     return this.columns().map((column) => column.id === 'time'
-      ? { id: 'time', label: 'TIME(S)', minWidth: 96, maxWidth: 180, value: (row) => formatNumber(row.timestamp, 6) }
+      ? { id: 'time', label: 'TIME(S)', minWidth: 96, maxWidth: 180, value: (row) => row.timestamp.toFixed(6) }
       : { id: column.id, label: `${column.definition!.name}${column.definition!.unit ? ` (${column.definition!.unit})` : ''}`, minWidth: 90, maxWidth: 320, flex: 1, value: (row) => row.values[column.id] === undefined ? '' : `${formatNumber(row.values[column.id])}${row.valueLabels?.[column.id] ? ` (${row.valueLabels[column.id]})` : ''}` });
   }
 
@@ -144,7 +150,7 @@ export class SignalTableView {
       const cell = document.createElement('div'); cell.className = `signal-head${column.id === 'time' ? ' sticky-time' : ''}`; cell.setAttribute('role', 'columnheader'); cell.dataset.columnId = column.id;
       if (column.id === 'time') cell.textContent = 'TIME(S)';
       else {
-        const name = document.createElement('span'); name.textContent = column.definition!.name; name.className = 'signal-column-drag'; name.draggable = true; name.title = t('Drag to reorder this column', 'ドラッグして列を並べ替え');
+        const name = document.createElement('span'); name.textContent = column.definition!.name; name.className = 'signal-column-drag'; name.dataset.fitContent = 'true'; name.draggable = true;
         name.addEventListener('dragstart', (event) => { event.dataTransfer?.setData('text/plain', column.id); if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'; cell.classList.add('dragging'); });
         name.addEventListener('dragend', () => { this.header.querySelectorAll('.dragging,.drag-target').forEach((item) => item.classList.remove('dragging', 'drag-target')); });
         const unit = document.createElement('small'); unit.textContent = column.definition!.unit ?? ''; cell.append(name, unit);
@@ -152,7 +158,9 @@ export class SignalTableView {
         cell.addEventListener('dragleave', () => cell.classList.remove('drag-target'));
         cell.addEventListener('drop', (event) => { event.preventDefault(); cell.classList.remove('drag-target'); const source = event.dataTransfer?.getData('text/plain'); if (source) this.moveColumn(source, column.id, event.clientX > cell.getBoundingClientRect().left + cell.clientWidth / 2); });
       }
-      const handle = document.createElement('span'); handle.className = 'resize'; handle.title = t('Drag to resize · Double-click to fit content', 'ドラッグで幅変更・ダブルクリックで内容に合わせる'); handle.addEventListener('mousedown', (event) => this.startResize(event, column.id)); handle.addEventListener('dblclick', () => this.requestSample(new Set([column.id]))); cell.appendChild(handle); this.header.appendChild(cell);
+      const handle = document.createElement('span'); handle.className = 'resize'; handle.addEventListener('mousedown', (event) => this.startResize(event, column.id)); handle.addEventListener('dblclick', () => this.requestSample(new Set([column.id])));
+      bindResizeKeyboard(handle, { label: column.id === 'time' ? 'TIME(S)' : column.definition!.name, width: () => this.displayWidths()[column.id], setWidth: (width) => this.setColumnWidth(column.id, width), fit: () => this.requestSample(new Set([column.id])) });
+      cell.appendChild(handle); this.header.appendChild(cell);
     }
     this.applyWidths();
   }
@@ -169,7 +177,7 @@ export class SignalTableView {
       columns.forEach((column) => {
         const cell = document.createElement('div');
         cell.className = `signal-cell${column.id === 'time' ? ' sticky-time' : ''}`;
-        const value = !data ? t('Loading…', '読み込み中…') : column.id === 'time' ? formatNumber(data.timestamp, 6) : data.values[column.id] === undefined ? '—' : formatNumber(data.values[column.id]);
+        const value = !data ? t('Loading…', '読み込み中…') : column.id === 'time' ? data.timestamp.toFixed(6) : data.values[column.id] === undefined ? '—' : formatNumber(data.values[column.id]);
         const display = `${value}${data?.valueLabels?.[column.id] ? ` (${data.valueLabels[column.id]})` : ''}`;
         const unit = column.definition?.unit ? ` ${column.definition.unit}` : '';
         cell.textContent = display;
@@ -193,9 +201,22 @@ export class SignalTableView {
         row.addEventListener('click', (event) => { if (this.ignoreRowClick) { event.preventDefault(); return; } this.selectRow(index, event); row.focus({ preventScroll: true }); });
         row.addEventListener('contextmenu', (event) => { event.preventDefault(); if (!selectionContains(this.selectionRanges, index)) { this.selectionRanges = [{ start: index, end: index }]; this.selectionAnchor = index; this.focusedIndex = index; this.refreshSelectionStyles(); } this.showContextMenu(event.clientX, event.clientY); });
       }
+      if (data) row.dataset.loaded = 'true';
       this.rowWindow.appendChild(row);
     }
+    this.fitVisibleColumns();
     this.requestPage(false, range.start, range.end);
+  }
+  /** No column cuts off its header or the loaded values on screen; overflowing columns widen. */
+  private fitVisibleColumns(): void {
+    const visible = this.displayWidths(); let changed = false;
+    for (const column of this.columns()) {
+      const selector = `[data-column-id="${CSS.escape(column.id)}"]`;
+      const cells = [...Array.from(this.header.querySelectorAll<HTMLElement>(`.signal-head${selector}`)), ...Array.from(this.rowWindow.querySelectorAll<HTMLElement>(`.signal-grid-row[data-loaded] .signal-cell${selector}`))];
+      const width = widthToFit(cells, visible[column.id]);
+      if (width !== undefined) { this.widths[column.id] = width; this.fittedWidths.add(column.id); changed = true; }
+    }
+    if (changed) { this.applyWidths(); this.sizer.style.width = `${this.totalWidth()}px`; this.rowWindow.style.width = `${this.totalWidth()}px`; }
   }
 
   private requestPage(force = false, start = 0, end = PAGE_SIZE): void {
@@ -207,18 +228,19 @@ export class SignalTableView {
   }
 
   private updatePresentation(): void {
+    (this.host.querySelector('.table-clip') as HTMLButtonElement).disabled = this.parsing || !!this.analysisProgress || this.selectionRanges.length !== 1 || selectionCount(this.selectionRanges) < 2;
     const count = selectionCount(this.selectionRanges); this.selectionStatus.hidden = count === 0;
     if (count) this.selectionStatus.textContent = `${count.toLocaleString()} ${t(count === 1 ? 'row selected' : 'rows selected', '行選択')}`;
-    if (!this.selected.size) this.status.textContent = t('Select Signals', 'Signalを選択');
+    if (!this.selected.size) this.status.textContent = t('Select Signals', 'シグナルを選択');
     else if (this.analysisProgress) { const percent = this.analysisProgress.total ? Math.floor(this.analysisProgress.processed / this.analysisProgress.total * 100) : 100; this.status.textContent = `${t('Analyzing', '解析中')} ${percent}%`; }
     else if (this.parsing) this.status.textContent = `${this.total.toLocaleString()} ${t('event rows', 'イベント行')} · ${t('importing', '読込中')}`;
     else if (this.pagePending && this.total === 0) this.status.textContent = t('Loading events…', 'イベントを読み込み中…');
     else this.status.textContent = `${this.total.toLocaleString()} ${t('event rows', 'イベント行')}`;
     const text = this.empty.querySelector('span')!;
-    if (!this.selected.size) text.textContent = t('Select one or more Signals to build the event table.', 'Signalを選択するとイベントテーブルを表示します。');
-    else if (this.analysisProgress) text.textContent = t('Analyzing Signal events…', 'Signalイベントを解析しています…');
-    else if (this.parsing || (this.pagePending && this.total === 0)) text.textContent = t('Loading Signal events…', 'Signalイベントを読み込んでいます…');
-    else text.textContent = t('No events were found for the selected Signals.', '選択したSignalのイベントはありません。');
+    if (!this.selected.size) text.textContent = t('Select one or more Signals to build the event table.', 'シグナルを選択するとイベントテーブルを表示します。');
+    else if (this.analysisProgress) text.textContent = t('Analyzing Signal events…', 'シグナルイベントを解析しています…');
+    else if (this.parsing || (this.pagePending && this.total === 0)) text.textContent = t('Loading Signal events…', 'シグナルイベントを読み込んでいます…');
+    else text.textContent = t('No events were found for the selected Signals.', '選択したシグナルのイベントはありません。');
     this.empty.hidden = this.total > 0;
   }
 
@@ -273,7 +295,7 @@ export class SignalTableView {
     for (const range of this.selectionRanges) for (let index = range.start; index <= range.end; index++) { const row = this.rows.get(index); if (!row) return undefined; result.push(row); } return result;
   }
 
-  private rowValues(row: SignalTableRowDto): readonly string[] { return [formatNumber(row.timestamp, 6), ...this.columnOrder.filter((id) => this.selected.has(id)).map((id) => row.values[id] === undefined ? '' : formatNumber(row.values[id]))]; }
+  private rowValues(row: SignalTableRowDto): readonly string[] { return [row.timestamp.toFixed(6), ...this.columnOrder.filter((id) => this.selected.has(id)).map((id) => row.values[id] === undefined ? '' : formatNumber(row.values[id]))]; }
   private selectedRowsAsText(rows: readonly SignalTableRowDto[]): string { return `${rows.map((row) => this.rowValues(row).map(cleanCell).join('\t')).join('\r\n')}\r\n`; }
   private selectedRowsAsHtml(rows: readonly SignalTableRowDto[]): string { const table = document.createElement('table'); const body = document.createElement('tbody'); table.appendChild(body); for (const row of rows) { const tr = document.createElement('tr'); for (const value of this.rowValues(row)) { const td = document.createElement('td'); td.textContent = value; tr.appendChild(td); } body.appendChild(tr); } return table.outerHTML; }
   private requestSelectedRows(action: 'copy' | 'open'): void { if (this.selectionRanges.length) this.post({ type: 'signalTableRowsRequest', action, ranges: this.selectionRanges, selectedIds: this.columnOrder.filter((id) => this.selected.has(id)) }); }
@@ -287,13 +309,15 @@ export class SignalTableView {
 
   private showCopyFeedback(count: number): void { window.clearTimeout(this.copyFeedbackTimer); this.selectionStatus.hidden = false; this.selectionStatus.textContent = `${count.toLocaleString()} ${t(count === 1 ? 'row copied' : 'rows copied', '行コピーしました')}`; this.copyFeedbackTimer = window.setTimeout(() => this.updatePresentation(), 1400); }
 
-  private showContextMenu(x: number, y: number, focus = false): void {
-    this.contextMenu.replaceChildren(); this.contextMenu.hidden = false; this.contextMenu.style.left = `${x}px`; this.contextMenu.style.top = `${y}px`; const count = selectionCount(this.selectionRanges);
-    const action = (label: string, run: () => void) => { const button = document.createElement('button'); button.textContent = label; button.addEventListener('click', () => { this.contextMenu.hidden = true; run(); }); this.contextMenu.appendChild(button); };
-    action(count === 1 ? t('Copy Row', '行をコピー') : t(`Copy ${count} Rows`, `${count}行をコピー`), () => this.copySelectedRows());
-    action(count === 1 ? t('Open Row in Text Editor', '行をテキストエディタで開く') : t(`Open ${count} Rows in Text Editor`, `${count}行をテキストエディタで開く`), () => this.requestSelectedRows('open'));
-    requestAnimationFrame(() => { const bounds = this.contextMenu.getBoundingClientRect(); this.contextMenu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - bounds.width - 4))}px`; this.contextMenu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - bounds.height - 4))}px`; if (focus) this.contextMenu.querySelector<HTMLButtonElement>('button')?.focus(); });
+  private showContextMenu(x: number, y: number): void {
+    const count = selectionCount(this.selectionRanges);
+    const rowElement = this.rowWindow.querySelector<HTMLElement>(`.signal-grid-row[data-row-index="${this.focusedIndex}"]`) ?? this.grid;
+    showActionMenu([
+      { label: count === 1 ? t('Copy Row', '行をコピー') : t(`Copy ${count} Rows`, `${count}行をコピー`), icon: 'copy', run: () => this.copySelectedRows() },
+      { label: count === 1 ? t('Open Row in Text Editor', '行をテキストエディタで開く') : t(`Open ${count} Rows in Text Editor`, `${count}行をテキストエディタで開く`), icon: 'go-to-file', run: () => this.requestSelectedRows('open') },
+    ], t('Table row actions', 'テーブルの行の操作'), x, y, rowElement, { scroller: this.grid });
   }
+
 
   private keyDown(event: KeyboardEvent): void {
     if (!this.visible) return; const target = event.target as HTMLElement | null; const editing = target?.matches('input,select,textarea,[contenteditable=true]') ?? false;
@@ -301,8 +325,8 @@ export class SignalTableView {
     else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c' && this.selectionRanges.length && !editing) { event.preventDefault(); this.copySelectedRows(); }
     else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a' && (this.focusedIndex !== undefined || target === this.grid) && !editing) { event.preventDefault(); this.selectionRanges = this.total ? [{ start: 0, end: this.total - 1 }] : []; this.selectionAnchor = 0; this.focusedIndex = this.total ? 0 : undefined; this.refreshSelectionStyles(); }
     else if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && (this.focusedIndex !== undefined || target === this.grid) && !editing) { event.preventDefault(); const start = this.focusedIndex ?? (event.key === 'ArrowDown' ? -1 : this.total); this.moveRowFocus(start + (event.key === 'ArrowDown' ? 1 : -1), event.shiftKey); }
-    else if (event.shiftKey && event.key === 'F10' && this.focusedIndex !== undefined && !editing) { const row = this.rowWindow.querySelector<HTMLElement>(`.signal-grid-row[data-row-index="${this.focusedIndex}"]`); if (row) { event.preventDefault(); const bounds = row.getBoundingClientRect(); this.showContextMenu(bounds.left + 24, bounds.top + ROW_HEIGHT, true); } }
-    else if (event.key === 'Escape' && this.selectionRanges.length && !editing) { event.preventDefault(); this.clearSelection(); this.refreshSelectionStyles(); }
+    else if (event.shiftKey && event.key === 'F10' && this.focusedIndex !== undefined && !editing) { const row = this.rowWindow.querySelector<HTMLElement>(`.signal-grid-row[data-row-index="${this.focusedIndex}"]`); if (row) { event.preventDefault(); const bounds = row.getBoundingClientRect(); this.showContextMenu(bounds.left + 24, bounds.top + ROW_HEIGHT); } }
+    else if (event.key === 'Escape' && !editing) { if (this.selectionRanges.length) { event.preventDefault(); this.clearSelection(); this.refreshSelectionStyles(); } blurTableFocus('.signal-grid, .signal-grid-row'); }
   }
 
   private moveRowFocus(nextIndex: number, extend: boolean): void {
@@ -318,7 +342,7 @@ export class SignalTableView {
     if (source === target || !this.selected.has(source) || !this.selected.has(target)) return; const next = this.columnOrder.filter((id) => id !== source); const targetIndex = next.indexOf(target); next.splice(targetIndex + (after ? 1 : 0), 0, source); this.columnOrder.splice(0, this.columnOrder.length, ...next); this.buildHeader(); this.draw(); this.persist();
   }
 
-  private applyPane(): void { const toggle = this.host.querySelector('.table-pane-toggle')!; toggle.setAttribute('aria-expanded', String(!this.paneCollapsed)); toggle.setAttribute('title', this.paneCollapsed ? t('Show Signal selection', 'Signal選択を表示') : t('Hide Signal selection', 'Signal選択を隠す')); this.pane.hidden = this.paneCollapsed; this.separator.hidden = this.paneCollapsed; this.pane.style.width = `${this.paneWidth}px`; this.pane.style.flex = `0 0 ${this.paneWidth}px`; requestAnimationFrame(() => { if (this.visible) { this.applyWidths(); this.draw(); } }); }
+  private applyPane(): void { const toggle = this.host.querySelector('.table-pane-toggle')!; toggle.setAttribute('aria-expanded', String(!this.paneCollapsed)); toggle.setAttribute('title', this.paneCollapsed ? t('Show Signal selection', 'シグナル選択を表示') : t('Hide Signal selection', 'シグナル選択を隠す')); iconButton(toggle as HTMLButtonElement, this.paneCollapsed ? 'layout-sidebar-left-off' : 'layout-sidebar-left', toggle.getAttribute('title')!); this.pane.hidden = this.paneCollapsed; this.separator.hidden = this.paneCollapsed; this.pane.style.width = `${this.paneWidth}px`; this.pane.style.flex = `0 0 ${this.paneWidth}px`; requestAnimationFrame(() => { if (this.visible) { this.applyWidths(); this.draw(); } }); }
   private startPaneResize(event: MouseEvent): void { event.preventDefault(); const start = event.clientX; const initial = this.paneWidth; const move = (next: MouseEvent) => { this.paneWidth = Math.max(180, Math.min(440, initial + next.clientX - start)); this.applyPane(); }; const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); this.persist(); }; window.addEventListener('mousemove', move); window.addEventListener('mouseup', up); }
 
   private requestSample(targets?: ReadonlySet<string>): void { if (!this.selected.size) return; this.autoFitTargets = targets; this.latestSampleRequest = ++this.counter; this.post({ type: 'signalTableSampleRequest', requestId: this.latestSampleRequest, selectedIds: this.columnOrder.filter((id) => this.selected.has(id)) }); }
@@ -330,9 +354,14 @@ export class SignalTableView {
   private startResize(event: MouseEvent, id: string): void { event.preventDefault(); const start = event.clientX; const displayed = this.displayWidths(); Object.assign(this.widths, displayed); const initial = displayed[id]; const column = this.sizingColumns().find((item) => item.id === id)!; const move = (next: MouseEvent) => { this.widths[id] = Math.max(column.minWidth, Math.min(column.maxWidth, initial + next.clientX - start)); this.applyWidths(); }; const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); for (const visible of this.columns()) this.fittedWidths.add(visible.id); this.persistWidths(); }; window.addEventListener('mousemove', move); window.addEventListener('mouseup', up); }
   private persist(): void { this.save({ tableSignalGrouping: this.selector.groupingMode, tableSelectedIds: [...this.selected], tableColumnOrder: [...this.columnOrder], tableWidths: { ...this.widths }, tablePaneWidth: this.paneWidth, tablePaneCollapsed: this.paneCollapsed }); }
   private persistWidths(): void { this.persist(); }
+  private setColumnWidth(id: string, width: number): void {
+    const column = this.sizingColumns().find((item) => item.id === id); if (!column) return;
+    Object.assign(this.widths, this.displayWidths()); this.widths[id] = Math.max(column.minWidth, Math.min(column.maxWidth, width)); this.fittedWidths.add(id);
+    this.applyWidths(); this.draw(); this.persistWidths();
+  }
   private pruneRows(): void { if (this.rows.size <= PAGE_SIZE * 6) return; const center = Math.floor(this.grid.scrollTop / ROW_HEIGHT); for (const index of this.rows.keys()) if (Math.abs(index - center) > PAGE_SIZE * 3) this.rows.delete(index); }
 }
 
 function formatNumber(value: number, digits = 9): string { if (!Number.isFinite(value)) return '—'; if (Number.isInteger(value)) return String(value); return Number(value.toPrecision(digits)).toString(); }
 function cleanCell(value: string): string { return value.replace(/[\t\r\n]+/g, ' '); }
-function measureText(text: string): number { const canvas = document.createElement('canvas'); const context = canvas.getContext('2d'); if (!context) return text.length * 8; context.font = getComputedStyle(document.body).font; return context.measureText(text).width; }
+function measureText(text: string): number { return measureTableText(text); }

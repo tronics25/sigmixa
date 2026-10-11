@@ -19,6 +19,10 @@ export interface SignalDefinition {
 export interface SignalSample {
   readonly timestamp: Timestamp;
   readonly value: number;
+  /** The nearest sample just outside a Clip's range (before its start or after its end), with its own time: used to draw the line to the Clip's edge, never counted as the Clip's data. */
+  readonly carried?: boolean;
+  /** Filter evidence from the original sequential decode, not a single-row replay. */
+  readonly filterEvidence?: { readonly previousValue?: number; readonly deltaSeconds: number; readonly sampleCount?: number; readonly sum?: number };
   /** State name resolved from the original RAW value, not a rounded physical value. */
   readonly valueLabel?: string;
   readonly quality?: 'valid' | 'invalid' | 'missing';

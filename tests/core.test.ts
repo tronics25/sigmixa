@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertCanFrame, type CanFrame } from '../src/core/frame/canFrame';
 import { validateSignalDefinition } from '../src/core/signal/signal';
-import { emptyProject, migrateProject, removeCalculation, removeExternalCsvSignal, removeExternalCsvSource, serializeProject, updateClipSignals, upsertCalculation } from '../src/core/project/schema';
+import { emptyProject, migrateProject, removeCalculation, removeExternalCsvSignal, removeExternalCsvSource, serializeProject, upsertCalculation } from '../src/core/project/schema';
 
 const valid: CanFrame = {
   id: 'source:0', sourceId: 'source', timestamp: 12.5, canId: 0x123, extended: false,
@@ -21,15 +21,15 @@ test('Signal definitions use stable IDs and source-neutral validation', () => {
 });
 
 test('project schema has an explicit version and rejects unknown versions', () => {
-  assert.equal(migrateProject(emptyProject()).schemaVersion, 2);
-  assert.throws(() => migrateProject({ schemaVersion: 3 }), /Unsupported/);
+  assert.equal(migrateProject(emptyProject()).schemaVersion, 4);
+  assert.throws(() => migrateProject({ schemaVersion: 999 }), /Unsupported/);
 });
 
 test('project persistence stores CAN IDs as strings and migrates numeric v1 IDs', () => {
   const legacy = migrateProject({ schemaVersion: 1, frames: [{ id: 'legacy', canId: 0x1ab, extended: true, name: 'Legacy', frameLength: 8, signals: [] }] });
   assert.deepEqual({ canId: legacy.frames[0].canId, extended: legacy.frames[0].extended }, { canId: 0x1ab, extended: true });
   const persisted = serializeProject(legacy) as { schemaVersion: number; frames: Array<Record<string, unknown>> };
-  assert.equal(persisted.schemaVersion, 2);
+  assert.equal(persisted.schemaVersion, 4);
   assert.equal(persisted.frames[0].canId, '1ABx');
   assert.equal('extended' in persisted.frames[0], false);
   const restored = migrateProject(persisted);
@@ -38,18 +38,9 @@ test('project persistence stores CAN IDs as strings and migrates numeric v1 IDs'
 
 test('project persistence normalizes Clip ranges and keeps source references compact', () => {
   const project = migrateProject({ ...emptyProject(), clips: [{ id: 'clip-a', name: 'Braking', sourcePath: 'logs/run.asc', sourceFileName: 'run.asc', startTimestamp: 12, endTimestamp: 10, signalIds: ['speed', 'speed', 'brake'] }] });
-  assert.deepEqual(project.clips, [{ id: 'clip-a', name: 'Braking', sourcePath: 'logs/run.asc', sourceFileName: 'run.asc', startTimestamp: 10, endTimestamp: 12, signalIds: ['speed', 'brake'] }]);
+  // A Clip is only a name and a time range; a Signal selection saved by an earlier version is not kept.
+  assert.deepEqual(project.clips, [{ id: 'clip-a', name: 'Braking', sourcePath: 'logs/run.asc', sourceFileName: 'run.asc', startTimestamp: 10, endTimestamp: 12 }]);
   assert.equal('samples' in (serializeProject(project) as { clips: object[] }).clips[0], false);
-});
-
-test('Clip graph selection becomes its next comparison selection without changing other Clips', () => {
-  const project = migrateProject({ ...emptyProject(), clips: [
-    { id: 'clip-a', name: 'A', sourcePath: 'a.asc', sourceFileName: 'a.asc', startTimestamp: 0, endTimestamp: 1, signalIds: ['old'] },
-    { id: 'clip-b', name: 'B', sourcePath: 'b.asc', sourceFileName: 'b.asc', startTimestamp: 0, endTimestamp: 1, signalIds: ['keep'] },
-  ] });
-  const updated = updateClipSignals(project, 'clip-a', ['speed', 'brake', 'speed']);
-  assert.deepEqual(updated.clips[0].signalIds, ['speed', 'brake']);
-  assert.deepEqual(updated.clips[1].signalIds, ['keep']);
 });
 
 test('project schema round-trip restores manual frame and signal definitions', () => {

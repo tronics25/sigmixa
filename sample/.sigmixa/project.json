@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 4,
   "frames": [
     {
       "id": "ff-2a0",
@@ -1021,6 +1021,792 @@
         }
       ],
       "canId": "5A0x"
+    },
+    {
+      "id": "ff-3c0",
+      "name": "Door Module Heartbeat",
+      "frameLength": 8,
+      "expectedPeriodMs": 100,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-heartbeat-counter",
+          "name": "Heartbeat Counter",
+          "unit": "",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-door-module-state",
+          "name": "Door Module State",
+          "unit": "",
+          "byteOffset": 1,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          },
+          "valueLabels": {
+            "0": "Sleep",
+            "1": "Awake",
+            "2": "Recovered"
+          }
+        }
+      ],
+      "derivedSignals": [],
+      "canId": "3C0"
+    },
+    {
+      "id": "ff-1a0",
+      "name": "Vehicle Pose (Rear Axle)",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-pose-x",
+          "name": "Rear Axle X",
+          "unit": "m",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-pose-y",
+          "name": "Rear Axle Y",
+          "unit": "m",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-pose-z",
+          "name": "Rear Axle Z",
+          "unit": "m",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-pose-heading",
+          "name": "Heading",
+          "unit": "deg",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [],
+      "expectedPeriodMs": 50,
+      "canId": "1A0"
+    },
+    {
+      "id": "ff-1a1",
+      "name": "Vehicle Motion",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-motion-speed",
+          "name": "Vehicle Speed (Motion)",
+          "unit": "km/h",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-motion-yaw-rate",
+          "name": "Yaw Rate (Motion)",
+          "unit": "deg/s",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-steering-angle",
+          "name": "Steering Angle",
+          "unit": "deg",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-road-grade",
+          "name": "Road Grade",
+          "unit": "%",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [],
+      "expectedPeriodMs": 50,
+      "canId": "1A1"
+    },
+    {
+      "id": "ff-1b0",
+      "name": "Wheel Front Left",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-wheel-fl-x",
+          "name": "Front Left X",
+          "unit": "m",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-fl-y",
+          "name": "Front Left Y",
+          "unit": "m",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-fl-z",
+          "name": "Front Left Z",
+          "unit": "m",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-fl-speed",
+          "name": "Front Left Wheel Speed",
+          "unit": "km/h",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [],
+      "expectedPeriodMs": 50,
+      "canId": "1B0"
+    },
+    {
+      "id": "ff-1b1",
+      "name": "Wheel Front Right",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-wheel-fr-x",
+          "name": "Front Right X",
+          "unit": "m",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-fr-y",
+          "name": "Front Right Y",
+          "unit": "m",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-fr-z",
+          "name": "Front Right Z",
+          "unit": "m",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-fr-speed",
+          "name": "Front Right Wheel Speed",
+          "unit": "km/h",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [],
+      "expectedPeriodMs": 50,
+      "canId": "1B1"
+    },
+    {
+      "id": "ff-1b2",
+      "name": "Wheel Rear Left",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-wheel-rl-x",
+          "name": "Rear Left X",
+          "unit": "m",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-rl-y",
+          "name": "Rear Left Y",
+          "unit": "m",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-rl-z",
+          "name": "Rear Left Z",
+          "unit": "m",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-rl-speed",
+          "name": "Rear Left Wheel Speed",
+          "unit": "km/h",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [],
+      "expectedPeriodMs": 50,
+      "canId": "1B2"
+    },
+    {
+      "id": "ff-1b3",
+      "name": "Wheel Rear Right",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-wheel-rr-x",
+          "name": "Rear Right X",
+          "unit": "m",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-rr-y",
+          "name": "Rear Right Y",
+          "unit": "m",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-rr-z",
+          "name": "Rear Right Z",
+          "unit": "m",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-wheel-rr-speed",
+          "name": "Rear Right Wheel Speed",
+          "unit": "km/h",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [],
+      "expectedPeriodMs": 50,
+      "canId": "1B3"
+    },
+    {
+      "id": "ff-1c0",
+      "name": "IMU Dead Reckoning",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-imu-x",
+          "name": "IMU X",
+          "unit": "m",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-imu-y",
+          "name": "IMU Y",
+          "unit": "m",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-imu-z",
+          "name": "IMU Z",
+          "unit": "m",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-imu-heading",
+          "name": "IMU Heading",
+          "unit": "deg",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [],
+      "expectedPeriodMs": 50,
+      "canId": "1C0"
+    },
+    {
+      "id": "ff-1c1",
+      "name": "GNSS Antenna",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-gnss-x",
+          "name": "GNSS Antenna X",
+          "unit": "m",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-gnss-y",
+          "name": "GNSS Antenna Y",
+          "unit": "m",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-gnss-z",
+          "name": "GNSS Antenna Z",
+          "unit": "m",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-gnss-satellites",
+          "name": "GNSS Satellites",
+          "unit": "",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-gnss-fix",
+          "name": "GNSS Fix",
+          "unit": "",
+          "byteOffset": 7,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          },
+          "valueLabels": {
+            "0": "No Fix",
+            "1": "Fix"
+          }
+        }
+      ],
+      "derivedSignals": [],
+      "expectedPeriodMs": 100,
+      "canId": "1C1"
+    },
+    {
+      "id": "ff-5b0",
+      "name": "Obstacle Outline (World)",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-obstacle-x",
+          "name": "Obstacle Corner X",
+          "unit": "m",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-obstacle-y",
+          "name": "Obstacle Corner Y",
+          "unit": "m",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-obstacle-z",
+          "name": "Obstacle Corner Z",
+          "unit": "m",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-obstacle-distance",
+          "name": "Obstacle Distance",
+          "unit": "m",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [],
+      "canId": "5B0"
+    },
+    {
+      "id": "plugin-frame:sample.property-service:s:6a0",
+      "name": "Property Request",
+      "frameLength": 8,
+      "signals": [],
+      "derivedSignals": [],
+      "origin": {
+        "type": "plugin",
+        "pluginId": "sample.property-service"
+      },
+      "canId": "6A0"
+    },
+    {
+      "id": "plugin-frame:sample.property-service:s:6a8",
+      "name": "Property Response",
+      "frameLength": 8,
+      "signals": [],
+      "derivedSignals": [],
+      "origin": {
+        "type": "plugin",
+        "pluginId": "sample.property-service"
+      },
+      "canId": "6A8"
     }
   ],
   "plugins": [
@@ -1046,6 +1832,46 @@
         "mode": "average",
         "throwOnMarker": true
       }
+    },
+    {
+      "id": "sample.property-service",
+      "version": "1.0.0",
+      "source": ".sigmixa/plugins/property-service",
+      "enabled": true,
+      "configSchemaVersion": "1",
+      "config": {
+        "responseTimeoutMs": 500,
+        "properties": [
+          {
+            "id": 1,
+            "name": "Target Cabin Temperature",
+            "unit": "°C",
+            "scale": 0.5,
+            "offset": -40
+          },
+          {
+            "id": 2,
+            "name": "Fan Level",
+            "unit": "",
+            "scale": 1,
+            "offset": 0
+          },
+          {
+            "id": 3,
+            "name": "Seat Heater Level",
+            "unit": "",
+            "scale": 1,
+            "offset": 0
+          },
+          {
+            "id": 4,
+            "name": "Display Brightness",
+            "unit": "%",
+            "scale": 0.5,
+            "offset": 0
+          }
+        ]
+      }
     }
   ],
   "pluginBindings": [
@@ -1062,6 +1888,20 @@
       "frameId": "ff-2a0",
       "enabled": true,
       "automatic": true
+    },
+    {
+      "id": "plugin-binding:sample.property-service:plugin-frame%3Asample.property-service%3As%3A6a0",
+      "pluginId": "sample.property-service",
+      "frameId": "plugin-frame:sample.property-service:s:6a0",
+      "enabled": true,
+      "automatic": true
+    },
+    {
+      "id": "plugin-binding:sample.property-service:plugin-frame%3Asample.property-service%3As%3A6a8",
+      "pluginId": "sample.property-service",
+      "frameId": "plugin-frame:sample.property-service:s:6a8",
+      "enabled": true,
+      "automatic": true
     }
   ],
   "externalCsvSources": [
@@ -1075,7 +1915,7 @@
         {
           "column": "Reference Speed",
           "name": "Reference Speed",
-          "unit": "km/h"
+          "unit": "m/s"
         },
         {
           "column": "Ambient Temperature",
@@ -1085,34 +1925,7 @@
       ]
     }
   ],
-  "clips": [
-    {
-      "id": "clip-acceleration",
-      "name": "Acceleration",
-      "sourcePath": "sigmixa-showcase.asc",
-      "sourceFileName": "sigmixa-showcase.asc",
-      "startTimestamp": 2,
-      "endTimestamp": 8,
-      "signalIds": [
-        "sig-speed",
-        "sig-engine-speed",
-        "sig-accelerator"
-      ]
-    },
-    {
-      "id": "clip-braking",
-      "name": "Braking",
-      "sourcePath": "sigmixa-showcase.asc",
-      "sourceFileName": "sigmixa-showcase.asc",
-      "startTimestamp": 18,
-      "endTimestamp": 24,
-      "signalIds": [
-        "sig-speed",
-        "sig-brake-pressure",
-        "sig-pedal"
-      ]
-    }
-  ],
+  "clips": [],
   "lookupTables": [],
   "calculations": [],
   "viewStates": {
@@ -1137,6 +1950,206 @@
       "derivedActions": 32
     },
     "log-view-default": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-speed-engine",
+          "kind": "graph",
+          "name": "Speed and Engine",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-speed",
+              "sig-smoothed-speed",
+              "external:reference-signals:Reference%20Speed",
+              "sig-engine-speed"
+            ],
+            "chartColors": {
+              "sig-speed": "#2563eb",
+              "sig-smoothed-speed": "#f97316",
+              "external:reference-signals:Reference%20Speed": "#16a34a",
+              "sig-engine-speed": "#dc2626"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:speed",
+                "family:rotational-speed"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-torque-brake",
+          "kind": "graph",
+          "name": "Torque and Brake",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-engine-torque",
+              "sig-brake-pressure"
+            ],
+            "chartColors": {
+              "sig-engine-torque": "#2563eb",
+              "sig-brake-pressure": "#f97316"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:torque",
+                "family:pressure"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-temperatures",
+          "kind": "graph",
+          "name": "Temperatures",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-temp",
+              "sig-coolant-temp",
+              "external:reference-signals:Ambient%20Temperature"
+            ],
+            "chartColors": {
+              "sig-temp": "#2563eb",
+              "sig-coolant-temp": "#f97316",
+              "external:reference-signals:Ambient%20Temperature": "#16a34a"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:temperature"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-states",
+          "kind": "graph",
+          "name": "Drive and Module States",
+          "height": 200,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-gear-position",
+              "sig-drive-state",
+              "sig-door-module-state"
+            ],
+            "chartColors": {
+              "sig-gear-position": "#2563eb",
+              "sig-drive-state": "#f97316",
+              "sig-door-module-state": "#16a34a"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "empty"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-property-service",
+          "kind": "graph",
+          "name": "Property Service",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p1-value",
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a0:p1-requested",
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p4-value",
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a0:p4-requested"
+            ],
+            "chartColors": {
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p1-value": "#2563eb",
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a0:p1-requested": "#f97316",
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p4-value": "#16a34a",
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a0:p4-requested": "#dc2626"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:temperature",
+                "family:percentage"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-path-3d",
+          "kind": "trajectory",
+          "name": "Vehicle Path (3D)",
+          "height": 380,
+          "settings": {
+            "trajectorySeries": [
+              {
+                "id": "series-vehicle",
+                "name": "Vehicle Position",
+                "xId": "sig-position-x",
+                "yId": "sig-position-y",
+                "zId": "sig-position-z"
+              }
+            ],
+            "trajectoryXId": "sig-position-x",
+            "trajectoryYId": "sig-position-y",
+            "trajectoryZId": "sig-position-z",
+            "trajectoryInvert": {
+              "x": false,
+              "y": false,
+              "z": false
+            },
+            "trajectoryEqualAspect": true,
+            "trajectoryConnectGaps": true,
+            "trajectoryShowGrid": true,
+            "trajectoryShowPoints": false,
+            "trajectoryTrail": "all",
+            "trajectoryTrailSeconds": 10,
+            "trajectoryView": {
+              "yaw": 5.374,
+              "pitch": 0.419,
+              "zoom": 1.49,
+              "panX": -4.11,
+              "panY": 0.58
+            }
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-speed-engine",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
       "tableSelectedIds": [
         "sig-speed",
         "sig-engine-speed",
@@ -1149,109 +2162,35 @@
         "sig-object-distance",
         "sig-time-to-collision",
         "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte",
-        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric"
+        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric",
+        "sig-door-module-state",
+        "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a0:request",
+        "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p2-value",
+        "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p2-result",
+        "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p2-response-time"
       ],
-      "tableWidths": {
-        "time": 118,
-        "sig-speed": 130,
-        "sig-engine-speed": 130,
-        "sig-accelerator": 145,
-        "sig-engine-torque": 135,
-        "sig-coolant-temp": 150,
-        "sig-mechanical-power": 140,
-        "sig-brake-pressure": 130,
-        "sig-pedal": 145,
-        "sig-wheel-speed-difference": 180,
-        "sig-headlight": 110,
-        "sig-gear-position": 120,
-        "sig-object-distance": 130,
-        "sig-relative-speed": 130,
-        "sig-time-to-collision": 130,
-        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte": 140,
-        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric": 140
-      },
-      "chartSelectedIds": [
-        "sig-speed",
-        "sig-smoothed-speed",
-        "external:reference-signals:Reference%20Speed",
-        "sig-engine-speed",
-        "sig-engine-torque",
-        "sig-brake-pressure",
-        "sig-temp",
-        "external:reference-signals:Ambient%20Temperature",
-        "sig-yaw-rate",
-        "sig-lateral-accel",
-        "sig-object-distance",
-        "sig-time-to-collision"
-      ],
-      "chartColors": {
-        "sig-speed": "#2563eb",
-        "sig-smoothed-speed": "#0891b2",
-        "external:reference-signals:Reference%20Speed": "#f97316",
-        "sig-engine-speed": "#7c3aed",
-        "sig-accelerator": "#84cc16",
-        "sig-engine-torque": "#dc2626",
-        "sig-mechanical-power": "#eab308",
-        "sig-brake-pressure": "#ef4444",
-        "sig-wheel-speed-fl": "#0ea5e9",
-        "sig-wheel-speed-fr": "#22c55e",
-        "sig-temp": "#a855f7",
-        "sig-ambient-can": "#f59e0b",
-        "external:reference-signals:Ambient%20Temperature": "#16a34a",
-        "sig-yaw-rate": "#ec4899",
-        "sig-lateral-accel": "#14b8a6",
-        "sig-object-distance": "#3b82f6",
-        "sig-relative-speed": "#f43f5e",
-        "sig-time-to-collision": "#8b5cf6",
-        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte": "#7c3aed",
-        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric": "#0891b2"
-      },
-      "chartMode": "raw",
-      "chartPaneWidth": 270,
-      "chartPaneCollapsed": false,
-      "chartSignalGrouping": "frame",
-      "tableSignalGrouping": "frame",
-      "chartConnectGaps": true,
-      "chartAxisRange": {
-        "mode": "visible",
-        "includeZero": false
-      },
-      "chartGroupLayout": [
-        [
-          "family:speed",
-          "family:rotational-speed"
+      "traceSettings": {
+        "pinnedIds": [
+          "s:960",
+          "s:1696",
+          "s:1704"
         ],
-        [
-          "family:torque",
-          "family:pressure"
+        "defaultMode": "decoded",
+        "columns": [
+          "channel",
+          "direction",
+          "receivedAt",
+          "age",
+          "count",
+          "interval",
+          "minInterval",
+          "maxInterval",
+          "expected",
+          "deviation"
         ],
-        [
-          "family:temperature"
-        ],
-        [
-          "family:angular-speed",
-          "family:acceleration"
-        ],
-        [
-          "family:length",
-          "family:time"
-        ]
-      ],
-      "trajectoryXId": "sig-position-x",
-      "trajectoryYId": "sig-position-y",
-      "trajectoryZId": "sig-position-z",
-      "trajectoryInvert": {
-        "x": false,
-        "y": false,
-        "z": false
-      },
-      "trajectoryEqualAspect": true,
-      "trajectoryTrail": "all",
-      "trajectoryTrailSeconds": 10,
-      "trajectorySpeed": 1,
-      "trajectoryConnectGaps": true,
-      "trajectoryShowGrid": true,
-      "trajectoryShowPoints": true
+        "sort": "canId",
+        "descending": false
+      }
     }
   }
 }

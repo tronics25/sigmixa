@@ -6,16 +6,38 @@ export interface RenderedImage {
   readonly svg: string;
 }
 
+/** HTML reports can contain only a table, with no renderable graph image. */
+export function requireRenderedImage(image: Partial<RenderedImage>): image is RenderedImage {
+  if (image.pngDataUrl && image.svg) return true;
+  void vscode.window.showInformationMessage(vscode.env.language.toLowerCase().startsWith('ja')
+    ? '画像に出力できるグラフがありません。テーブルはHTMLレポートで出力できます。'
+    : 'There are no graphs to export as an image. Export the table as an HTML report.');
+  return false;
+}
+
 export interface SaveRenderedImageOptions {
   readonly title: string;
   readonly japaneseTitle: string;
   readonly defaultBasePath?: string;
   readonly image: RenderedImage;
+  /** Already chosen (e.g. from the combined export menu); otherwise the user picks SVG or PNG. */
+  readonly format?: 'svg' | 'png';
 }
 
-export async function saveRenderedImage({ title, japaneseTitle, defaultBasePath, image }: SaveRenderedImageOptions): Promise<void> {
-  const japanese = vscode.env.language.toLowerCase().startsWith('ja'); const displayTitle = japanese ? japaneseTitle : title;
+/** One export menu for a whole screen: the combined image as SVG or PNG, or the interactive HTML report. */
+export async function chooseExportFormat(title: string, japaneseTitle: string): Promise<'svg' | 'png' | 'html' | undefined> {
+  const japanese = vscode.env.language.toLowerCase().startsWith('ja');
   const choice = await vscode.window.showQuickPick([
+    { label: 'SVG', description: japanese ? 'すべてのグラフを1枚のベクター画像に' : 'All graphs on one vector image', format: 'svg' as const },
+    { label: 'PNG', description: japanese ? 'すべてのグラフを1枚の画像に' : 'All graphs on one image', format: 'png' as const },
+    { label: japanese ? 'HTMLレポート' : 'HTML report', description: japanese ? 'ブラウザで操作できるレポート' : 'Interactive report for a browser', format: 'html' as const },
+  ], { placeHolder: japanese ? '出力形式を選択' : 'Select export format', title: japanese ? japaneseTitle : title });
+  return choice?.format;
+}
+
+export async function saveRenderedImage({ title, japaneseTitle, defaultBasePath, image, format }: SaveRenderedImageOptions): Promise<void> {
+  const japanese = vscode.env.language.toLowerCase().startsWith('ja'); const displayTitle = japanese ? japaneseTitle : title;
+  const choice = format ? { format } : await vscode.window.showQuickPick([
     { label: 'SVG', description: japanese ? 'ベクター画像 · 拡大や資料への貼り付けに最適' : 'Vector image · best for scaling and documents', format: 'svg' as const },
     { label: 'PNG', description: japanese ? 'ラスター画像 · そのまま共有する場合に最適' : 'Raster image · best for direct sharing', format: 'png' as const },
   ], { placeHolder: japanese ? '画像形式を選択' : 'Select image format', title: displayTitle });

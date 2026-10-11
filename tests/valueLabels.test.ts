@@ -56,3 +56,15 @@ test('invalid label references and duplicate RAW values are diagnosed', () => {
   assert.ok(errors.some((item) => item.code === 'SIGNAL_VALUE_LABEL_RANGE'));
   assert.ok(errors.some((item) => item.code === 'SIGNAL_VALUE_LABEL_INVALID'));
 });
+
+test('value label RAW keys may be written in hexadecimal and still match the decoded RAW value', () => {
+  const frame = importDbc(dbc).frames[0];
+  const hex = { ...frame, signals: [{ ...frame.signals[0], valueLabels: { '0x20': 'Stop', '0X21': 'Run' } }, frame.signals[1]] };
+  assert.deepEqual(validateFrameDefinition(hex).diagnostics, []);
+  const decoded = decodeManualFrame({ id: 'f', sourceId: 's', timestamp: 0, canId: 256, extended: false, data: Uint8Array.from([0x21, 0, 0, 0, 0, 0, 0, 0]), dlc: 8 } as never, hex);
+  assert.equal(decoded.decoded[0].sample.valueLabel, 'Run');
+  assert.match(exportDbc([hex]).text, /VAL_ 256 Mode 32 "Stop" 33 "Run";/);
+  const clash = { ...hex, signals: [{ ...hex.signals[0], valueLabels: { '0x20': 'Stop', '32': 'Same value' } }, hex.signals[1]] };
+  assert.ok(validateFrameDefinition(clash).diagnostics.some((item) => item.code === 'SIGNAL_VALUE_LABEL_DUPLICATE'));
+  assert.ok(validateFrameDefinition({ ...hex, signals: [{ ...hex.signals[0], valueLabels: { '0x1G': 'Bad' } }, hex.signals[1]] }).diagnostics.some((item) => item.code === 'SIGNAL_VALUE_LABEL_INVALID'));
+});

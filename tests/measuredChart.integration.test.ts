@@ -20,7 +20,7 @@ test('hover follows the rendered line while fixed and exported markers use origi
     let measured: MeasuredSamples;
     measured = new MeasuredSamples((id, query) => measured.receive(id, store.measured(query.signalIds, query.timestamp)), () => {});
     const view = Object.assign(Object.create(TimeSeriesView.prototype), {
-      visible: true, series, viewRange: { start: 1, end: 2 }, mode: 'raw', connectGaps: true,
+      visible: true, plotHeight: 320, series, viewRange: { start: 1, end: 2 }, mode: 'raw', connectGaps: true,
       axisRange: { mode: 'global' }, colors: new Map([['speed', '#dc2626']]),
       markers: new Map([['a', { id: 'a', timestamp: 1.6, signalIds: ['speed'] }]]),
       cursorTimestamp: 1.55, hoverGraphIndex: 0, rangeSignalIds: [], measured,
@@ -51,8 +51,9 @@ test('hover follows the rendered line while fixed and exported markers use origi
     labels.length = 0;
     view.mode = 'normalized'; view.connectGaps = false;
     view.paintChart(context, 1000, 500, 16, 34, true, [34]);
-    assert.equal(labels.filter((label) => label === '100 %').length, 1);
-    assert.ok(labels.some((label) => label.endsWith(' %') && label !== '100 %'));
+    assert.equal(labels.filter((label) => label === '99 km/h').length, 1);
+    assert.equal(labels.filter((label) => label === '26.5 km/h').length, 1);
+    assert.equal(labels.some((label) => label.endsWith(' %')), false);
 
     // An original peak must remain inspectable even when the plotted Y range misses it.
     labels.length = 0;

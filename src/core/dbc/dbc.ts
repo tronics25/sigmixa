@@ -1,5 +1,5 @@
 import { createDiagnostic, type Diagnostic } from '../diagnostics/diagnostic';
-import { normalizeFrameDefinition, validateFrameDefinition, type ManualFrameDefinition, type ManualSignalDefinition } from '../manual/manualDefinition';
+import { normalizeFrameDefinition, parseValueLabelRaw, validateFrameDefinition, type ManualFrameDefinition, type ManualSignalDefinition } from '../manual/manualDefinition';
 
 export interface DbcImportResult {
   readonly frames: readonly ManualFrameDefinition[];
@@ -127,7 +127,7 @@ export function exportDbc(frames: readonly ManualFrameDefinition[]): DbcExportRe
     const selectorName = selector ? signalNames.get(selector.id) : undefined;
     for (const signal of frame.signals) {
       const values = Object.entries(signal.valueLabels ?? {});
-      if (values.length) lines.push(`VAL_ ${dbcId} ${signalNames.get(signal.id)} ${values.map(([raw, label]) => `${raw} "${escapeDbc(label)}"`).join(' ')};`);
+      if (values.length) lines.push(`VAL_ ${dbcId} ${signalNames.get(signal.id)} ${values.map(([raw, label]) => `${parseValueLabelRaw(raw) ?? raw} "${escapeDbc(label)}"`).join(' ')};`);
     }
     if (selectorName) for (const entry of extendedMuxLines) { const [signalName, ranges] = entry.split('\t'); lines.push(`SG_MUL_VAL_ ${dbcId} ${signalName} ${selectorName} ${ranges};`); }
     if (frame.derivedSignals?.length) diagnostics.push(diagnostic('export.dbc', undefined, 'DBC_DERIVED_SIGNALS_SKIPPED', `${frame.name}: ${frame.derivedSignals.length} Derived Signal definition(s) were not exported because standard DBC SG_ entries cannot preserve their operations.`, 'warning'));

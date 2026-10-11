@@ -50,3 +50,15 @@ test('dependency diagram resolves ancestors and marks unavailable forward refere
   assert.deepEqual(graph.edges.filter((edge) => edge.to === 'filtered'), [{ from: 'converted', to: 'filtered' }]);
   assert.ok(graph.nodes.some((node) => node.kind === 'missing' && node.name === 'Missing'));
 });
+
+test('a new Signal takes over everything from the one above it except its name and position', () => {
+  const above = { ...createManualSignal('above'), name: 'Wheel Speed FL', unit: 'km/h', byteOffset: 2, bitOffset: 0, lengthBits: 12, signedness: 'signed' as const, byteOrder: 'big' as const,
+    conversion: { type: 'scale-offset' as const, lsb: 0.01, lsbText: '0.01', offset: -40 }, valueLabels: { '0': 'Stopped' }, minimum: -10, maximum: 300, multiplexing: { type: 'conditional' as const, ranges: [{ from: 1, to: 2 }] } };
+  const added = createManualSignal('new', above, 8);
+  assert.deepEqual(added, { ...above, id: 'new', name: 'New Signal', byteOffset: 3, bitOffset: 4 });
+  assert.notEqual(added.conversion, above.conversion, 'copied, not shared');
+  // There is only one Multiplexer in a Frame: that role is not taken over.
+  assert.equal(createManualSignal('n', { ...above, multiplexing: { type: 'multiplexer' } }).multiplexing, undefined);
+  // The first Signal of a Frame has nothing to take over.
+  assert.deepEqual(createManualSignal('first'), { id: 'first', name: 'New Signal', unit: '', byteOffset: 0, bitOffset: 0, lengthBits: 8, signedness: 'unsigned', byteOrder: 'little', conversion: { type: 'scale-offset', lsb: 1, lsbText: '1', offset: 0 } });
+});

@@ -1,5 +1,22 @@
 # Change Log
 
+## 2.0.0 - 2026-10-12
+
+- **Analysis groups.** Several logs can now share graph views and the Frame definitions of one analysis. A group is a folder with a `.sigmixa` folder: it applies its Frame definitions and view settings to every log in it, on top of the workspace's definitions; groups can be nested. Logs from elsewhere can be added to a group and appear there as well as where they are, using the definitions of the place they are opened from. Copy a group's folder to share it. 1.x workspaces open unchanged.
+- **Managing logs from the sidebar.** Right-click a log to open, rename or move it to the trash, or to copy its path; rename Clips, groups and folders; remove a group while keeping its folder and logs. F2 renames and Delete deletes the selected item. Drag logs onto a group or folder, open them from there, or paste log files copied in Finder or File Explorer, to add them as links, move them or copy them.
+- **Group Frame definitions.** Override a Frame of the workspace or of a group above for one group (starting from the definition above), and promote definitions one level up with per-CAN-ID conflict choices.
+- **Visualize.** Any number of graph and 2D/3D trajectory views in one tab, sharing one time position and one time axis: zooming or scrolling any graph moves them all, and zoom, the selected range and Clip creation are at the top of the tab. A trajectory can draw several XYZ series at once.
+- **Signal lists.** The lists that choose Signals for graphs, tables and trajectories show the Signals the log contains instead of every defined Signal. Where view settings are shared in a group, a filter button beside the search box lists the others too.
+- **Trace.** Every CAN ID's latest values at the time position, with receive count, intervals, an optional expected period per Frame and its deviation, pinned rows and RAW/decoded display.
+- **Comparison.** Whole logs can be compared, not only Clips: select logs and Clips in the sidebar and compare them together, shifting each target in either direction by drag, wheel or ◀/▶. All graphs of a comparison share one time axis.
+- **Clips.** Create a Clip from a graph's time range or from selected Table rows. A Clip is a named time range that follows its log: it is listed wherever the log is shown and opens with that place's Frame definitions and view settings. The log's graphs mark each Clip's range; click its name to open the Clip, drag either end to change the range, or type an exact range from the sidebar.
+- **HTML report.** Export views as one interactive, offline HTML file. The report of a log marks its Clips.
+- **Frame definition tables.** Signals can be entered with the keyboard alone, as in a spreadsheet: arrow keys, Enter and Tab move between cells, Esc restores a cell, Ctrl+D (⌘D) copies the cell above, and cells copied in a spreadsheet can be pasted. A new Signal starts from the one above it.
+- **Legend emphasis.** Hovering a legend entry emphasizes its line and values.
+- **Quieter interface.** Fewer notifications and hover texts: results that are visible on screen are no longer announced, and tooltips name the action instead of explaining it. Export uses the familiar “out of the tray” icon.
+- **Plugins.** Output samples may carry a value label. The sample adds a stateful request/response Plugin.
+- **Sample workspace.** Reorganised by feature: `sigmixa-basic` (decoding, Plugins, time series, trace), `brake-analysis/` (analysis groups and Clips) and `parking-drive/` (3D and 2D trajectories).
+
 ## 1.0.1 - 2026-09-21
 
 - Restored the Version, Installs, and Rating badges after the previous Marketplace badge endpoints were retired.

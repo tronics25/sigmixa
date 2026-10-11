@@ -98,6 +98,10 @@ export class InMemorySignalStore {
     this.version++;
   }
 
+  samplesForFrame(frameId: string): readonly { signalId: string; sample: SignalSample }[] {
+    return (this.rowsById.get(frameId) ?? []).flatMap((row) => [...row.values].map(([signalId, sample]) => ({ signalId, sample })));
+  }
+
   appendEvents(signalId: string, events: readonly SignalEvent[]): void {
     const target = this.series.get(signalId);
     if (!target) return;
@@ -165,6 +169,9 @@ export class InMemorySignalStore {
 
   catalog(): readonly SignalDefinition[] { return Array.from(this.series.values(), (item) => item.definition); }
 
+  /** The Signals this log has samples of; a definition alone does not count. */
+  measuredSignalIds(): string[] { return Array.from(this.series.values()).filter((item) => item.samples.length > 0).map((item) => item.definition.id); }
+
   tablePage(selectedIds: readonly string[], offset: number, limit: number, range?: TimeRange): SignalTablePage {
     const selected = [...new Set(selectedIds)].sort();
     const key = JSON.stringify([selected, range]);
@@ -212,19 +219,25 @@ export class InMemorySignalStore {
     }) };
   }
 
-  seriesSlice(selectedIds: readonly string[], range: TimeRange | undefined, maxPoints: number): readonly SignalSeriesSlice[] {
+  /**
+   * `range` is the viewport: one sample on each side of it is kept so lines reach the edges.
+   * `bounds` is a Clip's range. The nearest sample outside each edge of the Clip is still needed to draw the lines
+   * into and out of it: both are returned with their own time and value, marked `carried`, and never counted as Clip data.
+   */
+  seriesSlice(selectedIds: readonly string[], range: TimeRange | undefined, maxPoints: number, bounds?: TimeRange): readonly SignalSeriesSlice[] {
     const result: SignalSeriesSlice[] = [];
     for (const id of selectedIds) {
       const target = this.series.get(id);
       if (!target) continue;
       this.ensureSeriesSorted(target);
-      const visible = samplesInRange(target.samples, range);
-      const rendered = samplesInRangeWithContext(target.samples, range);
+      const source = bounds ? withEdgeSamples(target.samples, bounds) : target.samples;
+      const visible = samplesInRange(source, range);
+      const rendered = samplesInRangeWithContext(source, range);
       result.push({
         definition: target.definition,
         samples: downsampleEven(rendered, maxPoints),
         events: range ? target.events.filter((event) => (event.endTimestamp ?? event.timestamp) >= range.start && event.timestamp <= range.end) : target.events,
-        totalSamplesInRange: visible.length,
+        totalSamplesInRange: visible.length - (visible[0]?.carried ? 1 : 0),
         globalMinimum: Number.isFinite(target.minimum) ? target.minimum : undefined,
         globalMaximum: Number.isFinite(target.maximum) ? target.maximum : undefined,
         gaps: detectSignalGaps(rendered),
@@ -318,4 +331,17 @@ function detectSignalGaps(samples: readonly SignalSample[]): readonly SignalGap[
 
 function isUsableSample(sample: SignalSample): boolean {
   return Number.isFinite(sample.timestamp) && Number.isFinite(sample.value) && (sample.quality === undefined || sample.quality === 'valid');
+}
+
+/**
+ * The samples inside `bounds`, with the nearest sample outside each edge when none falls exactly on that edge:
+ * the last one before `bounds.start` and the first one after `bounds.end`. Both keep their own time and value, so
+ * the lines into and out of the Clip have their true slope; they are marked `carried` because they are not data of the Clip.
+ */
+function withEdgeSamples(samples: readonly SignalSample[], bounds: TimeRange): readonly SignalSample[] {
+  const inside = samplesInRange(samples, bounds);
+  const firstAtOrAfter = (time: number, inclusive: boolean) => { let low = 0; let high = samples.length; while (low < high) { const middle = (low + high) >> 1; if (samples[middle].timestamp < time || (!inclusive && samples[middle].timestamp === time)) low = middle + 1; else high = middle; } return low; };
+  const before = inside[0]?.timestamp === bounds.start ? undefined : samples[firstAtOrAfter(bounds.start, true) - 1];
+  const after = inside.at(-1)?.timestamp === bounds.end ? undefined : samples[firstAtOrAfter(bounds.end, false)];
+  return [...(before ? [{ ...before, carried: true }] : []), ...inside, ...(after ? [{ ...after, carried: true }] : [])];
 }

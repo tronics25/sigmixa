@@ -177,8 +177,8 @@ function normalizeOutput(output: PluginSignalSampleOutput, pluginId: string, bin
     return { diagnostic: pluginDiagnostic(pluginId, binding.id, frame, 'PLUGIN_SAMPLE_INVALID', 'Plugin returned a Signal with an invalid ID, name, or value.') };
   }
   const id = `plugin:${encodeURIComponent(pluginId)}:${encodeURIComponent(binding.id)}:${encodeURIComponent(output.signalId)}`;
-  const definition: SignalDefinition = { id, name: output.name.trim(), unit: output.unit?.trim() || undefined, group: output.group?.trim() || undefined, source: { type: 'plugin', pluginId, bindingId: binding.id }, frameRef: { canId: frame.canId, extended: frame.extended } };
-  const sample: SignalSample = { timestamp: frame.timestamp, value: output.value, quality: output.quality };
+  const definition: SignalDefinition = { id, name: output.name.trim(), unit: output.unit?.trim() || undefined, group: output.group?.trim() || undefined, source: { type: 'plugin', pluginId, bindingId: binding.id }, frameRef: { canId: frame.canId, extended: frame.extended }, ...(output.valueLabel?.trim() ? { hasValueLabels: true } : {}) };
+  const sample: SignalSample = { timestamp: frame.timestamp, value: output.value, quality: output.quality, ...(output.valueLabel?.trim() ? { valueLabel: output.valueLabel.trim() } : {}) };
   const signalEvents = (output.events ?? []).map((event) => ({ ...event, timestamp: frame.timestamp }));
   return { definition, sample, events: signalEvents };
 }

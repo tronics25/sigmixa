@@ -1,0 +1,492 @@
+{
+  "schemaVersion": 4,
+  "frames": [
+    {
+      "id": "ff-1a1",
+      "name": "Vehicle Motion",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "signals": [
+        {
+          "id": "sig-motion-speed",
+          "name": "Vehicle Speed (Motion)",
+          "unit": "km/h",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-motion-yaw-rate",
+          "name": "Yaw Rate (Motion)",
+          "unit": "deg/s",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-steering-angle",
+          "name": "Steering Angle",
+          "unit": "deg",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.1,
+            "lsbText": "0.1",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-road-grade",
+          "name": "Road Grade",
+          "unit": "%",
+          "byteOffset": 6,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        }
+      ],
+      "derivedSignals": [
+        {
+          "id": "sig-inner-wheel-difference",
+          "name": "Inner Wheel Difference",
+          "unit": "m",
+          "operation": {
+            "type": "lookup",
+            "input": "Steering Angle",
+            "outOfRange": "clamp",
+            "points": [
+              {
+                "input": -40,
+                "output": 1.2066
+              },
+              {
+                "input": -37.5,
+                "output": 1.1129
+              },
+              {
+                "input": -35,
+                "output": 1.0219
+              },
+              {
+                "input": -32.5,
+                "output": 0.9334
+              },
+              {
+                "input": -30,
+                "output": 0.8476
+              },
+              {
+                "input": -27.5,
+                "output": 0.7643
+              },
+              {
+                "input": -25,
+                "output": 0.6836
+              },
+              {
+                "input": -22.5,
+                "output": 0.6054
+              },
+              {
+                "input": -20,
+                "output": 0.5296
+              },
+              {
+                "input": -17.5,
+                "output": 0.4561
+              },
+              {
+                "input": -15,
+                "output": 0.3849
+              },
+              {
+                "input": -12.5,
+                "output": 0.3159
+              },
+              {
+                "input": -10,
+                "output": 0.249
+              },
+              {
+                "input": -7.5,
+                "output": 0.1841
+              },
+              {
+                "input": -5,
+                "output": 0.121
+              },
+              {
+                "input": -2.5,
+                "output": 0.0597
+              },
+              {
+                "input": 0,
+                "output": 0
+              },
+              {
+                "input": 2.5,
+                "output": 0.0597
+              },
+              {
+                "input": 5,
+                "output": 0.121
+              },
+              {
+                "input": 7.5,
+                "output": 0.1841
+              },
+              {
+                "input": 10,
+                "output": 0.249
+              },
+              {
+                "input": 12.5,
+                "output": 0.3159
+              },
+              {
+                "input": 15,
+                "output": 0.3849
+              },
+              {
+                "input": 17.5,
+                "output": 0.4561
+              },
+              {
+                "input": 20,
+                "output": 0.5296
+              },
+              {
+                "input": 22.5,
+                "output": 0.6054
+              },
+              {
+                "input": 25,
+                "output": 0.6836
+              },
+              {
+                "input": 27.5,
+                "output": 0.7643
+              },
+              {
+                "input": 30,
+                "output": 0.8476
+              },
+              {
+                "input": 32.5,
+                "output": 0.9334
+              },
+              {
+                "input": 35,
+                "output": 1.0219
+              },
+              {
+                "input": 37.5,
+                "output": 1.1129
+              },
+              {
+                "input": 40,
+                "output": 1.2066
+              }
+            ]
+          }
+        }
+      ],
+      "expectedPeriodMs": 50,
+      "canId": "1A1"
+    }
+  ],
+  "plugins": [],
+  "pluginBindings": [],
+  "externalCsvSources": [],
+  "clips": [
+    {
+      "id": "clip-parking-space",
+      "name": "Into the Space",
+      "sourcePath": "parking-garage.asc",
+      "sourceFileName": "parking-garage.asc",
+      "range": {
+        "start": 72.6,
+        "end": 86
+      }
+    }
+  ],
+  "lookupTables": [],
+  "calculations": [],
+  "viewStates": {
+    "group-view": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-drive-3d",
+          "kind": "trajectory",
+          "name": "Drive up the Car Park (3D)",
+          "height": 520,
+          "settings": {
+            "trajectorySeries": [
+              {
+                "id": "series-axle",
+                "name": "Rear Axle Centre",
+                "xId": "sig-pose-x",
+                "yId": "sig-pose-y",
+                "zId": "sig-pose-z"
+              },
+              {
+                "id": "series-gnss",
+                "name": "GNSS Antenna",
+                "xId": "sig-gnss-x",
+                "yId": "sig-gnss-y",
+                "zId": "sig-gnss-z"
+              }
+            ],
+            "trajectoryXId": "sig-pose-x",
+            "trajectoryYId": "sig-pose-y",
+            "trajectoryZId": "sig-pose-z",
+            "trajectoryInvert": {
+              "x": false,
+              "y": false,
+              "z": false
+            },
+            "trajectoryEqualAspect": true,
+            "trajectoryConnectGaps": false,
+            "trajectoryShowGrid": true,
+            "trajectoryShowPoints": false,
+            "trajectoryTrail": "all",
+            "trajectoryTrailSeconds": 10,
+            "trajectoryView": {
+              "yaw": -2.3,
+              "pitch": 0.45,
+              "zoom": 3,
+              "panX": -3.45,
+              "panY": 1.9
+            }
+          }
+        },
+        {
+          "id": "view-wheels-3d",
+          "kind": "trajectory",
+          "name": "Four Wheel Tracks (3D)",
+          "height": 520,
+          "settings": {
+            "trajectorySeries": [
+              {
+                "id": "series-fl",
+                "name": "Front Left",
+                "xId": "sig-wheel-fl-x",
+                "yId": "sig-wheel-fl-y",
+                "zId": "sig-wheel-fl-z"
+              },
+              {
+                "id": "series-fr",
+                "name": "Front Right",
+                "xId": "sig-wheel-fr-x",
+                "yId": "sig-wheel-fr-y",
+                "zId": "sig-wheel-fr-z"
+              },
+              {
+                "id": "series-rl",
+                "name": "Rear Left",
+                "xId": "sig-wheel-rl-x",
+                "yId": "sig-wheel-rl-y",
+                "zId": "sig-wheel-rl-z"
+              },
+              {
+                "id": "series-rr",
+                "name": "Rear Right",
+                "xId": "sig-wheel-rr-x",
+                "yId": "sig-wheel-rr-y",
+                "zId": "sig-wheel-rr-z"
+              }
+            ],
+            "trajectoryXId": "sig-wheel-fl-x",
+            "trajectoryYId": "sig-wheel-fl-y",
+            "trajectoryZId": "sig-wheel-fl-z",
+            "trajectoryInvert": {
+              "x": false,
+              "y": false,
+              "z": false
+            },
+            "trajectoryEqualAspect": true,
+            "trajectoryConnectGaps": true,
+            "trajectoryShowGrid": true,
+            "trajectoryShowPoints": false,
+            "trajectoryTrail": "all",
+            "trajectoryTrailSeconds": 10,
+            "trajectoryView": {
+              "yaw": -2.3,
+              "pitch": 0.45,
+              "zoom": 3,
+              "panX": -3.45,
+              "panY": 1.9
+            }
+          }
+        },
+        {
+          "id": "view-wheels-2d",
+          "kind": "trajectory",
+          "name": "Four Wheel Tracks from Above (2D)",
+          "height": 460,
+          "settings": {
+            "trajectorySeries": [
+              {
+                "id": "series-axle",
+                "name": "Rear Axle Centre",
+                "xId": "sig-pose-x",
+                "yId": "sig-pose-y"
+              },
+              {
+                "id": "series-fl",
+                "name": "Front Left",
+                "xId": "sig-wheel-fl-x",
+                "yId": "sig-wheel-fl-y"
+              },
+              {
+                "id": "series-fr",
+                "name": "Front Right",
+                "xId": "sig-wheel-fr-x",
+                "yId": "sig-wheel-fr-y"
+              },
+              {
+                "id": "series-rl",
+                "name": "Rear Left",
+                "xId": "sig-wheel-rl-x",
+                "yId": "sig-wheel-rl-y"
+              },
+              {
+                "id": "series-rr",
+                "name": "Rear Right",
+                "xId": "sig-wheel-rr-x",
+                "yId": "sig-wheel-rr-y"
+              }
+            ],
+            "trajectoryXId": "sig-pose-x",
+            "trajectoryYId": "sig-pose-y",
+            "trajectoryInvert": {
+              "x": false,
+              "y": false,
+              "z": false
+            },
+            "trajectoryEqualAspect": true,
+            "trajectoryConnectGaps": true,
+            "trajectoryShowGrid": true,
+            "trajectoryShowPoints": false,
+            "trajectoryTrail": "all",
+            "trajectoryTrailSeconds": 10
+          }
+        },
+        {
+          "id": "view-steering",
+          "kind": "graph",
+          "name": "Steering Angle and Inner Wheel Difference",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-steering-angle",
+              "sig-inner-wheel-difference"
+            ],
+            "chartColors": {
+              "sig-steering-angle": "#2563eb",
+              "sig-inner-wheel-difference": "#f97316"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:angle",
+                "family:length"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-ramp",
+          "kind": "graph",
+          "name": "Height and Road Grade",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-pose-z",
+              "sig-road-grade"
+            ],
+            "chartColors": {
+              "sig-pose-z": "#2563eb",
+              "sig-road-grade": "#f97316"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:length",
+                "family:percentage"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-drive-3d",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
+      "visualizeTraceHeight": 150,
+      "traceSettings": {
+        "pinnedIds": [
+          "s:449",
+          "s:1456"
+        ],
+        "defaultMode": "decoded",
+        "columns": [
+          "channel",
+          "direction",
+          "receivedAt",
+          "age",
+          "count",
+          "interval",
+          "minInterval",
+          "maxInterval",
+          "expected",
+          "deviation"
+        ],
+        "sort": "canId",
+        "descending": false
+      }
+    }
+  }
+}
