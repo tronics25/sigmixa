@@ -150,12 +150,15 @@ export type ToExtensionMessage =
   | { readonly type: 'signalTablePageRequest'; readonly requestId: number; readonly selectedIds: readonly string[]; readonly offset: number; readonly limit: number }
   | { readonly type: 'signalTableSampleRequest'; readonly requestId: number; readonly selectedIds: readonly string[] }
   | { readonly type: 'signalTableRowsRequest'; readonly action: 'copy' | 'open'; readonly ranges: readonly { readonly start: number; readonly end: number }[]; readonly selectedIds: readonly string[] }
-  | { readonly type: 'signalSeriesRequest'; readonly requestId: number; readonly selectedIds: readonly string[]; readonly range?: { readonly start: number; readonly end: number }; readonly maxPoints: number }
+  /** `joined`: the axes of a trajectory, put together by their times, so they are thinned together. */
+  | { readonly type: 'signalSeriesRequest'; readonly requestId: number; readonly selectedIds: readonly string[]; readonly joined?: boolean; readonly range?: { readonly start: number; readonly end: number }; readonly maxPoints: number }
   | { readonly type: 'timelineRangeRequest'; readonly requestId: number }
   | { readonly type: 'measuredSignalsRequest'; readonly requestId: number; readonly selectedIds: readonly string[]; readonly timestamp: number }
   | { readonly type: 'cancelAnalysis' }
   /** Opens one of the open log's Clips, from its marker on a graph. */
   | { readonly type: 'openClip'; readonly clipId: string }
+  /** From a Clip, opens its whole log (the breadcrumb's log name). */
+  | { readonly type: 'openWholeLog' }
   /** A Clip's start or end was dragged on a graph. */
   | { readonly type: 'updateClipRange'; readonly clipId: string; readonly startTimestamp: number; readonly endTimestamp: number }
   | { readonly type: 'importExternalCsv' }

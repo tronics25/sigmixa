@@ -138,7 +138,7 @@ export class TrajectoryCard implements ComparisonCard {
   request(): void {
     const axes = this.axes(); const ids = [axes.x, axes.y, axes.z].filter((id): id is string => Boolean(id));
     this.series.clear(); this.pending = this.isConfigured;
-    this.latestRequest = this.isConfigured ? this.host.requestSeries(this.id, ids, 10_000) : 0; this.draw();
+    this.latestRequest = this.isConfigured ? this.host.requestSeries(this.id, ids, 10_000, true) : 0; this.draw();
   }
 
   receive(requestId: number, seriesByTarget: readonly { readonly targetId: string; readonly series: readonly ComparisonSeriesDto[] }[]): void {

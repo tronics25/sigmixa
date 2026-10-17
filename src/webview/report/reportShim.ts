@@ -2,12 +2,14 @@ import { reorderComparisonTargets, sampleTimes, setComparisonTargetOffset, snapA
 import type { SignalSample } from '../../core/signal/signal';
 import type { ComparisonSeriesDto, ComparisonToExtension, ComparisonToWebview } from '../../extension/comparison/comparisonProtocol';
 import type { ReportData } from '../../extension/report/reportData';
+import { unpackReportData } from '../../extension/report/reportPacking';
 
 /**
  * Stands in for the extension inside a standalone report: the comparison page talks to it exactly as it
  * talks to VS Code, and every answer comes from the data embedded in the HTML file. Nothing is fetched.
  */
-export const reportData = JSON.parse(document.getElementById('report-data')!.textContent!) as ReportData;
+// The file holds the data packed without loss; it is rebuilt here, before anything is shown.
+export const reportData: ReportData = unpackReportData(JSON.parse(document.getElementById('report-data')!.textContent!));
 
 let comparison: ComparisonDefinition = reportData.comparison;
 const seriesByTarget = new Map(reportData.series.map((entry) => [entry.targetId, new Map(entry.items.map((item) => [item.signalId, item]))]));

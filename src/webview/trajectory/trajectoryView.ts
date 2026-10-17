@@ -13,7 +13,7 @@ import { crossesSeriesGap } from '../shared/chartSeries';
 import { chartWheelGesture } from '../shared/chartWheel';
 import { bindPressRepeat } from '../shared/pressRepeat';
 import { commonDisplayUnit, convertDisplayUnit, type CommonDisplayUnit } from '../../core/units/displayUnit';
-import { downsampleEven } from '../../core/timeline/timeline';
+import { downsampleExtremes } from '../../core/timeline/timeline';
 import { createSvgCanvas } from '../shared/svgCanvas';
 import type { SheetImage } from '../shared/imageSheet';
 import { withBrandMark } from '../shared/brandMark';
@@ -327,14 +327,14 @@ export class TrajectoryView {
     if (result[0]?.carried) { const edge = between(result[0], result[1], bounds?.start); result.shift(); if (edge) result.unshift(edge); }
     return result;
   }
-  private request(): void { if (!this.visible || !this.tracks.some((track) => track.xId && track.yId)) { this.seriesRequest = ++this.counter; this.series = []; this.analysisPoints = []; this.points = []; this.draw(); return; } this.elements.querySelector('.trajectory-status')!.textContent = t('Loading trajectory…', '軌跡を読み込み中…'); this.storeActiveTrack(); const selectedIds = [...new Set(this.tracks.flatMap((track) => [track.xId, track.yId, track.zId]).filter((id): id is string => !!id))]; this.seriesRequest = ++this.counter; this.post({ type: 'signalSeriesRequest', requestId: this.seriesRequest, selectedIds, maxPoints: 10_000 }); }
+  private request(): void { if (!this.visible || !this.tracks.some((track) => track.xId && track.yId)) { this.seriesRequest = ++this.counter; this.series = []; this.analysisPoints = []; this.points = []; this.draw(); return; } this.elements.querySelector('.trajectory-status')!.textContent = t('Loading trajectory…', '軌跡を読み込み中…'); this.storeActiveTrack(); const selectedIds = [...new Set(this.tracks.flatMap((track) => [track.xId, track.yId, track.zId]).filter((id): id is string => !!id))]; this.seriesRequest = ++this.counter; this.post({ type: 'signalSeriesRequest', requestId: this.seriesRequest, selectedIds, maxPoints: 10_000, joined: true }); }
   private rebuildPoints(): void {
     const byId = new Map(this.series.map((item) => [item.definition.id, item.samples])); const axisIds = this.tracks.flatMap((track) => [track.xId, track.yId, track.zId]).filter((id): id is string => Boolean(id));
     this.coordinateDisplayUnit = commonDisplayUnit(axisIds.map((id) => this.definitions.get(id)?.unit));
     const samples = (id: string | undefined) => { const source = id ? byId.get(id) ?? [] : []; const unit = id ? this.definitions.get(id)?.unit : undefined; return this.coordinateDisplayUnit ? source.map((sample) => ({ ...sample, value: convertDisplayUnit(sample.value, unit, this.coordinateDisplayUnit!.unit) })) : source; };
     const tracks = this.tracks.map((track) => ({ id: track.id, points: track.xId && track.yId ? this.clipEdges(buildTrajectoryPoints(samples(track.xId), samples(track.yId), track.zId ? samples(track.zId) : undefined, this.invert, 10_000)).map((point) => ({ ...point, seriesId: track.id })) : [] }));
     this.analysisPoints = tracks.flatMap((track) => track.points).sort((a,b) => a.timestamp - b.timestamp);
-    this.points = tracks.flatMap((track) => downsampleEven(track.points, 4000)).sort((a,b) => a.timestamp - b.timestamp);
+    this.points = tracks.flatMap((track) => downsampleExtremes(track.points, 4000, (point) => [point.x, point.y, point.z ?? 0])).sort((a,b) => a.timestamp - b.timestamp);
     this.measurementTimestamps = this.measurementTimestamps.filter((timestamp) => this.points.some((point) => point.timestamp === timestamp));
     if (this.points.length) { this.current = this.timeline.position ?? this.points[0].timestamp; } else this.current = undefined;
     this.updateMode(); this.updateMeasurementControls(); this.draw();

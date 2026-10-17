@@ -32,5 +32,7 @@
   "sigmixa.command.dissolveGroup": "解析グループを解除…",
   "sigmixa.command.transferLogs": "移動またはコピー…",
   "sigmixa.command.pasteLogs": "ログを貼り付け",
-  "sigmixa.command.editClipRange": "範囲を変更…"
+  "sigmixa.command.editClipRange": "範囲を変更…",
+  "sigmixa.command.renameFrame": "名前を変更…",
+  "sigmixa.command.unregisterPlugins": "プラグインの登録を解除"
 }

@@ -30,7 +30,7 @@ export type ComparisonToExtension =
   | { readonly type: 'reorderTargets'; readonly order: readonly string[] }
   | { readonly type: 'removeTarget'; readonly targetId: string }
   | { readonly type: 'update'; readonly comparison: Pick<ComparisonDefinition, 'graphs' | 'colors' | 'hiddenTargetIds'> }
-  | { readonly type: 'seriesRequest'; readonly requestId: number; readonly graphId: string; readonly signalIds: readonly string[]; readonly maxPoints?: number }
+  | { readonly type: 'seriesRequest'; readonly requestId: number; readonly graphId: string; readonly signalIds: readonly string[]; readonly maxPoints?: number; readonly joined?: boolean }
   | { readonly type: 'measuredSignalsRequest'; readonly requestId: number; readonly targetId: string; readonly signalIds: readonly string[]; readonly timestamp: number }
   | { readonly type: 'shiftOffset'; readonly targetId: string; readonly direction: -1 | 1; readonly steps?: number }
   | { readonly type: 'setOffset'; readonly targetId: string; readonly offset: number }

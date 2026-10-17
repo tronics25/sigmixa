@@ -16,7 +16,8 @@ test('Trajectory accepts exact shared timestamps only and bounded reduction pres
   const x = samples(Array.from({ length: 10_000 }, (_, index) => [index, index] as [number, number]));
   const y = samples(Array.from({ length: 10_000 }, (_, index) => [index, index * 2] as [number, number]));
   const points = buildTrajectoryPoints(x, y, undefined, { x: false, y: false, z: false }, 4000);
-  assert.equal(points.length, 4000); assert.equal(points[0].timestamp, 0); assert.equal(points.at(-1)?.timestamp, 9999);
+  // Bounded, with the turning points of each axis kept (fewer than the limit when runs share their extremes).
+  assert.ok(points.length <= 4000 && points.length >= 2000, String(points.length)); assert.equal(points[0].timestamp, 0); assert.equal(points.at(-1)?.timestamp, 9999);
   assert.deepEqual(buildTrajectoryPoints(samples([[1, 1], [2, 2]]), samples([[1, 3], [3, 4]]), undefined, { x: false, y: false, z: false }), [{ timestamp: 1, x: 1, y: 3 }]);
 });
 

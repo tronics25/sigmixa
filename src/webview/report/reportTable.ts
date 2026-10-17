@@ -20,12 +20,14 @@ export const REPORT_TABLE_STYLES = `
 .report-table th:hover{color:var(--vscode-textLink-foreground)}
 .report-table tr:hover td{background:var(--vscode-list-hoverBackground)}
 .report-table td.empty{color:var(--vscode-descriptionForeground)}
+.report-table th.no-data{color:var(--vscode-descriptionForeground);font-weight:var(--sm-weight-regular);font-style:italic}
 .report-table .spacer-row td{height:auto;padding:0;border:0}
 `;
 
 /** Read-only Signal table: search by Signal name, sort by any column, virtual scrolling for large exports. */
 export function renderReportTable(host: HTMLElement, table: ReportTable, definitions: readonly SignalDefinition[]): void {
   const byId = new Map(definitions.map((definition) => [definition.id, definition]));
+  const empty = new Set(table.emptySignalIds ?? []);
   let query = ''; let sortColumn = -1; let descending = false; let order: number[] = table.timestamps.map((_, index) => index);
   host.classList.add('report-table');
   host.innerHTML = `<div class="view-toolbar"><input type="search" placeholder="${t('Search Signals…', 'シグナルを検索…')}" aria-label="${t('Search Signals', 'シグナルを検索')}"><span class="muted"></span><span class="spacer"></span><span class="muted">${t('Click a heading to sort', '見出しをクリックで並べ替え')}</span></div><div class="report-table-scroll"><table><thead></thead><tbody></tbody></table></div>`;
@@ -47,8 +49,10 @@ export function renderReportTable(host: HTMLElement, table: ReportTable, definit
     row.appendChild(time);
     for (const { id, index } of columns()) {
       const definition = byId.get(id); const th = document.createElement('th'); th.textContent = definition?.name ?? id;
+      // Selected or drawn, but without data in this log: the column stays, marked, so that missing data is seen as missing.
+      if (empty.has(id)) { th.classList.add('no-data'); th.title = t('Not in this log', 'このログにはありません'); }
       th.appendChild(Object.assign(document.createElement('small'), { textContent: definition?.unit || ' ' }));
-      th.setAttribute('aria-sort', sortColumn === index ? (descending ? 'descending' : 'ascending') : 'none'); th.title = t('Sort', '並べ替え');
+      th.setAttribute('aria-sort', sortColumn === index ? (descending ? 'descending' : 'ascending') : 'none');
       th.addEventListener('click', () => { descending = sortColumn === index ? !descending : false; sortColumn = index; sort(); renderHead(); renderBody(); });
       row.appendChild(th);
     }

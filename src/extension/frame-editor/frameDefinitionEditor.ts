@@ -50,13 +50,13 @@ export class FrameDefinitionEditor implements vscode.Disposable {
     this.open(frame.id, undefined, prefill.groupId);
   }
 
-  open(frameId: string, focusSignalId?: string, groupId?: string): void {
+  open(frameId: string, focusSignalId?: string, groupId?: string, preserveFocus = false): void {
     const frame = this.frames(groupId).find((item) => item.id === frameId);
     if (!frame) { void vscode.window.showErrorMessage('CAN frame definition was not found.'); return; }
     const panelKey = `${groupId ?? 'common'}:${frameId}`;
     const existing = this.panels.get(panelKey);
-    if (existing) { existing.reveal(); return; }
-    const panel = vscode.window.createWebviewPanel('sigmixa.frameDefinition', frame.name, vscode.ViewColumn.One, { enableScripts: true, retainContextWhenHidden: true });
+    if (existing) { existing.reveal(undefined, preserveFocus); return; }
+    const panel = vscode.window.createWebviewPanel('sigmixa.frameDefinition', frame.name, { viewColumn: vscode.ViewColumn.One, preserveFocus }, { enableScripts: true, retainContextWhenHidden: true, enableFindWidget: true });
     panel.webview.html = frameDefinitionHtml(panel.webview, this.extensionUri, frame.name, vscode.env.language);
     this.panels.set(panelKey, panel);
     panel.onDidDispose(() => this.panels.delete(panelKey));
@@ -64,11 +64,18 @@ export class FrameDefinitionEditor implements vscode.Disposable {
       if (webviewPanel.active) void this.send(webviewPanel, { type: 'sortSignals' });
     });
     panel.webview.onDidReceiveMessage((message: FrameEditorToExtension) => {
-      if (message.type === 'ready') void this.send(panel, { type: 'init', frame: this.frames(groupId).find((item) => item.id === frameId) ?? frame, scopeName: this.store.placeLabel(groupId ?? ''), widths: this.savedWidths() });
+      if (message.type === 'ready') void this.send(panel, { type: 'init', frame: this.frames(groupId).find((item) => item.id === frameId) ?? frame, crumbs: this.store.placeCrumbs(groupId ?? ''), listLevel: groupId ?? '', widths: this.savedWidths() });
       else if (message.type === 'save') void this.save(panel, frameId, message.revision, message.frame, groupId);
       else if (message.type === 'saveViewState') void this.saveWidths(message.widths);
+      else if (message.type === 'openList') void vscode.commands.executeCommand('sigmixa.openDefinitionsPage', message.level);
     });
     void focusSignalId;
+  }
+
+  /** Shows a definition changed elsewhere (renamed in the sidebar) in its open page. */
+  reload(frameId: string, groupId?: string): void {
+    const panel = this.panels.get(`${groupId ?? 'common'}:${frameId}`); const frame = this.frames(groupId).find((item) => item.id === frameId); if (!panel || !frame) return;
+    panel.title = frame.name; void this.send(panel, { type: 'init', frame, crumbs: this.store.placeCrumbs(groupId ?? ''), listLevel: groupId ?? '', widths: this.savedWidths() });
   }
 
   close(frameId: string, groupId?: string): void { this.panels.get(`${groupId ?? 'common'}:${frameId}`)?.dispose(); }

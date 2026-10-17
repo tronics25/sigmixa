@@ -14,16 +14,25 @@ import * as path from 'path';
 import { readExternalCsvHeader } from '../external/externalCsvLoader';
 import { removeExternalCsvSignal, type ExternalCsvValueColumn } from '../../core/project/schema';
 import { signalCatalogGroups } from './signalCatalogGroups';
-import { chooseReportDetail, reportCatalog, reportGraphs, reportSeries, reportTable, saveReport } from '../report/reportExporter';
+import { reportCatalog, reportGraphs, reportSeries, reportTable, saveReport } from '../report/reportExporter';
 import { REPORT_FORMAT_VERSION } from '../report/reportData';
 import { extensionVersion } from '../report/extensionVersion';
 import { groupUnusablePlugins, updateGroup } from '../../core/project/analysisGroups';
-import { clipIdFromUri, portableClipPath, resolveClipPath } from '../clips/clipPaths';
+import { portableClipPath, resolveClipPath } from '../clips/clipPaths';
 import { withClipRange } from '../../core/project/clipRangeEdit';
 import { movedSource } from '../../core/project/clipIdentity';
 import { chooseExportFormat, requireRenderedImage, saveRenderedImage, type RenderedImage } from '../imageExport';
 
-export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider<RawLogDocument> {
+/**
+ * A URI that names a log or Clip by another name than its own (picked from a list in VS Code's breadcrumb, or a tab of an
+ * earlier version): the tab is opened again with the URI it has now, without reading the log for it.
+ */
+class ReopenDocument implements vscode.CustomDocument {
+  constructor(readonly uri: vscode.Uri, readonly current: vscode.Uri) {}
+  dispose(): void { /* nothing was read */ }
+}
+
+export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider<RawLogDocument | ReopenDocument> {
   private readonly warnedPlugins = new Set<string>();
   private readonly pendingExternalCsv = new Map<string, { readonly uri: vscode.Uri; readonly headers: readonly string[] }>();
   constructor(
@@ -43,22 +52,30 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     void vscode.window.showWarningMessage(t(`Analysis group “${group.name}” needs Plugins that cannot be used: ${names}`, `解析グループ「${group.name}」に必要なプラグインが使えません: ${names}`));
   }
 
-  openCustomDocument(uri: vscode.Uri): RawLogDocument {
-    const clipId = clipIdFromUri(uri); const clip = clipId ? this.projectStore.findClip(clipId, uri.fsPath) : undefined;
+  openCustomDocument(uri: vscode.Uri): RawLogDocument | ReopenDocument {
+    const current = this.projectStore.currentUri(uri);
+    if (current && current.toString() !== uri.toString()) return new ReopenDocument(uri, current);
+    if (!this.projectStore.fileOf(uri)) throw new Error(t('This log or Clip is no longer here.', 'このログまたはクリップはもうありません。'));
+    const clipId = this.projectStore.clipIdOf(uri); const clip = clipId ? this.projectStore.findClip(clipId, this.projectStore.fileOf(uri)) : undefined;
     // A tab of a Clip that is gone (restored at startup, say) must not open as the whole log, nor as any other Clip.
     if (clipId && !clip) throw new Error(t('This Clip no longer exists for this log.', 'このログのクリップは存在しません。'));
     this.warnUnusablePlugins(uri);
-    return new RawLogDocument(uri, sourceProject(this.projectStore, uri), this.projectStore.analysisRevision, this.pluginManager.registry, clip ? clipRange(clip) : undefined);
+    return new RawLogDocument(uri, this.projectStore.fileOf(uri), sourceProject(this.projectStore, uri), this.projectStore.analysisRevision, this.pluginManager.registry, clip ? clipRange(clip) : undefined);
   }
 
-  resolveCustomEditor(document: RawLogDocument, panel: vscode.WebviewPanel): void {
+  resolveCustomEditor(document: RawLogDocument | ReopenDocument, panel: vscode.WebviewPanel): void {
+    if (document instanceof ReopenDocument) {
+      const column = panel.viewColumn; panel.dispose();
+      void vscode.commands.executeCommand('vscode.openWith', document.current, 'sigmixa.rawLog', { viewColumn: column });
+      return;
+    }
     panel.webview.options = { enableScripts: true };
     panel.webview.html = rawLogHtml(panel.webview, this.extensionUri, document.fileName, vscode.env.language);
     const send = (message: ToWebviewMessage) => panel.webview.postMessage(message);
-    const clipId = clipIdFromUri(document.uri); const clip = clipId ? this.projectStore.findClip(clipId, document.uri.fsPath) : undefined;
+    const clipId = this.projectStore.clipIdOf(document.uri); const clip = clipId ? this.projectStore.findClip(clipId, document.filePath) : undefined;
     // Where this screen's log is, as the project has it. A move made here is followed once, when it happens: this screen held
     // the log before the move. Nothing is rewritten later, so a new file put at the old place is never taken for it.
-    let source = this.projectStore.clipRef('', document.uri.fsPath).sourcePath;
+    let source = this.projectStore.clipRef('', document.filePath).sourcePath;
     const moveSubscription = this.projectStore.onDidMoveLogs((moves) => { source = movedSource(source, moves); });
     let viewStateSaveErrorShown = false;
     if (clip) panel.title = clip.name;
@@ -105,13 +122,15 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     let knownClipRanges = JSON.stringify(clipRanges());
     // An open Clip shows the range it was opened with. When its range is changed, it is opened again with the new one.
     const openedClipRange = clip ? JSON.stringify(clipRange(clip)) : undefined;
+    // Its name is in its URI too: renamed, it is opened again under the new one, from the same place.
+    const openedLevel = this.projectStore.levelOfUri(document.uri);
     const projectSubscription = this.projectStore.onDidChange(() => {
       if (clip) {
         const current = this.projectStore.findClip(clipId ?? clip.id, source);
         // Its Clip was deleted: the tab would show a Clip that is no more, so it closes.
         if (!current) { panel.dispose(); return; }
-        if (current && JSON.stringify(clipRange(current)) !== openedClipRange) {
-          const uri = document.uri; const column = panel.viewColumn; const active = panel.active; panel.dispose();
+        if (current && (JSON.stringify(clipRange(current)) !== openedClipRange || this.projectStore.clipUri(current, openedLevel).toString() !== document.uri.toString())) {
+          const uri = this.projectStore.clipUri(current, openedLevel); const column = panel.viewColumn; const active = panel.active; panel.dispose();
           setTimeout(() => void vscode.commands.executeCommand('vscode.openWith', uri, 'sigmixa.rawLog', { viewColumn: column, preserveFocus: !active }), 200);
           return;
         }
@@ -154,6 +173,8 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         // Opened from this log's graph, the Clip opens in the same place (group) as the log.
         const target = this.projectStore.findClip(message.clipId, source);
         if (target) void vscode.commands.executeCommand('sigmixa.openClip', target, { level: this.projectStore.levelOfUri(document.uri) });
+      } else if (message.type === 'openWholeLog') {
+        void vscode.commands.executeCommand('vscode.openWith', this.projectStore.logUri(document.filePath, this.projectStore.levelOfUri(document.uri)), 'sigmixa.rawLog');
       } else if (message.type === 'openText') {
         void vscode.workspace.openTextDocument({ content: message.text, language: 'plaintext' }).then((textDocument) => vscode.window.showTextDocument(textDocument, { viewColumn: vscode.ViewColumn.Beside, preview: false }));
       } else if (message.type === 'lastFramesRequest') {
@@ -193,7 +214,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       } else if (message.type === 'timelineRangeRequest') {
         void send({ type: 'timelineRange', requestId: message.requestId, range: document.timelineRange });
       } else if (message.type === 'signalSeriesRequest') {
-        const result = document.signalSeries(message.selectedIds, message.range, message.maxPoints);
+        const result = document.signalSeries(message.selectedIds, message.range, message.maxPoints, message.joined === true);
         void send({ type: 'signalSeries', requestId: message.requestId, fullRange: result.range, series: result.series.map((series) => ({ ...series, events: series.events ?? [] })) });
       } else if (message.type === 'cancelAnalysis') {
         document.cancelAnalysis();
@@ -215,7 +236,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
           if (format === 'html') { await this.exportReport(document, currentSettings() as LogViewState, clip, message.trajectoryCurrentTime); return; }
           if (!requireRenderedImage(message)) return;
           const base = document.fileName.replace(/\.(?:asc|blf)$/i, '');
-          await saveRenderedImage({ title: 'Save All Graphs Image', japaneseTitle: '全グラフの画像を保存', defaultBasePath: path.join(path.dirname(document.uri.fsPath), `${clip?.name ?? base}-graphs`), image: message, format });
+          await saveRenderedImage({ title: 'Save All Graphs Image', japaneseTitle: '全グラフの画像を保存', defaultBasePath: path.join(path.dirname(document.filePath), `${clip?.name ?? base}-graphs`), image: message, format });
         })();
       } else if (message.type === 'saveTrajectoryImage') {
         void this.saveTrajectoryImage(document, message);
@@ -265,18 +286,17 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
   /** The Clips of a log, as time ranges of it. */
   private clipRangesOf(document: RawLogDocument): { id: string; name: string; start: number; end: number }[] {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    return this.projectStore.current.clips.flatMap((item) => { const range = clipRange(item); return range && path.resolve(resolveClipPath(item, root)) === path.resolve(document.uri.fsPath) ? [{ id: item.id, name: item.name, start: range.start, end: range.end }] : []; });
+    return this.projectStore.current.clips.flatMap((item) => { const range = clipRange(item); return range && path.resolve(resolveClipPath(item, root)) === path.resolve(document.filePath) ? [{ id: item.id, name: item.name, start: range.start, end: range.end }] : []; });
   }
 
   /** A standalone HTML report of what this log/Clip shows: its Visualize graphs and its table Signals. */
   private async exportReport(document: RawLogDocument, state: LogViewState, clip?: ClipDefinition, trajectoryCurrentTime?: number): Promise<void> {
-    const detail = await chooseReportDetail(); if (!detail) return;
     const range = (clip ? clipRange(clip) : undefined) ?? document.timelineRange;
     if (!range) { void vscode.window.showWarningMessage(t('The log has no frames to report yet.', 'レポートに出力できるフレームがまだありません。')); return; }
     const graphs = reportGraphs(state, trajectoryCurrentTime); const tableIds = [...(state.tableSelectedIds ?? [])];
     const included = new Set([...graphs.flatMap((graph) => graph.signalIds), ...tableIds]);
     const notices: string[] = []; const name = clip?.name ?? document.fileName; const groupName = sourceGroup(this.projectStore, document.uri)?.name;
-    const series = reportSeries(document, [...included], clip ? clipRange(clip) : undefined, detail, notices);
+    const series = reportSeries(document, [...included], clip ? clipRange(clip) : undefined);
     const catalog = reportCatalog(document.signalCatalog(), signalCatalogGroups(document.signalCatalog(), sourceProject(this.projectStore, document.uri), true), included);
     const rangeLabel = clip ? clipRangeLabel(clip, t('Whole file', 'ファイル全体')) : t('Whole file', 'ファイル全体');
     await saveReport(this.extensionUri, {
@@ -285,7 +305,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       comparison: { id: 'report', name, targets: [{ id: 'log', kind: clip ? 'clip' : 'file', offset: 0 }], graphs, colors: { ...Object.assign({}, ...(state.visualizeViews ?? []).map((view) => view.settings?.chartColors ?? {})), ...(state.chartColors ?? {}) } },
       targets: [{ id: 'log', kind: clip ? 'clip' : 'file', name, fileName: document.fileName, filePath: document.fileName, groupName, rangeLabel, status: 'ready', start: range.start, end: range.end }],
       definitions: catalog.definitions, groups: catalog.groups, availability: { log: [...included] },
-      series: [{ targetId: 'log', items: series }], table: reportTable(document, tableIds, detail, notices),
+      series: [{ targetId: 'log', items: series }], table: reportTable(document, tableIds, { columnOrder: state.tableColumnOrder, graphIds: graphs.flatMap((graph) => graph.signalIds), series }),
       clipSpans: clip ? undefined : this.clipRangesOf(document),
     }, name);
   }
@@ -302,7 +322,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     try {
       // A Clip is only a name and a time range of the log. It is listed wherever the log is shown.
       await this.projectStore.update((project) => ({ ...project, clips: [...project.clips, {
-        id, name: name.trim(), sourcePath: portableClipPath(document.uri.fsPath, root.fsPath), sourceFileName: document.fileName, startTimestamp: range.start, endTimestamp: range.end,
+        id, name: name.trim(), sourcePath: portableClipPath(document.filePath, root.fsPath), sourceFileName: document.fileName, startTimestamp: range.start, endTimestamp: range.end,
       }] }));
       void send({ type: 'clipCreated', clipId: id });
     } catch (error) { void vscode.window.showErrorMessage(t(`Could not create Clip: ${(error as Error).message}`, `クリップを作成できませんでした: ${(error as Error).message}`)); }
@@ -318,11 +338,11 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
   }
 
   private async saveTimeSeriesImage(document: RawLogDocument, image: RenderedImage): Promise<void> {
-    const base = document.fileName.replace(/\.(?:asc|blf)$/i, ''); await saveRenderedImage({ title: 'Save Time Series Image', japaneseTitle: '時系列画像を保存', defaultBasePath: path.join(path.dirname(document.uri.fsPath), `${base}-time-series`), image });
+    const base = document.fileName.replace(/\.(?:asc|blf)$/i, ''); await saveRenderedImage({ title: 'Save Time Series Image', japaneseTitle: '時系列画像を保存', defaultBasePath: path.join(path.dirname(document.filePath), `${base}-time-series`), image });
   }
 
   private async saveTrajectoryImage(document: RawLogDocument, image: RenderedImage): Promise<void> {
-    const base = document.fileName.replace(/\.(?:asc|blf)$/i, ''); await saveRenderedImage({ title: 'Save Trajectory Image', japaneseTitle: '軌跡画像を保存', defaultBasePath: path.join(path.dirname(document.uri.fsPath), `${base}-trajectory`), image });
+    const base = document.fileName.replace(/\.(?:asc|blf)$/i, ''); await saveRenderedImage({ title: 'Save Trajectory Image', japaneseTitle: '軌跡画像を保存', defaultBasePath: path.join(path.dirname(document.filePath), `${base}-trajectory`), image });
   }
 
   private async selectExternalCsv(send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {

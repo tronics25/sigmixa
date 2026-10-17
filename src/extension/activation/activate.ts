@@ -22,6 +22,7 @@ import { exportDbc, importDbc } from '../../core/dbc/dbc';
 import type { ClipDefinition } from '../../core/project/schema';
 import { resolveClipPath } from '../clips/clipPaths';
 import { ComparisonEditor } from '../comparison/comparisonEditor';
+import { SOURCE_SCHEME, SourceFileSystem } from '../storage/sourceUri';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const frames = new FrameDefinitionsProvider();
@@ -33,6 +34,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const logFiles = new AnalysisGroupsProvider(projectStore);
   // Logs dragged onto a group or folder are added as links, moved or copied (asked on drop): logs of this pane, and log
   // files dragged in from the Explorer or the OS file manager.
+  const frameTree = vscode.window.createTreeView('sigmixa.frames', { treeDataProvider: frames, canSelectMany: true });
+  const pluginTree = vscode.window.createTreeView('sigmixa.plugins', { treeDataProvider: plugins, canSelectMany: true });
   const TREE_MIME = 'application/vnd.code.tree.sigmixa.analysisgroups';
   let dropLogs: ((nodes: readonly AnalysisTreeNode[], target?: AnalysisTreeNode) => void) | undefined;
   let dropFiles: ((files: readonly vscode.Uri[], target?: AnalysisTreeNode) => void) | undefined;
@@ -194,8 +197,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     dbcOutput,
     projectStore.onDidChange(() => void pluginManager.sync()),
     projectStore.onDidChange(refreshProjectViews),
-    vscode.window.registerTreeDataProvider('sigmixa.frames', frames),
-    vscode.window.registerTreeDataProvider('sigmixa.plugins', plugins),
+    frameTree,
+    pluginTree,
+    vscode.workspace.registerFileSystemProvider(SOURCE_SCHEME, new SourceFileSystem(() => projectStore.sourceEntries()), { isReadonly: true }),
     vscode.window.registerCustomEditorProvider(
       'sigmixa.rawLog',
       new RawLogEditorProvider(context.extensionUri, logFiles, projectStore, frameEditor, pluginManager),
@@ -337,6 +341,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (uri) void vscode.commands.executeCommand('revealFileInOS', uri);
     })),
     vscode.commands.registerCommand('sigmixa.openGroupDefinitions', (node: AnalysisTreeNode) => { if (node?.kind === 'group') groupDefinitions.open(node.folder); }),
+    // Breadcrumb steps: the Frame definitions page of a level ('' = the workspace).
+    vscode.commands.registerCommand('sigmixa.openDefinitionsPage', (level: string) => groupDefinitions.open(typeof level === 'string' ? level : '')),
     vscode.commands.registerCommand('sigmixa.removeAddedLog', async (node?: AnalysisTreeNode) => {
       if (node?.kind !== 'file' || !node.listed) return;
       await projectStore.removeAddedLog(node.filePath, node.groupId ?? '');
@@ -396,16 +402,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (warnings) dbcOutput.show(true);
       } catch (error) { void vscode.window.showErrorMessage(`DBC export failed: ${(error as Error).message}`); }
     }),
-    vscode.commands.registerCommand('sigmixa.openFrame', (frameId: string) => frameEditor.open(frameId)),
-    vscode.commands.registerCommand('sigmixa.deleteFrame', async (frame: { id?: string; name?: string } | string) => {
-      const frameId = typeof frame === 'string' ? frame : frame?.id;
-      const current = projectStore.current.frames.find((item) => item.id === frameId);
-      if (!current || current.origin?.type === 'plugin') return;
-      const answer = await vscode.window.showWarningMessage(`Delete CAN frame “${current.name}”?`, { modal: true }, 'Delete');
-      if (answer !== 'Delete') return;
-      await projectStore.update((project) => ({ ...project, frames: project.frames.filter((item) => item.id !== current.id) }));
-      frameEditor.close(current.id);
+    // From the sidebar, focus stays in the list (as in the Explorer), so Delete and F2 act on the clicked row.
+    vscode.commands.registerCommand('sigmixa.openFrame', (frameId: string, options?: { preserveFocus?: boolean }) => frameEditor.open(frameId, undefined, undefined, options?.preserveFocus)),
+    vscode.commands.registerCommand('sigmixa.deleteFrame', async (frame?: { id?: string; name?: string } | string, selected?: readonly { id?: string }[]) => {
+      // The row's button or the menu: the selected Frames when the row is one of several selected, else that row. The Delete
+      // key passes nothing: every selected Frame.
+      const ids = selected && selected.length > 1 ? selected.map((item) => item.id) : frame ? [typeof frame === 'string' ? frame : frame.id] : frameTree.selection.map((item) => item.id);
+      const targets = projectStore.current.frames.filter((item) => ids.includes(item.id) && item.origin?.type !== 'plugin');
+      if (!targets.length) return;
+      const remove = t('Delete', '削除');
+      const message = targets.length === 1 ? t(`Delete CAN frame “${targets[0].name}”?`, `CANフレーム「${targets[0].name}」を削除しますか？`) : t(`Delete ${targets.length} CAN frames?`, `${targets.length}件のCANフレームを削除しますか？`);
+      if (await vscode.window.showWarningMessage(message, { modal: true }, remove) !== remove) return;
+      const removed = new Set(targets.map((item) => item.id));
+      await projectStore.update((project) => ({ ...project, frames: project.frames.filter((item) => !removed.has(item.id)) }));
+      for (const id of removed) frameEditor.close(id);
     }),
+    vscode.commands.registerCommand('sigmixa.renameFrame', async (frame?: { id?: string }) => {
+      const current = projectStore.current.frames.find((item) => item.id === (frame?.id ?? frameTree.selection[0]?.id)); if (!current) return;
+      const name = await vscode.window.showInputBox({ title: t('Rename Frame', 'フレーム名を変更'), value: current.name, validateInput: (text) => text.trim() ? undefined : t('Enter a name.', '名前を入力してください') });
+      if (name === undefined || name.trim() === current.name) return;
+      await projectStore.update((project) => ({ ...project, frames: project.frames.map((item) => item.id === current.id ? { ...item, name: name.trim() } : item) }));
+      frameEditor.reload(current.id);
+    }),
+    vscode.commands.registerCommand('sigmixa.unregisterPlugins', async (plugin?: { id?: string }, selected?: readonly { id?: string }[]) => {
+      // As for Frames: the Delete key passes nothing, and then every selected Plugin is meant.
+      const ids = (selected && selected.length > 1 ? selected : plugin ? [plugin] : pluginTree.selection).map((item) => item?.id).filter((id): id is string => !!id);
+      if (!ids.length) return;
+      const remove = t('Unregister', '登録解除');
+      const message = ids.length === 1 ? t(`Unregister Plugin “${ids[0]}”? Bindings and unused Plugin-owned Frames will be removed.`, `プラグイン「${ids[0]}」の登録を解除しますか？ 割り当てと、使われていないプラグイン提供のフレームも削除されます。`) : t(`Unregister ${ids.length} Plugins? Bindings and unused Plugin-owned Frames will be removed.`, `${ids.length}件のプラグインの登録を解除しますか？ 割り当てと、使われていないプラグイン提供のフレームも削除されます。`);
+      if (await vscode.window.showWarningMessage(message, { modal: true }, remove) !== remove) return;
+      for (const id of ids) { pluginEditor.close(id); await pluginManager.unregister(id); }
+    }),
+    // View title buttons: VS Code passes the tree's selection to these even when the tree is not focused, so they ignore it and
+    // always act on the workspace top level (or all frames). Right-click a group or folder to act inside it.
+    vscode.commands.registerCommand('sigmixa.openLogInWorkspace', () => vscode.commands.executeCommand('sigmixa.openLog')),
+    vscode.commands.registerCommand('sigmixa.addGroupInWorkspace', () => vscode.commands.executeCommand('sigmixa.addGroup')),
+    vscode.commands.registerCommand('sigmixa.addFrameFromTitle', () => vscode.commands.executeCommand('sigmixa.addFrame')),
+    vscode.commands.registerCommand('sigmixa.exportAllDbc', () => vscode.commands.executeCommand('sigmixa.exportDbc')),
     vscode.commands.registerCommand('sigmixa.addPlugin', async () => {
       if (!projectStore.requireWorkspace()) return;
       const selected = await vscode.window.showOpenDialog({ title: 'Register SigMixa Plugin Directory', canSelectFiles: false, canSelectFolders: true, canSelectMany: false });
@@ -413,7 +446,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       try { const id = await pluginManager.registerSource(selected[0]); pluginEditor.open(id); }
       catch (error) { void vscode.window.showErrorMessage(`Plugin registration failed: ${(error as Error).message}`); }
     }),
-    vscode.commands.registerCommand('sigmixa.openPlugin', (plugin: { id?: string } | string) => pluginEditor.open(typeof plugin === 'string' ? plugin : plugin?.id ?? '')),
+    vscode.commands.registerCommand('sigmixa.openPlugin', (plugin: { id?: string } | string, options?: { preserveFocus?: boolean }) => pluginEditor.open(typeof plugin === 'string' ? plugin : plugin?.id ?? '', options?.preserveFocus)),
     vscode.commands.registerCommand('sigmixa.refresh', () => {
       logFiles.refresh();
       void projectStore.load();

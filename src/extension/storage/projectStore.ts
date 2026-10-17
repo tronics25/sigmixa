@@ -1,10 +1,13 @@
 import { createHash } from 'crypto';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { CURRENT_PROJECT_SCHEMA_VERSION, emptyProject, migrateProject, parseProjectJson, serializeProject, type AnalysisGroup, type ClipDefinition, type SigMixaProject } from '../../core/project/schema';
+import { CURRENT_PROJECT_SCHEMA_VERSION, emptyProject, migrateProject, parseProjectJson, serializeProject, clipRange, type AnalysisGroup, type ClipDefinition, type SigMixaProject } from '../../core/project/schema';
 import { clipViewKey, composeWorkspace, addedLogsOf, GROUP_VIEW_KEY, LEVEL_DIRECTORY, LEVEL_FILE, locationLevel, logViewKey, parseLogViewKey, splitWorkspace, type LevelFile, type WorkspaceLog } from '../../core/project/folderLevels';
 import { findClip, type ClipRef, type LogMove } from '../../core/project/clipIdentity';
 import { scanWorkspace } from './workspaceScan';
+import { t } from '../i18n';
+import { issuedLocation, SOURCE_SCHEME, sourceUri, type SourceLocation } from './sourceUri';
+import { clipIdFromUri } from '../clips/clipPaths';
 
 /**
  * Loads and saves the folder-based levels: every folder holding a `.sigmixa` folder keeps its own
@@ -146,12 +149,67 @@ export class ProjectStore implements vscode.Disposable {
    */
   levelOfUri(uri: vscode.Uri | string): string {
     if (typeof uri === 'string') return this.levelOfFile(uri);
+    if (uri.scheme === SOURCE_SCHEME) return this.sourceOf(uri)?.level ?? '';
+    // A file URI with a mark: how tabs opened by earlier versions name the group or the Clip.
     const named = /(?:^|&)sigmixa-level=([^&]*)/.exec(uri.fragment); if (named) { const level = decodeURIComponent(named[1]); if (!level || this.levelFolders.includes(level)) return level; }
     return this.levelOfFile(uri.fsPath);
   }
-  /** The URI that opens a log from `level`: the plain file where it is, or the file with the level named for an added log. */
+  /** The log file a log or Clip URI opens ('' when it names nothing there is now). */
+  fileOf(uri: vscode.Uri): string { return uri.scheme === SOURCE_SCHEME ? this.sourceOf(uri)?.file ?? '' : uri.fsPath; }
+  /** The Clip a URI opens, if any (with its log, from `fileOf`). */
+  clipIdOf(uri: vscode.Uri): string | undefined { return uri.scheme === SOURCE_SCHEME ? this.sourceOf(uri)?.clipId : clipIdFromUri(uri); }
+  /** A sigmixa: URI's log, place and Clip: those it was made for, or else (picked from a breadcrumb list) what its path shows. */
+  private sourceOf(uri: vscode.Uri): SourceLocation | undefined {
+    const issued = issuedLocation(uri); if (issued) return { ...issued, level: !issued.level || this.levelFolders.includes(issued.level) ? issued.level : this.levelOfFile(issued.file) };
+    return this.sourceEntries().get(uri.path);
+  }
+  /**
+   * Every log and Clip by the path VS Code shows for it (sigmixa: URIs): a log where it is in the workspace, a log added to a
+   * level under that level's folder, and each of a log's Clips under the log, in every place the log is shown. A name
+   * already taken in a folder gets a number, so each path opens one thing.
+   */
+  sourceEntries(): Map<string, SourceLocation> {
+    const entries = new Map<string, SourceLocation>(); if (!this.root()) return entries;
+    const take = (folder: string, name: string, location: SourceLocation) => {
+      const extension = location.clipId ? '' : path.extname(name); const stem = name.slice(0, name.length - extension.length);
+      let shown = `${folder}/${name}`; for (let n = 2; entries.has(shown); n++) shown = `${folder}/${stem} (${n})${extension}`;
+      entries.set(shown, location); return shown;
+    };
+    const placed: { shown: string; file: string; level: string }[] = [];
+    for (const log of [...this.workspaceLogs].sort((a, b) => Number(a.level !== undefined) - Number(b.level !== undefined))) {
+      const file = this.absolute(log.path); const level = log.level ?? this.levelOfFile(file);
+      const folder = log.level === undefined ? path.posix.dirname(`/${log.path}`).replace(/^\/$/, '') : log.level ? `/${log.level}` : '';
+      placed.push({ shown: take(folder, path.basename(file), { file, level }), file, level });
+    }
+    for (const log of placed) {
+      const clips = this.project.clips.filter((clip) => path.resolve(this.absolute(clip.sourcePath)) === path.resolve(log.file));
+      // A log with Clips lists like a folder, as in the sidebar: the whole log, named as the app names it elsewhere (not as
+      // the file again, which would look like a file inside itself), then its Clips, each led by its start time in brackets.
+      // VS Code sorts the list by name (numbers by value): the start times keep the Clips in time order, and a hair space (a
+      // space too thin to see; a space sorts before a bracket) keeps the whole log first.
+      if (clips.length) take(log.shown, `\u200A${t('Whole file', 'ファイル全体')}`, { file: log.file, level: log.level });
+      // A name is one step of the path, so a '/' in it must not split it.
+      for (const clip of clips) take(log.shown, `[${(clipRange(clip)?.start ?? 0).toFixed(3)} s] ${clip.name.replace(/\//g, '∕')}`, { file: log.file, level: log.level, clipId: clip.id });
+    }
+    return entries;
+  }
+  private shownOf(location: SourceLocation): string | undefined {
+    for (const [shown, entry] of this.sourceEntries()) if (path.resolve(entry.file) === path.resolve(location.file) && entry.level === location.level && entry.clipId === location.clipId) return shown;
+    return undefined;
+  }
+  /** The URI that opens a log from `level`: the plain file where it is, or its own URI under the level it was added to. */
   logUri(fsPath: string, level: string): vscode.Uri {
-    const uri = vscode.Uri.file(fsPath); return level === this.levelOfFile(fsPath) && !path.isAbsolute(this.locate(fsPath)) ? uri : uri.with({ fragment: `sigmixa-level=${encodeURIComponent(level)}` });
+    if (level === this.levelOfFile(fsPath) && !path.isAbsolute(this.locate(fsPath))) return vscode.Uri.file(fsPath);
+    const shown = this.shownOf({ file: fsPath, level });
+    // Not listed there (yet): the file URI with the level named, as earlier versions opened it.
+    return shown ? sourceUri(shown, { file: fsPath, level }) : vscode.Uri.file(fsPath).with({ fragment: `sigmixa-level=${encodeURIComponent(level)}` });
+  }
+  /** The URI a log or Clip has now (undefined: what it names is gone). Tabs opened another way are opened again with it. */
+  currentUri(uri: vscode.Uri): vscode.Uri | undefined {
+    const file = this.fileOf(uri); if (!file) return undefined;
+    const level = this.levelOfUri(uri); const clipId = this.clipIdOf(uri);
+    if (!clipId) return this.logUri(file, level);
+    const clip = this.findClip(clipId, file); return clip && this.clipUri(clip, level);
   }
   /**
    * Adds logs to a level, like shortcuts: they then also appear in that level and, opened from there, use its definitions.
@@ -175,7 +233,7 @@ export class ProjectStore implements vscode.Disposable {
   }
   /** The key of a log's view settings for the place it was opened from. A Clip uses the settings of its log there. */
   viewKey(uri: vscode.Uri | string): string {
-    return logViewKey(this.levelFolders, this.locate(typeof uri === 'string' ? uri : uri.fsPath), this.levelOfUri(uri));
+    return logViewKey(this.levelFolders, this.locate(typeof uri === 'string' ? uri : this.fileOf(uri)), this.levelOfUri(uri));
   }
   private absolute(located: string): string { const root = this.root()?.fsPath ?? ''; return path.isAbsolute(located) ? located : path.join(root, ...located.split('/')); }
   /** The workspace folder a level lives in. */
@@ -251,10 +309,14 @@ export class ProjectStore implements vscode.Disposable {
    */
   findClip(id: string, fileOrSource: string): ClipDefinition | undefined { return findClip(this.project.clips, this.clipRef(id, fileOrSource)); }
 
-  /** The URI that opens a Clip from `level` (default: where its log is): the log's URI there, with the Clip named. */
+  /** The URI that opens a Clip from `level` (default: where its log is): its own URI, shown as the log's place, the log and the Clip. */
   clipUri(clip: ClipDefinition, level?: string): vscode.Uri {
-    const file = this.absolute(clip.sourcePath); const base = this.logUri(file, level ?? this.levelOfFile(file));
-    return base.with({ fragment: [base.fragment, `sigmixa-clip=${encodeURIComponent(clip.id)}`].filter(Boolean).join('&') });
+    const file = this.absolute(clip.sourcePath); const place = level ?? this.levelOfFile(file);
+    const shown = this.shownOf({ file, level: place, clipId: clip.id });
+    if (shown) return sourceUri(shown, { file, level: place, clipId: clip.id });
+    // Not listed there: the file URI with the Clip (and the level) named, as earlier versions opened it.
+    const base = vscode.Uri.file(file); const named = place === this.levelOfFile(file) && !path.isAbsolute(this.locate(file)) ? '' : `sigmixa-level=${encodeURIComponent(place)}`;
+    return base.with({ fragment: [named, `sigmixa-clip=${encodeURIComponent(clip.id)}`].filter(Boolean).join('&') });
   }
 
   /** After a log was copied, gives the copy the same Clips (names and ranges). Returns how many were copied. */
@@ -296,6 +358,12 @@ export class ProjectStore implements vscode.Disposable {
   placeLabel(level: string): string | undefined {
     const name = vscode.workspace.workspaceFolders?.[0]?.name; if (!name) return undefined;
     return [name, ...level.split('/').filter(Boolean)].join(' › ');
+  }
+  /** The same steps for breadcrumbs, each with the level it opens ('' = the workspace); a plain folder between groups opens nothing. */
+  placeCrumbs(level: string): { readonly label: string; readonly level?: string }[] {
+    const name = vscode.workspace.workspaceFolders?.[0]?.name; if (!name) return [];
+    const parts = level.split('/').filter(Boolean);
+    return [{ label: name, level: '' }, ...parts.map((part, index) => { const folder = parts.slice(0, index + 1).join('/'); return { label: part, level: this.levelFolders.includes(folder) ? folder : undefined }; })];
   }
   private levelUri(folder: string): vscode.Uri { return vscode.Uri.joinPath(this.levelFolderUri(folder)!, LEVEL_DIRECTORY, LEVEL_FILE); }
   private label(folder: string): string { return `${folder ? `${folder}/` : ''}${LEVEL_DIRECTORY}/${LEVEL_FILE}`; }

@@ -18,7 +18,7 @@ import { resolveClipPath } from '../clips/clipPaths';
 import { resolveViewSettings } from '../../core/project/viewSettings';
 import { reportGraphs } from '../report/reportGraphs';
 import { comparisonHtml } from './comparisonHtml';
-import { chooseReportDetail, reportCatalog, reportSeries, saveReport } from '../report/reportExporter';
+import { reportCatalog, reportSeries, saveReport } from '../report/reportExporter';
 import { REPORT_FORMAT_VERSION } from '../report/reportData';
 import { extensionVersion } from '../report/extensionVersion';
 import type { ComparisonSeriesDto, ComparisonTargetStateDto, ComparisonToExtension, ComparisonToWebview } from './comparisonProtocol';
@@ -102,7 +102,7 @@ class ComparisonSession implements vscode.Disposable {
       case 'update': {
         this.comparison = { ...this.comparison, ...message.comparison }; return;
       }
-      case 'seriesRequest': return this.sendSeries(message.requestId, message.graphId, message.signalIds, message.maxPoints);
+      case 'seriesRequest': return this.sendSeries(message.requestId, message.graphId, message.signalIds, message.maxPoints, message.joined === true);
       case 'measuredSignalsRequest': {
         const item = this.loaded.get(message.targetId); const document = item?.document;
         const pairs = this.mapSignals(message.targetId, message.signalIds);
@@ -176,7 +176,7 @@ class ComparisonSession implements vscode.Disposable {
   private documentKey(item: LoadedTarget): string { return `${this.store.levelOfUri(item.uri ?? item.filePath)}>${item.filePath}`; }
   private documentFor(item: LoadedTarget): RawLogDocument {
     const key = this.documentKey(item); let document = this.documents.get(key);
-    if (!document) { document = new RawLogDocument(vscode.Uri.file(item.filePath), sourceProject(this.store, item.uri ?? item.filePath), this.store.analysisRevision, this.owner.pluginManager.registry); this.documents.set(key, document); this.levels.set(key, item.uri ?? item.filePath); }
+    if (!document) { document = new RawLogDocument(vscode.Uri.file(item.filePath), item.filePath, sourceProject(this.store, item.uri ?? item.filePath), this.store.analysisRevision, this.owner.pluginManager.registry); this.documents.set(key, document); this.levels.set(key, item.uri ?? item.filePath); }
     return document;
   }
 
@@ -223,10 +223,9 @@ class ComparisonSession implements vscode.Disposable {
   private async exportReport(): Promise<void> {
     const ready = [...this.loaded.values()].filter((item) => item.document && item.range);
     if (!ready.length) { void vscode.window.showWarningMessage(t('Nothing has loaded yet.', 'まだ読み込みが終わっていません。')); return; }
-    const detail = await chooseReportDetail(); if (!detail || this.disposed) return;
     const included = new Set(this.comparison.graphs.flatMap((graph) => graph.signalIds)); const notices: string[] = [];
     const catalog = this.catalog(); const kept = reportCatalog(catalog.definitions, catalog.groups, included);
-    const series = ready.map((item) => { const available = new Set(catalog.availability[item.target.id] ?? []); return { targetId: item.target.id, items: reportSeries(item.document!, [...included].filter((id) => available.has(id)), item.clip ? clipRange(item.clip) : undefined, detail, notices, this.targetName(item.target)) }; });
+    const series = ready.map((item) => { const available = new Set(catalog.availability[item.target.id] ?? []); return { targetId: item.target.id, items: reportSeries(item.document!, [...included].filter((id) => available.has(id)), item.clip ? clipRange(item.clip) : undefined) }; });
     const targets = this.targetStates().filter((target) => target.status === 'ready').map((target) => ({ ...target, filePath: target.fileName }));
     const title = this.title();
     await saveReport(this.owner.uri, {
@@ -249,13 +248,13 @@ class ComparisonSession implements vscode.Disposable {
     return signalIds.filter((id) => available.has(id)).map((id) => [id, id]);
   }
 
-  private sendSeries(requestId: number, graphId: string, signalIds: readonly string[], requestedPoints?: number): void {
+  private sendSeries(requestId: number, graphId: string, signalIds: readonly string[], requestedPoints?: number, joined = false): void {
     const ready = [...this.loaded.values()].filter((item) => item.document && item.range);
-    // Trajectories ask for more points: their axes come from one Frame, so the same timestamps survive downsampling.
+    // Trajectories ask for more points, and for their axes to be thinned together (`joined`), so no point loses an axis.
     const maxPoints = requestedPoints ?? Math.max(2, Math.min(4000, Math.floor(100_000 / Math.max(1, ready.length * signalIds.length))));
     const seriesByTarget = ready.map((item) => {
       const pairs = this.mapSignals(item.target.id, signalIds);
-      const series = item.document!.signalSeries([...new Set(pairs.map(([, id]) => id))], item.clip ? clipRange(item.clip) : undefined, maxPoints).series;
+      const series = item.document!.signalSeries([...new Set(pairs.map(([, id]) => id))], item.clip ? clipRange(item.clip) : undefined, maxPoints, joined).series;
       return { targetId: item.target.id, series: pairs.flatMap(([signalId, mapped]): ComparisonSeriesDto[] => { const match = series.find((entry) => entry.definition.id === mapped); return match ? [{ signalId, series: { ...match, events: match.events ?? [] } }] : []; }) };
     });
     this.post({ type: 'series', requestId, graphId, seriesByTarget });

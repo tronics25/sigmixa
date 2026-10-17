@@ -1,5 +1,17 @@
 # Change Log
 
+## 2.1.0 - 2026-10-17
+
+- Graphs and trajectories of long logs miss fewer short peaks and dips when they are drawn with fewer points: each stretch keeps its first, lowest, highest and last sample (before, samples were taken at even spacing).
+- HTML reports hold every sample and every table row. The data is packed without loss, which makes the file smaller (how much depends on the data), and rebuilt exactly when the report opens. The choice between Standard (thinned to 20,000 points and rows) and All samples is no longer asked.
+- HTML report: the table now holds every Signal the report shows, including the Signals of the graphs and trajectories and those from external CSV files, not only the ones chosen in the Table. Its columns follow the order of the Table, and a Signal the log has no data of is marked instead of looking like data.
+- Fixed the + and Open CAN Log buttons at the top of the Analysis Groups pane acting inside the selected group even when the pane was not in use. They now always act on the top level of the workspace; to add a group or open a log inside a group, use the buttons on the group's row or its right-click menu. Likewise, the Frame Definitions pane's + and Export buttons no longer depend on the selected Frame.
+- Frame definitions: ⌘Z / Ctrl+Z undoes edits, such as a deleted Signal, and ⇧⌘Z / Ctrl+Y redoes them. Inside a text box, ⌘Z undoes typing as usual.
+- ⌘F / Ctrl+F moves to the search box of a log or comparison; pages without one (Frame definitions, Plugin settings) open VS Code's find bar.
+- Frame Definitions and Plugins panes: select several items, press Delete (⌘⌫ on macOS) to delete Frames or unregister Plugins, and F2 to rename a Frame. Opening an item from these panes keeps the focus in the pane, as in the Explorer.
+- Breadcrumbs: every step above the current page is a link. A group's or a Frame's page links to the Frame definitions of the workspace and of each group above; a Clip links to its whole log. The workspace now has its own Frame definitions page, like a group. The log page no longer repeats the location under VS Code's own breadcrumb.
+- VS Code's breadcrumb shows a Clip as its place, log and Clip (brake-analysis › road-test.asc › Stop 1), and a log added to a group under that group, instead of the full path from the root of the disk.
+
 ## 2.0.1 - 2026-10-12
 
 - Fixed Signal values of two CAN IDs being mixed: a Frame that a group overrides and the definition it overrides must stay on the same CAN ID, and saving a change that separates them is now refused with the reason.

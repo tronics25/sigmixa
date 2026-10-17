@@ -14,7 +14,7 @@ export class FrameDefinitionsProvider implements vscode.TreeDataProvider<FrameDe
     // Layers: definitions overlay level by level (common → groups). Orange, like the other kinds' colours.
     item.iconPath = new vscode.ThemeIcon('layers', new vscode.ThemeColor('charts.orange'));
     item.contextValue = frame.origin?.type === 'plugin' ? 'sigmixa.pluginFrame' : 'sigmixa.manualFrame';
-    item.command = { command: 'sigmixa.openFrame', title: 'Open frame definition', arguments: [frame.id] };
+    item.command = { command: 'sigmixa.openFrame', title: 'Open frame definition', arguments: [frame.id, { preserveFocus: true }] };
     return item;
   }
 }
@@ -30,7 +30,7 @@ export class PluginsProvider implements vscode.TreeDataProvider<PluginRegistrati
     item.description = `${plugin.version}${plugin.enabled ? '' : ' (disabled)'}`;
     item.iconPath = new vscode.ThemeIcon(plugin.enabled ? 'extensions' : 'circle-slash');
     item.contextValue = 'sigmixa.plugin';
-    item.command = { command: 'sigmixa.openPlugin', title: 'Open plugin configuration', arguments: [plugin.id] };
+    item.command = { command: 'sigmixa.openPlugin', title: 'Open plugin configuration', arguments: [plugin.id, { preserveFocus: true }] };
     return item;
   }
 }

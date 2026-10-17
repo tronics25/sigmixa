@@ -1,8 +1,10 @@
 // Minimal stand-in for the `vscode` module, enough for storage tests that run outside VS Code (file system, Uri, messages).
 const fs = require('fs'); const fsp = require('fs/promises'); const path = require('path');
-class Uri { constructor(fsPath, fragment = '') { this.fsPath = fsPath; this.path = fsPath; this.fragment = fragment; this.scheme = 'file'; }
+class Uri { constructor(fsPath, fragment = '', scheme = 'file', query = '') { this.fsPath = fsPath; this.path = fsPath; this.fragment = fragment; this.scheme = scheme; this.query = query; }
   static file(p) { return new Uri(path.resolve(p)); } static joinPath(base, ...parts) { return new Uri(path.join(base.fsPath, ...parts)); }
-  with(change) { return new Uri(this.fsPath, change.fragment ?? this.fragment); } toString() { return 'file://' + encodeURI(this.fsPath) + (this.fragment ? '#' + this.fragment : ''); } }
+  static from(parts) { return new Uri(parts.path, parts.fragment ?? '', parts.scheme, parts.query ?? ''); }
+  with(change) { return new Uri(change.path ?? this.fsPath, change.fragment ?? this.fragment, this.scheme, change.query ?? this.query); }
+  toString() { return this.scheme + '://' + encodeURI(this.fsPath) + (this.query ? '?' + this.query : '') + (this.fragment ? '#' + this.fragment : ''); } }
 class FileSystemError extends Error { constructor(code, message) { super(message); this.code = code; } }
 const wrap = async (fn) => { try { return await fn(); } catch (error) { if (error.code === 'ENOENT') throw new FileSystemError('FileNotFound', error.message); throw error; } };
 const messages = [];

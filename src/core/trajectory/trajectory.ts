@@ -1,5 +1,5 @@
 import type { SignalSample } from '../signal/signal';
-import { downsampleEven } from '../timeline/timeline';
+import { downsampleExtremes } from '../timeline/timeline';
 
 export interface TrajectoryPoint {
   readonly timestamp: number; readonly x: number; readonly y: number; readonly z?: number;
@@ -38,7 +38,8 @@ export function buildTrajectoryPoints(
     const values = alignedSamples.map((sample) => sample.value);
     points.push({ timestamp: target, x: invert.x ? -values[0] : values[0], y: invert.y ? -values[1] : values[1], ...(z ? { z: invert.z ? -values[2] : values[2] } : {}), ...(alignedSamples.some((sample) => sample.carried) ? { carried: true } : {}) });
   }
-  return downsampleEven(points, limit);
+  // Thinned with each axis's extremes kept, so the turning points of the path stay where they were.
+  return downsampleExtremes(points, limit, (point) => [point.x, point.y, point.z ?? 0]);
 }
 
 export function trailAt(points: readonly TrajectoryPoint[], current: number, trail: TrajectoryTrail): readonly TrajectoryPoint[] {

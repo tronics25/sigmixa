@@ -107,6 +107,6 @@ test('million-sample synchronized Trajectory remains bounded and retains full-pe
   const y = x.map((sample) => ({ timestamp: sample.timestamp, value: Math.cos(sample.timestamp) }));
   const started = performance.now();
   const points = buildTrajectoryPoints(x, y, undefined, { x: false, y: false, z: false }, 4000);
-  assert.equal(points.length, 4000); assert.equal(points[0].timestamp, 0); assert.equal(points.at(-1)!.timestamp, 999.999);
+  assert.ok(points.length <= 4000 && points.length >= 2000, String(points.length)); assert.equal(points[0].timestamp, 0); assert.equal(points.at(-1)!.timestamp, 999.999);
   assert.ok(performance.now() - started < 2000);
 });

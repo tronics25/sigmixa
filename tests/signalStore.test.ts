@@ -124,7 +124,7 @@ test('Signal series identifies real gaps before display downsampling', () => {
   for (let index = 0; index < 100; index++) store.appendFrame(`a:${index}`, index * 0.01, [decoded(speed, index * 0.01, index)]);
   for (let index = 0; index < 100; index++) store.appendFrame(`b:${index}`, 2 + index * 0.01, [decoded(speed, 2 + index * 0.01, index)]);
   const [series] = store.seriesSlice([speed.id], undefined, 12);
-  assert.equal(series.samples.length, 12);
+  assert.ok(series.samples.length <= 12);
   assert.deepEqual(series.gaps, [{ startTimestamp: 0.99, endTimestamp: 2 }]);
 });
 

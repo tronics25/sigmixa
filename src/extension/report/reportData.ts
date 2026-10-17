@@ -16,6 +16,8 @@ export interface ReportTable {
   /** Rows whose label is not the one `labels` has for that value (a Plugin may label one value differently over time): `rowLabels[signalId][row]`. */
   readonly rowLabels?: Readonly<Record<string, Readonly<Record<string, string>>>>;
   readonly totalRows: number;
+  /** Columns without a single value: Signals that are selected or drawn, but that this log has no data of. */
+  readonly emptySignalIds?: readonly string[];
 }
 
 /**

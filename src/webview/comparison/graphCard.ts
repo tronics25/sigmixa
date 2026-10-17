@@ -79,7 +79,7 @@ export interface GraphHost {
   refreshMeasured(): void;
   hoverTime(): number | undefined;
   setHoverTime(time: number | undefined): void;
-  requestSeries(graphId: string, signalIds: readonly string[], maxPoints?: number): number;
+  requestSeries(graphId: string, signalIds: readonly string[], maxPoints?: number, joined?: boolean): number;
   changed(graph: ComparisonCard): void;
   colorsChanged(): void;
   select(graph: ComparisonCard, reveal: boolean): void;

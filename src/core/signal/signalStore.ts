@@ -1,6 +1,6 @@
 import type { SignalDefinition, SignalEvent, SignalSample, SignalSeries } from './signal';
 import { sampleIndex, signalCellChange, type SignalCellChange } from './tableChanges';
-import { downsampleEven, nearestSample, nearestMeasuredSample, samplesInRange, samplesInRangeWithContext, type TimeRange } from '../timeline/timeline';
+import { downsampleEven, downsampleExtremes, nearestSample, nearestMeasuredSample, samplesInRange, samplesInRangeWithContext, type TimeRange } from '../timeline/timeline';
 
 export interface SignalEventRow {
   readonly id: string;
@@ -224,18 +224,28 @@ export class InMemorySignalStore {
    * `bounds` is a Clip's range. The nearest sample outside each edge of the Clip is still needed to draw the lines
    * into and out of it: both are returned with their own time and value, marked `carried`, and never counted as Clip data.
    */
-  seriesSlice(selectedIds: readonly string[], range: TimeRange | undefined, maxPoints: number, bounds?: TimeRange): readonly SignalSeriesSlice[] {
+  /**
+   * `joined`: the Signals are put together by their times (the axes of a trajectory), so they are thinned together: a time
+   * kept for one is kept for all, and a point never loses an axis.
+   */
+  seriesSlice(selectedIds: readonly string[], range: TimeRange | undefined, maxPoints: number, bounds?: TimeRange, joined = false): readonly SignalSeriesSlice[] {
     const result: SignalSeriesSlice[] = [];
-    for (const id of selectedIds) {
+    const prepared = selectedIds.flatMap((id) => {
       const target = this.series.get(id);
-      if (!target) continue;
+      if (!target) return [];
       this.ensureSeriesSorted(target);
       const source = bounds ? withEdgeSamples(target.samples, bounds) : target.samples;
-      const visible = samplesInRange(source, range);
       const rendered = samplesInRangeWithContext(source, range);
+      return [{ target, visible: samplesInRange(source, range), rendered, breaks: lineBreakSamples(rendered) }];
+    });
+    // Thinned for drawing with peaks and dips kept, and both ends of every break in the line (a gap in reception, a sample
+    // that is not a usable value), so the line on each side keeps its ends.
+    const thin = (item: typeof prepared[number], limit: number) => downsampleExtremes(item.rendered, limit, (sample) => [sample.value], (sample) => item.breaks.has(sample));
+    const times = joined ? new Set(prepared.flatMap((item) => thin(item, Math.floor(maxPoints / Math.max(1, prepared.length))).map((sample) => sample.timestamp))) : undefined;
+    for (const { target, visible, rendered, breaks } of prepared) {
       result.push({
         definition: target.definition,
-        samples: downsampleEven(rendered, maxPoints),
+        samples: times ? (rendered.length <= maxPoints / Math.max(1, prepared.length) ? rendered : rendered.filter((sample) => times.has(sample.timestamp) || breaks.has(sample))) : thin({ target, visible, rendered, breaks }, maxPoints),
         events: range ? target.events.filter((event) => (event.endTimestamp ?? event.timestamp) >= range.start && event.timestamp <= range.end) : target.events,
         totalSamplesInRange: visible.length - (visible[0]?.carried ? 1 : 0),
         globalMinimum: Number.isFinite(target.minimum) ? target.minimum : undefined,
@@ -311,6 +321,21 @@ function signalCadenceThreshold(samples: readonly SignalSample[]): number {
   deltas.sort((left, right) => left - right);
   const median = deltas.length ? deltas[Math.floor(deltas.length / 2)] : undefined;
   return median === undefined ? Infinity : median * 4;
+}
+
+/**
+ * The samples on either side of a break in the line: a gap in reception (longer than the Signal's usual interval), or a
+ * sample that is not a usable value. Thinning keeps them, so the line on each side of a break keeps its ends.
+ */
+export function lineBreakSamples(samples: readonly SignalSample[]): ReadonlySet<SignalSample> {
+  const kept = new Set<SignalSample>(); if (samples.length < 2) return kept;
+  const threshold = signalCadenceThreshold(samples);
+  for (let index = 1; index < samples.length; index++) {
+    const previous = samples[index - 1]; const current = samples[index];
+    if (isUsableSample(previous) && isUsableSample(current) && current.timestamp - previous.timestamp <= threshold) continue;
+    kept.add(previous); kept.add(current);
+  }
+  return kept;
 }
 
 function detectSignalGaps(samples: readonly SignalSample[]): readonly SignalGap[] {

@@ -2,7 +2,7 @@
   "name": "sigmixa",
   "displayName": "SigMixa — CAN Log Analyzer",
   "description": "%sigmixa.description%",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "publisher": "tronics25",
   "license": "MIT",
   "private": true,
@@ -76,6 +76,9 @@
           },
           {
             "filenamePattern": "*.blf"
+          },
+          {
+            "filenamePattern": "sigmixa:/**"
           }
         ],
         "priority": "default"
@@ -114,7 +117,19 @@
         "icon": "$(folder-opened)"
       },
       {
+        "command": "sigmixa.openLogInWorkspace",
+        "title": "%sigmixa.command.openLog%",
+        "category": "SigMixa",
+        "icon": "$(folder-opened)"
+      },
+      {
         "command": "sigmixa.addFrame",
+        "title": "%sigmixa.command.addFrame%",
+        "category": "SigMixa",
+        "icon": "$(add)"
+      },
+      {
+        "command": "sigmixa.addFrameFromTitle",
         "title": "%sigmixa.command.addFrame%",
         "category": "SigMixa",
         "icon": "$(add)"
@@ -158,6 +173,15 @@
         }
       },
       {
+        "command": "sigmixa.exportAllDbc",
+        "title": "%sigmixa.command.exportDbc%",
+        "category": "SigMixa",
+        "icon": {
+          "light": "media/icons/export-light.svg",
+          "dark": "media/icons/export-dark.svg"
+        }
+      },
+      {
         "command": "sigmixa.openFrame",
         "title": "%sigmixa.command.openFrame%",
         "category": "SigMixa"
@@ -167,6 +191,16 @@
         "title": "%sigmixa.command.deleteFrame%",
         "category": "SigMixa",
         "icon": "$(trash)"
+      },
+      {
+        "command": "sigmixa.renameFrame",
+        "title": "%sigmixa.command.renameFrame%",
+        "category": "SigMixa"
+      },
+      {
+        "command": "sigmixa.unregisterPlugins",
+        "title": "%sigmixa.command.unregisterPlugins%",
+        "category": "SigMixa"
       },
       {
         "command": "sigmixa.addPlugin",
@@ -187,6 +221,12 @@
       },
       {
         "command": "sigmixa.addGroup",
+        "title": "%sigmixa.command.addGroup%",
+        "category": "SigMixa",
+        "icon": "$(add)"
+      },
+      {
+        "command": "sigmixa.addGroupInWorkspace",
         "title": "%sigmixa.command.addGroup%",
         "category": "SigMixa",
         "icon": "$(add)"
@@ -281,12 +321,12 @@
           "group": "navigation"
         },
         {
-          "command": "sigmixa.openLog",
+          "command": "sigmixa.openLogInWorkspace",
           "when": "view == sigmixa.analysisGroups",
           "group": "navigation"
         },
         {
-          "command": "sigmixa.addFrame",
+          "command": "sigmixa.addFrameFromTitle",
           "when": "view == sigmixa.frames",
           "group": "navigation"
         },
@@ -296,7 +336,7 @@
           "group": "navigation@2"
         },
         {
-          "command": "sigmixa.exportDbc",
+          "command": "sigmixa.exportAllDbc",
           "when": "view == sigmixa.frames",
           "group": "navigation@3"
         },
@@ -306,7 +346,7 @@
           "group": "navigation"
         },
         {
-          "command": "sigmixa.addGroup",
+          "command": "sigmixa.addGroupInWorkspace",
           "when": "view == sigmixa.analysisGroups",
           "group": "navigation@1"
         }
@@ -426,6 +466,21 @@
           "command": "sigmixa.pasteLogs",
           "when": "view == sigmixa.analysisGroups && !listMultiSelection && viewItem =~ /sigmixa\\.(analysisGroup|folder)/",
           "group": "5_transfer"
+        },
+        {
+          "command": "sigmixa.renameFrame",
+          "when": "view == sigmixa.frames && viewItem == sigmixa.manualFrame && !listMultiSelection",
+          "group": "2_edit@1"
+        },
+        {
+          "command": "sigmixa.deleteFrame",
+          "when": "view == sigmixa.frames && viewItem == sigmixa.manualFrame",
+          "group": "2_edit@2"
+        },
+        {
+          "command": "sigmixa.unregisterPlugins",
+          "when": "view == sigmixa.plugins && viewItem == sigmixa.plugin",
+          "group": "2_edit@1"
         }
       ],
       "explorer/context": [
@@ -495,6 +550,30 @@
         {
           "command": "sigmixa.editClipRange",
           "when": "false"
+        },
+        {
+          "command": "sigmixa.openLogInWorkspace",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.addGroupInWorkspace",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.addFrameFromTitle",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.exportAllDbc",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.renameFrame",
+          "when": "false"
+        },
+        {
+          "command": "sigmixa.unregisterPlugins",
+          "when": "false"
         }
       ]
     },
@@ -515,6 +594,23 @@
         "key": "ctrl+v",
         "mac": "cmd+v",
         "when": "focusedView == sigmixa.analysisGroups"
+      },
+      {
+        "command": "sigmixa.renameFrame",
+        "key": "f2",
+        "when": "focusedView == sigmixa.frames"
+      },
+      {
+        "command": "sigmixa.deleteFrame",
+        "key": "delete",
+        "mac": "cmd+backspace",
+        "when": "focusedView == sigmixa.frames"
+      },
+      {
+        "command": "sigmixa.unregisterPlugins",
+        "key": "delete",
+        "mac": "cmd+backspace",
+        "when": "focusedView == sigmixa.plugins"
       }
     ]
   },

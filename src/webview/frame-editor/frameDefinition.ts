@@ -28,6 +28,7 @@ import { isCellBlock, matchChoice, parseCopiedCells } from '../../core/manual/ta
 import { definitionControlKey, definitionSignalColor, signalBitEndpoints } from './definitionInteraction';
 import { createCurvePreview, filterStepPreview, lookupPreviewPoints } from './definitionPreview';
 import { dependencyDiagram } from './dependencyDiagram';
+import { BREADCRUMB_STYLES, renderCrumbs } from '../shared/breadcrumb';
 
 declare function acquireVsCodeApi(): { postMessage(message: FrameEditorToExtension): void; getState(): unknown; setState(value: unknown): void };
 const vscode = acquireVsCodeApi();
@@ -42,11 +43,14 @@ const columnHover = bindColumnHover(app, (element) => {
   return head instanceof HTMLElement ? [head] : [];
 });
 let frame: ManualFrameDefinition | undefined;
-let scopeName: string | undefined;
+let crumbs: readonly { readonly label: string; readonly level?: string }[] = []; let listLevel = '';
 let bitLayoutExpanded = false;
 let serverDiagnostics: readonly Diagnostic[] = [];
 let editRevision = 0;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
+// Undo history (⌘Z / ⇧⌘Z): each edit is saved at once, so undoing puts the earlier definition back and saves that.
+const undoStack: ManualFrameDefinition[] = []; const redoStack: ManualFrameDefinition[] = [];
+let historyBase: ManualFrameDefinition | undefined; let lastEdit: { source: Element | null; at: number } | undefined;
 let multiplexerPreview = 0;
 let hoveredSignalId: string | undefined;
 let hoveredByteSignalIds: readonly string[] = [];
@@ -108,7 +112,7 @@ function derivedSummary(signal: ManualDerivedSignalDefinition): string {
   return `${signal.operation.input} · ${signal.operation.filter} · ${signal.operation.timeSeconds}s`;
 }
 
-app.innerHTML = `<style>${DESIGN_TOKENS}
+app.innerHTML = `<style>${DESIGN_TOKENS}${BREADCRUMB_STYLES}
 *{box-sizing:border-box}body{margin:0;color:var(--vscode-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family)}#app{padding:var(--sm-space-lg);min-width:720px}h1{font-size:var(--sm-font-page-title);font-weight:var(--sm-weight-semibold);margin:0 0 var(--sm-space-lg)}h2{font-size:var(--sm-font-section);font-weight:var(--sm-weight-semibold);margin:var(--sm-space-xl) 0 var(--sm-space-md)}.toolbar,.header-fields{display:flex;align-items:flex-end;gap:var(--sm-space-md);flex-wrap:wrap}.field{display:flex;flex-direction:column;gap:var(--sm-space-xs)}.field>label,.field>span:first-child{font-size:var(--sm-font-caption);color:var(--vscode-descriptionForeground)}
 input,select,button{min-width:0}button{cursor:pointer;background:var(--vscode-button-secondaryBackground)}button:hover{background:var(--vscode-button-secondaryHoverBackground)}.spacer{flex:1}.muted{color:var(--vscode-descriptionForeground);font-size:var(--sm-font-small)}.error{color:var(--vscode-errorForeground);font-size:var(--sm-font-small)}.success{color:var(--vscode-testing-iconPassed);font-size:var(--sm-font-small)}
 .check-field{display:flex;align-items:center;gap:var(--sm-space-sm);height:29px}.check-field input{margin:0;width:auto}.bit-heading{display:flex;align-items:center;gap:var(--sm-space-md);margin-top:var(--sm-space-xl)}.bit-heading h2{margin:0}.mux-preview{display:flex;align-items:center;gap:var(--sm-space-xs)}.mux-preview .icon{width:25px;height:25px}.mux-value{min-width:72px;text-align:center;font:var(--sm-font-small) var(--vscode-editor-font-family)}
@@ -330,12 +334,33 @@ function fitRenderedColumns(): void {
 const persist = () => { vscode.setState({ widths }); vscode.postMessage({ type: 'saveViewState', widths }); };
 const signalColumns = () => frame?.multiplexing ? columnDefinitions : columnDefinitions.filter((column) => column.id !== 'activation');
 
-function changed(): void {
+function changed(record = true): void {
+  if (record) remember();
   editRevision++;
   serverDiagnostics = [];
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(saveFrame, 150);
 }
+function remember(): void {
+  // Typing in one field without a pause is one step, as in a text editor.
+  const source = document.activeElement; const now = performance.now();
+  const typing = source instanceof HTMLInputElement || source instanceof HTMLTextAreaElement;
+  if (historyBase && !(typing && lastEdit?.source === source && now - lastEdit.at < 1000)) { undoStack.push(historyBase); if (undoStack.length > 200) undoStack.shift(); }
+  redoStack.length = 0; historyBase = frame; lastEdit = { source, at: now };
+}
+function resetHistory(): void { undoStack.length = 0; redoStack.length = 0; historyBase = frame; lastEdit = undefined; }
+function stepHistory(redo: boolean): void {
+  const target = (redo ? redoStack : undoStack).pop(); if (!target || !frame) return;
+  (redo ? undoStack : redoStack).push(frame); frame = target; historyBase = frame; lastEdit = undefined;
+  editingSignalId = undefined; changed(false); refreshDependencyDiagram(); render();
+}
+window.addEventListener('keydown', (event) => {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+  const key = event.key.toLowerCase(); const redo = (key === 'z' && event.shiftKey) || (key === 'y' && !event.shiftKey && !event.metaKey); if (key !== 'z' && !redo) return;
+  // Inside a text box, ⌘Z is the box's own text undo (VS Code runs it), as in any app; elsewhere it undoes edits of the definition.
+  const target = event.target; if ((target instanceof HTMLInputElement && !['checkbox', 'radio', 'button'].includes(target.type)) || target instanceof HTMLTextAreaElement) return;
+  event.preventDefault(); stepHistory(redo);
+});
 function updateFrame(patch: Partial<ManualFrameDefinition>): void { if (frame) { frame = { ...frame, ...patch }; changed(); } }
 function updateSignal(id: string, transform: (signal: ManualSignalDefinition) => ManualSignalDefinition): void {
   if (frame) { frame = { ...frame, signals: frame.signals.map((signal) => signal.id === id ? transform(signal) : signal) }; changed(); }
@@ -378,7 +403,9 @@ function renderNow(viewport: { windowX: number; windowY: number }): void {
   bitOwners.clear();
   hoveredSignalId = undefined; hoveredByteSignalIds = [];
   content.replaceChildren();
-  const title = document.createElement('h1'); title.textContent = `${scopeName ?? t('Workspace', 'ワークスペース')} › ${t('Frame Definition', 'フレーム定義')} › ${formatCanId(frame.canId, frame.extended)} ${frame.name}`;
+  const title = document.createElement('h1'); const openList = (level: string) => () => vscode.postMessage({ type: 'openList', level });
+  // Every step above the Frame links to a Frame definitions page: the workspace's, a group's, or the list this Frame is in.
+  renderCrumbs(title, [...crumbs.map((crumb) => ({ label: crumb.label, open: crumb.level === undefined ? undefined : openList(crumb.level) })), { label: t('Frame Definitions', 'フレーム定義'), open: openList(listLevel) }, { label: `${formatCanId(frame.canId, frame.extended)} ${frame.name}` }]);
   const fields = document.createElement('div'); fields.className = 'header-fields';
   const pluginOwned = frame.origin?.type === 'plugin';
   fields.append(
@@ -969,22 +996,22 @@ function sortSignalsForPageEntry(): void {
   const signals = orderSignalsByDataPosition(frame.signals);
   if (signals.every((signal, index) => signal.id === frame?.signals[index]?.id)) { render(); return; }
   frame = { ...frame, signals };
-  changed();
+  changed(false); historyBase = frame;
   render();
 }
 
 window.addEventListener('message', (event: MessageEvent<FrameEditorToWebview>) => {
   const message = event.data;
   if (message.type === 'init') {
-    scopeName = message.scopeName;
+    crumbs = message.crumbs ?? []; listLevel = message.listLevel ?? '';
     expandedDependencyId = undefined;
     valueLabelDrafts.clear(); expandedValueLabelsId = undefined;
-    const initial = structuredClone(message.frame); frame = { ...initial, signals: orderSignalsByDataPosition(initial.signals) };
+    const initial = structuredClone(message.frame); frame = { ...initial, signals: orderSignalsByDataPosition(initial.signals) }; resetHistory();
     widths = initialWidths(message.widths ?? saved.widths);
     fitTextColumnsOnEntry();
     editingSignalId = undefined; selectedSignalId = undefined; expandedDerivedId = undefined; serverDiagnostics = []; render();
   } else if (message.type === 'sortSignals') sortSignalsForPageEntry();
-  else if (message.type === 'saveResult') { if (message.revision < editRevision) return; serverDiagnostics = message.diagnostics; if (message.saved && message.frame) frame = structuredClone(message.frame); refreshValidation(); }
+  else if (message.type === 'saveResult') { if (message.revision < editRevision) return; serverDiagnostics = message.diagnostics; if (message.saved && message.frame) { frame = structuredClone(message.frame); historyBase = frame; } refreshValidation(); }
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {

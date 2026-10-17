@@ -14,17 +14,19 @@ export class PluginEditor implements vscode.Disposable {
     this.subscription = store.onDidChange(() => { for (const [id, panel] of this.panels) void this.sendModel(id, panel); });
   }
 
-  open(id: string): void {
+  open(id: string, preserveFocus = false): void {
     const registration = this.store.current.plugins.find((item) => item.id === id);
     if (!registration) { void vscode.window.showErrorMessage('Plugin registration was not found.'); return; }
     const existing = this.panels.get(id);
-    if (existing) { existing.reveal(); void this.sendModel(id, existing); return; }
-    const panel = vscode.window.createWebviewPanel('sigmixa.pluginConfiguration', `Plugin: ${id}`, vscode.ViewColumn.One, { enableScripts: true, retainContextWhenHidden: true });
+    if (existing) { existing.reveal(undefined, preserveFocus); void this.sendModel(id, existing); return; }
+    const panel = vscode.window.createWebviewPanel('sigmixa.pluginConfiguration', `Plugin: ${id}`, { viewColumn: vscode.ViewColumn.One, preserveFocus }, { enableScripts: true, retainContextWhenHidden: true, enableFindWidget: true });
     panel.webview.html = pluginEditorHtml(panel.webview, this.extensionUri, id, vscode.env.language);
     this.panels.set(id, panel);
     panel.onDidDispose(() => this.panels.delete(id));
     panel.webview.onDidReceiveMessage((message: PluginEditorToExtension) => void this.receive(id, panel, message));
   }
+
+  close(id: string): void { this.panels.get(id)?.dispose(); }
 
   dispose(): void { this.subscription.dispose(); for (const panel of this.panels.values()) panel.dispose(); this.panels.clear(); }
 

@@ -73,11 +73,12 @@ export class RawLogDocument implements vscode.CustomDocument {
   private parseTask: Promise<AscParseSummary | BlfParseSummary>;
   private readErrorMessage?: string;
 
-  constructor(readonly uri: vscode.Uri, project: SigMixaProject, revision: number, private readonly pluginRegistry: PluginRegistry, readonly scope?: { readonly start: number; readonly end: number }) {
+  /** `filePath`: the log file itself (`uri` names what is opened: the log from some place, or one of its Clips). */
+  constructor(readonly uri: vscode.Uri, readonly filePath: string, project: SigMixaProject, revision: number, private readonly pluginRegistry: PluginRegistry, readonly scope?: { readonly start: number; readonly end: number }) {
     this.currentProject = project;
     this.analyzedProject = project;
     this.analysisRevision = revision;
-    this.fileName = path.basename(uri.fsPath);
+    this.fileName = path.basename(filePath);
     this.pluginHost = new PluginHost(pluginRegistry, [], [], []);
     this.setProject(project, revision);
     this.analysisDefinitions = definitionMap(project.frames);
@@ -85,8 +86,8 @@ export class RawLogDocument implements vscode.CustomDocument {
     this.pluginHost = new PluginHost(pluginRegistry, project.frames, project.plugins, project.pluginBindings);
     this.registerSignalDefinitions(this.signalStore, project.frames);
     const sourceId = uri.toString();
-    const parseFile = path.extname(uri.fsPath).toLowerCase() === '.blf' ? parseBlfFile : parseAscFile;
-    this.parseTask = parseFile(uri.fsPath, {
+    const parseFile = path.extname(filePath).toLowerCase() === '.blf' ? parseBlfFile : parseAscFile;
+    this.parseTask = parseFile(filePath, {
       sourceId,
       signal: this.abortController.signal,
       onFrames: (frames) => {
@@ -114,10 +115,10 @@ export class RawLogDocument implements vscode.CustomDocument {
       this.parsing = false;
       const diagnostic: Diagnostic = {
         id: `${sourceId}:fatal`, source: 'parser', code: 'LOG_READ_FAILED', severity: 'error',
-        message: describeLogReadError(error, uri.fsPath), location: { sourceId },
+        message: describeLogReadError(error, filePath), location: { sourceId },
       };
       this.readErrorMessage = diagnostic.message;
-      notifyLogReadError(error, uri.fsPath);
+      notifyLogReadError(error, filePath);
       this.addSourceDiagnostics([diagnostic]); this.publishSourceDiagnostics(true);
       const summary = { bytesRead: 0, totalBytes: 0, linesRead: 0, framesParsed: this.store.size, diagnostics: this.sourceDiagnostics.total, cancelled: false };
       this.updates.fire({ type: 'complete', summary });
@@ -315,14 +316,15 @@ export class RawLogDocument implements vscode.CustomDocument {
   reportSeries(selectedIds: readonly string[], range: { start: number; end: number } | undefined, maxPoints: number) { return this.signalStore.seriesSlice(selectedIds, intersectRange(range, this.scope), Math.max(2, Math.floor(maxPoints)), this.scope); }
   /** For HTML reports: table rows evenly thinned to `maxRows`, plus how many rows there are in total. */
   reportTable(selectedIds: readonly string[], maxRows: number) { const total = this.signalStore.tablePage(selectedIds, 0, 1, this.scope).total; return { total, rows: this.signalStore.tableSample(selectedIds, Math.max(1, Math.floor(maxRows)), this.scope) }; }
-  signalSeries(selectedIds: readonly string[], range: { start: number; end: number } | undefined, maxPoints = 4000) {
+  /** `joined`: the axes of a trajectory, thinned together (see `seriesSlice`). */
+  signalSeries(selectedIds: readonly string[], range: { start: number; end: number } | undefined, maxPoints = 4000, joined = false) {
     const boundedMaxPoints = Math.max(2, Math.min(10_000, Math.floor(maxPoints)));
     // The time axis also covers the whole Trace range (first to last frame), so the Trace position can always be drawn at its true time.
     const extent = this.signalStore.fullRange(selectedIds); const log = this.store.timeRange;
     const fullRange = intersectRange(extent && log ? { start: Math.min(extent.start, log.start), end: Math.max(extent.end, log.end) } : extent, this.scope);
     const requestedRange = intersectRange(range, this.scope);
     if (range && this.scope && !requestedRange) return { range: fullRange, series: [] };
-    return { range: fullRange, series: this.signalStore.seriesSlice(selectedIds, requestedRange, boundedMaxPoints, this.scope) };
+    return { range: fullRange, series: this.signalStore.seriesSlice(selectedIds, requestedRange, boundedMaxPoints, this.scope, joined) };
   }
   nearestSignals(selectedIds: readonly string[], timestamp: number, range = this.scope) { return this.signalStore.nearest(selectedIds, timestamp, range); }
 
@@ -527,7 +529,7 @@ export class RawLogDocument implements vscode.CustomDocument {
   private async appendExternal(store: InMemorySignalStore, project: SigMixaProject): Promise<void> {
     const workspaceRoot = vscode.workspace.getWorkspaceFolder(this.uri)?.uri.fsPath
       ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-      ?? path.dirname(this.uri.fsPath);
+      ?? path.dirname(this.filePath);
     for (const source of project.externalCsvSources) {
       const result = await loadExternalCsv(source, workspaceRoot);
       for (const series of result.series) store.appendSeries(series.definition, series.samples);
