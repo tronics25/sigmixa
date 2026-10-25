@@ -36,6 +36,8 @@ export class SignalSelector {
   private measured: ReadonlySet<string> | undefined;
   private unmeasuredOption = false;
   private showUnmeasured = false;
+  /** False until the first Signal list arrives, and again while a replacement is awaited. */
+  private catalogKnown = false;
   private readonly searchCollapsed = new Set<string>();
   private readonly expandedByMode = { frame: new Set<string>(), unit: new Set<string>() };
   private get expanded(): Set<string> { return this.expandedByMode[this.grouping]; }
@@ -77,6 +79,7 @@ export class SignalSelector {
    * `availability.unmeasuredOption` adds the switch that lists the others too (view settings shared in a group).
    */
   setCatalog(definitions: readonly SignalDefinition[], groups: readonly SignalGroupDto[], availability?: { readonly measuredIds?: readonly string[]; readonly unmeasuredOption?: boolean }): void {
+    this.catalogKnown = true;
     this.measured = availability?.measuredIds ? new Set(availability.measuredIds) : undefined;
     this.unmeasuredOption = availability?.unmeasuredOption === true;
     this.definitions = new Map(definitions.map((definition) => [definition.id, definition]));
@@ -230,6 +233,16 @@ export class SignalSelector {
     this.options.onHighlightChange?.(id);
   }
 
+  /**
+   * The chosen Signals this list has, which are the ones shown checked. A saved choice may also hold Signals the list lacks
+   * (deleted, renamed, or from an external CSV no longer loaded); they stay saved, so they come back if the Signal does, but
+   * count as not chosen. Until the Signal list arrives, every chosen Signal counts.
+   */
+  shownSelection(): string[] { return [...this.options.selected].filter((id) => !this.catalogKnown || this.definitions.has(id)); }
+
+  /** The Signal list is about to be replaced; until it arrives, every chosen Signal counts. */
+  expectCatalog(): void { this.catalogKnown = false; }
+
   /** A Signal is listed when the log has it, when it is already chosen, or when the others were asked for. */
   private listed(id: string): boolean { return !this.measured || this.measured.has(id) || this.options.selected.has(id) || (this.unmeasuredOption && this.showUnmeasured); }
 
@@ -285,7 +298,7 @@ export class SignalSelector {
     const popup = document.createElement('div'); popup.className = 'color-popup'; popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', t('Signal color presets', 'シグナルの色プリセット'));
     const swatches = SIGNAL_COLOR_PRESETS.map((color) => {
       const swatch = document.createElement('button'); swatch.type = 'button'; swatch.className = 'color-swatch'; swatch.style.backgroundColor = color; swatch.title = color;
-      swatch.setAttribute('aria-label', `Use ${color}`); swatch.setAttribute('aria-pressed', String(color.toLowerCase() === current.toLowerCase()));
+      swatch.setAttribute('aria-label', t(`Use ${color}`, `${color}を使用`)); swatch.setAttribute('aria-pressed', String(color.toLowerCase() === current.toLowerCase()));
       if (color.toLowerCase() === current.toLowerCase()) swatch.classList.add('selected');
       swatch.addEventListener('click', (event) => {
         event.preventDefault(); event.stopPropagation(); this.closeColorPopup?.();

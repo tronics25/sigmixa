@@ -238,14 +238,14 @@ export class InMemorySignalStore {
       const rendered = samplesInRangeWithContext(source, range);
       return [{ target, visible: samplesInRange(source, range), rendered, breaks: lineBreakSamples(rendered) }];
     });
-    // Thinned for drawing with peaks and dips kept, and both ends of every break in the line (a gap in reception, a sample
-    // that is not a usable value), so the line on each side keeps its ends.
+    // Keep peaks, dips and break boundaries within the drawing budget. Gap metadata below still describes every break
+    // even when there are too many boundaries to draw them all.
     const thin = (item: typeof prepared[number], limit: number) => downsampleExtremes(item.rendered, limit, (sample) => [sample.value], (sample) => item.breaks.has(sample));
     const times = joined ? new Set(prepared.flatMap((item) => thin(item, Math.floor(maxPoints / Math.max(1, prepared.length))).map((sample) => sample.timestamp))) : undefined;
     for (const { target, visible, rendered, breaks } of prepared) {
       result.push({
         definition: target.definition,
-        samples: times ? (rendered.length <= maxPoints / Math.max(1, prepared.length) ? rendered : rendered.filter((sample) => times.has(sample.timestamp) || breaks.has(sample))) : thin({ target, visible, rendered, breaks }, maxPoints),
+        samples: times ? downsampleEven(rendered.filter((sample) => times.has(sample.timestamp)), maxPoints) : thin({ target, visible, rendered, breaks }, maxPoints),
         events: range ? target.events.filter((event) => (event.endTimestamp ?? event.timestamp) >= range.start && event.timestamp <= range.end) : target.events,
         totalSamplesInRange: visible.length - (visible[0]?.carried ? 1 : 0),
         globalMinimum: Number.isFinite(target.minimum) ? target.minimum : undefined,
@@ -330,11 +330,15 @@ function signalCadenceThreshold(samples: readonly SignalSample[]): number {
 export function lineBreakSamples(samples: readonly SignalSample[]): ReadonlySet<SignalSample> {
   const kept = new Set<SignalSample>(); if (samples.length < 2) return kept;
   const threshold = signalCadenceThreshold(samples);
+  if (!isUsableSample(samples[0])) kept.add(samples[0]);
   for (let index = 1; index < samples.length; index++) {
     const previous = samples[index - 1]; const current = samples[index];
+    // The interior of one invalid interval adds no new break. Its boundaries are sufficient to represent it.
+    if (!isUsableSample(previous) && !isUsableSample(current)) continue;
     if (isUsableSample(previous) && isUsableSample(current) && current.timestamp - previous.timestamp <= threshold) continue;
     kept.add(previous); kept.add(current);
   }
+  if (!isUsableSample(samples[samples.length - 1])) kept.add(samples[samples.length - 1]);
   return kept;
 }
 

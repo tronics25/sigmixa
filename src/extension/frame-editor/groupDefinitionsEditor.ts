@@ -4,7 +4,7 @@ import { CHOICE_GROUP_STYLES } from '../../webview/shared/choiceGroup';
 import { BREADCRUMB_STYLES } from '../../webview/shared/breadcrumb';
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
-import { t } from '../i18n';
+import { t, errorText } from '../i18n';
 import { formatCanId } from '../../core/frame/canId';
 import { frameKey, promoteGroupFrames, resolveGroupProject } from '../../core/project/analysisGroups';
 import type { ProjectStore } from '../storage/projectStore';
@@ -41,7 +41,7 @@ export class GroupDefinitionsEditor implements vscode.Disposable {
           if (message.revision !== this.store.frameRevision) throw new Error(t('Definitions changed. Review them and try again.', '定義が変更されました。内容を確認してやり直してください。'));
           await this.promote(id, message.ids.filter((value: unknown): value is string => typeof value === 'string'));
         }
-      } catch (error) { void vscode.window.showErrorMessage((error as Error).message); }
+      } catch (error) { void vscode.window.showErrorMessage(errorText(error)); }
     });
     this.render(id, panel);
   }

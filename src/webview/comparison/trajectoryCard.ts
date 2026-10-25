@@ -4,11 +4,12 @@ import { emphasizeSignal } from '../shared/signalEmphasis';
 import { crossesSeriesGap } from '../shared/chartSeries';
 import type { ComparisonGraphDefinition } from '../../core/project/comparison';
 import type { SignalDefinition } from '../../core/signal/signal';
-import { buildTrajectoryPoints, defaultTrajectoryView, projectPoint3d, trailAt, trajectoryAxisDisplayValue, trajectoryAxisScale, type TrajectoryPoint, type TrajectoryViewTransform } from '../../core/trajectory/trajectory';
+import { TRAJECTORY_FIT_MARGIN, TRAJECTORY_ZOOM_LIMITS, buildTrajectoryPoints, trajectorySceneFrame, defaultTrajectoryView, fitTrajectoryView, projectPoint3d, trailAt, trajectoryAxisDisplayValue, trajectoryAxisScale, trajectoryViewFrom, type TrajectoryCoordinateSystem, type TrajectoryPoint, type TrajectoryViewTransform } from '../../core/trajectory/trajectory';
 import type { ComparisonSeriesDto } from '../../extension/comparison/comparisonProtocol';
 import type { SignalGroupDto } from '../../extension/editors/rawLogProtocol';
 import { chartWheelGesture } from '../shared/chartWheel';
 import { t } from '../shared/i18n';
+import { enhanceChoiceSelect, syncChoiceSelect } from '../shared/choiceGroup';
 import { iconButton, viewActionGroup } from '../shared/iconButton';
 import { bindPressRepeat } from '../shared/pressRepeat';
 import { SIGNAL_COLOR_PRESETS } from '../shared/signalSelector';
@@ -23,6 +24,9 @@ const MIN_HEIGHT = 220;
 const PAD = { left: 64, right: 24, top: 20, bottom: 40 };
 interface Track { readonly targetId: string; readonly name: string; readonly index: number; readonly anchor: number; readonly points: readonly TrajectoryPoint[] }
 interface Projected { readonly x: number; readonly y: number; readonly depth: number; readonly time: number; readonly track: Track }
+
+/** A definition without a saved camera is fitted; a saved camera stays as saved unless it was fitted. */
+const fittedFrom = (definition: ComparisonGraphDefinition): boolean => definition.trajectoryView ? definition.trajectoryViewFit === true : true;
 
 /** Colour per compared file/Clip (the line style also follows it, as in the time-series graphs). */
 export const targetColor = (index: number): string => SIGNAL_COLOR_PRESETS[index % SIGNAL_COLOR_PRESETS.length];
@@ -44,18 +48,20 @@ export class TrajectoryCard implements ComparisonCard {
   private latestRequest = 0;
   private pending = false;
   private view: TrajectoryViewTransform = defaultTrajectoryView();
+  /** Zoom and pan follow the data and the canvas size until the user zooms, pans or rotates. */
+  private fitted = true;
   private projected: Projected[] = [];
   private definitions: readonly SignalDefinition[] = [];
   private groups: readonly SignalGroupDto[] = [];
   private drawScheduled = false;
-  private drag?: { x: number; y: number; pan: boolean; moved: boolean };
+  private drag?: { x: number; y: number; pan: boolean; moved: boolean; changed?: boolean };
   private pixelsPerUnit = 1;
   private highlightedTargetId?: string;
   private legendKey = '';
   private viewCommit?: ReturnType<typeof setTimeout>;
 
   constructor(private definitionValue: ComparisonGraphDefinition, private readonly host: GraphHost, list: HTMLElement, optionsHost: HTMLElement) {
-    this.view = definitionValue.trajectoryView ?? defaultTrajectoryView();
+    this.view = trajectoryViewFrom(definitionValue.trajectoryView); this.fitted = fittedFrom(definitionValue);
     this.element = document.createElement('section'); this.element.className = 'visualize-card'; this.element.dataset.kind = 'trajectory';
     this.header = document.createElement('header'); this.header.className = 'visualize-card-header'; this.header.tabIndex = 0;
     this.title = document.createElement('input'); this.title.className = 'visualize-card-title'; this.title.value = definitionValue.name;
@@ -64,7 +70,7 @@ export class TrajectoryCard implements ComparisonCard {
     this.buttons = {
       zoomIn: make('zoom-in', t('Zoom in; hold to repeat', '拡大・長押しで連続'), () => undefined),
       zoomOut: make('zoom-out', t('Zoom out; hold to repeat', '縮小・長押しで連続'), () => undefined),
-      reset: make('discard', t('Reset view', '表示をリセット'), () => { this.view = defaultTrajectoryView(); this.update({ trajectoryView: this.view }); this.draw(); }),
+      reset: make('discard', t('Reset view', '表示をリセット'), () => { clearTimeout(this.viewCommit); this.view = defaultTrajectoryView(); this.fitted = true; this.update({ trajectoryView: this.view, trajectoryViewFit: true }); this.draw(); }),
       image: make('export', t('Save image', '画像を保存'), () => this.saveImage()),
       settings: make('settings-gear', t('Show graph settings', 'グラフ設定を表示'), () => this.host.select(this, true)),
       up: make('arrow-up', t('Move graph up', 'グラフを上へ移動'), () => this.host.move(this, -1)),
@@ -88,9 +94,11 @@ export class TrajectoryCard implements ComparisonCard {
     this.options = document.createElement('section'); this.options.className = 'view-specific-options'; this.options.hidden = true;
     const settings = document.createElement('div'); settings.className = 'view-settings'; this.options.appendChild(settings);
     const display = document.createElement('details'); display.className = 'display-settings';
-    display.innerHTML = `<summary>${t('Drawing settings', '描画設定')}</summary><div class="settings-row"><label class="chart-option"><input class="equal-aspect" type="checkbox">${t('Equal X/Y scale (2D)', 'X/Yの縮尺を揃える（2D）')}</label></div><div class="settings-row"><label class="chart-option"><input class="show-points" type="checkbox">${t('Show data points', 'データ点を表示')}</label></div>`;
+    display.innerHTML = `<summary>${t('Drawing settings', '描画設定')}</summary><div class="settings-row"><label class="chart-option"><input class="equal-aspect" type="checkbox">${t('Equal X/Y scale (2D)', 'X/Yの縮尺を揃える（2D）')}</label></div><div class="settings-row"><label class="chart-option"><input class="show-points" type="checkbox">${t('Show data points', 'データ点を表示')}</label></div><div class="settings-row coordinate-system-row"><label class="axis-mode">${t('Coordinate system', '座標系')}<select class="coordinate-system"><option value="right">${t('Right-handed', '右手系')}</option><option value="left">${t('Left-handed', '左手系')}</option></select></label></div>`;
     const aspect = display.querySelector<HTMLInputElement>('.equal-aspect')!; aspect.addEventListener('change', () => { this.update({ equalAspect: aspect.checked }); this.draw(); });
     const points = display.querySelector<HTMLInputElement>('.show-points')!; points.addEventListener('change', () => { this.update({ showPoints: points.checked }); this.draw(); });
+    const handedness = display.querySelector<HTMLSelectElement>('.coordinate-system')!; enhanceChoiceSelect(handedness, t('Coordinate system', '座標系'));
+    handedness.addEventListener('change', () => { this.update({ coordinateSystem: handedness.value === 'left' ? 'left' : 'right' }); this.draw(); });
     settings.appendChild(display);
     const axes = document.createElement('div'); axes.className = 'trajectory-axes';
     const axisSelect = (axis: 'x' | 'y' | 'z') => {
@@ -118,10 +126,11 @@ export class TrajectoryCard implements ComparisonCard {
   private get isConfigured(): boolean { return Boolean(this.axes().x && this.axes().y); }
   private axes() { return this.definitionValue.axes ?? {}; }
   private get is3d(): boolean { return Boolean(this.axes().z); }
+  private get coordinateSystem(): TrajectoryCoordinateSystem { return this.definitionValue.coordinateSystem === 'left' ? 'left' : 'right'; }
 
   setDefinition(definition: ComparisonGraphDefinition): void {
     const axesChanged = JSON.stringify(definition.axes ?? {}) !== JSON.stringify(this.axes());
-    if (JSON.stringify(definition.trajectoryView) !== JSON.stringify(this.definitionValue.trajectoryView)) this.view = definition.trajectoryView ?? defaultTrajectoryView();
+    if (JSON.stringify(definition.trajectoryView) !== JSON.stringify(this.definitionValue.trajectoryView) || fittedFrom(definition) !== fittedFrom(this.definitionValue)) { this.view = trajectoryViewFrom(definition.trajectoryView); this.fitted = fittedFrom(definition); }
     this.definitionValue = definition; this.title.value = definition.name; this.syncSettings();
     if (axesChanged) this.request(); else this.draw();
   }
@@ -154,6 +163,7 @@ export class TrajectoryCard implements ComparisonCard {
   private syncSettings(): void {
     const aspect = this.options.querySelector<HTMLInputElement>('.equal-aspect'); if (aspect) aspect.checked = this.definitionValue.equalAspect !== false;
     const points = this.options.querySelector<HTMLInputElement>('.show-points'); if (points) points.checked = this.definitionValue.showPoints === true;
+    const handedness = this.options.querySelector<HTMLSelectElement>('.coordinate-system'); if (handedness) { handedness.value = this.coordinateSystem; syncChoiceSelect(handedness); }
     this.renderAxisOptions();
   }
 
@@ -179,11 +189,14 @@ export class TrajectoryCard implements ComparisonCard {
     this.canvas.addEventListener('pointermove', (event) => {
       if (!this.drag) { this.hover(event); return; }
       const dx = event.clientX - this.drag.x; const dy = event.clientY - this.drag.y; this.drag.x = event.clientX; this.drag.y = event.clientY; if (Math.abs(dx) + Math.abs(dy) > 1) this.drag.moved = true;
+      // Any movement takes the camera over, also a slow drag made of one-pixel steps.
+      if (dx || dy) { this.fitted = false; this.drag.changed = true; }
       if (this.drag.pan) this.view = { ...this.view, panX: this.view.panX + dx / (this.pixelsPerUnit * this.view.zoom), panY: this.view.panY - dy / (this.pixelsPerUnit * this.view.zoom) };
-      else { const perPixel = 2 * Math.PI / Math.max(1, this.canvas.clientHeight); this.view = { ...this.view, yaw: this.view.yaw + dx * perPixel, pitch: Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.view.pitch + dy * perPixel)) }; }
+      // A left-handed scene is the mirror image, so its yaw turns the other way to make a drag look the same in both.
+      else { const perPixel = 2 * Math.PI / Math.max(1, this.canvas.clientHeight); this.view = { ...this.view, yaw: this.view.yaw + (this.coordinateSystem === 'left' ? -dx : dx) * perPixel, pitch: Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.view.pitch + dy * perPixel)) }; }
       this.scheduleDraw();
     });
-    const end = (event: PointerEvent) => { if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId); if (this.drag?.moved) this.update({ trajectoryView: this.view }); this.drag = undefined; };
+    const end = (event: PointerEvent) => { if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId); if (this.drag?.changed) this.update({ trajectoryView: this.view, trajectoryViewFit: false }); this.drag = undefined; };
     this.canvas.addEventListener('pointerup', end); this.canvas.addEventListener('pointercancel', end);
     this.canvas.addEventListener('mouseleave', () => this.host.setHoverTime(undefined));
     this.canvas.addEventListener('wheel', (event) => { const gesture = chartWheelGesture(event, this.canvas.clientHeight); if (gesture.kind !== 'zoom') return; event.preventDefault(); this.zoom(Math.exp(-Math.max(-40, Math.min(40, gesture.delta)) * .01)); }, { passive: false });
@@ -219,8 +232,8 @@ export class TrajectoryCard implements ComparisonCard {
 
   /** Wheel and press-repeat zoom fire many times in a row: redraw each time, but report the view once it settles. */
   private zoom(factor: number): void {
-    this.view = { ...this.view, zoom: Math.max(.1, Math.min(200, this.view.zoom * factor)) }; this.draw();
-    clearTimeout(this.viewCommit); this.viewCommit = setTimeout(() => this.update({ trajectoryView: this.view }), 200);
+    this.fitted = false; this.view = { ...this.view, zoom: Math.max(TRAJECTORY_ZOOM_LIMITS.minimum, Math.min(TRAJECTORY_ZOOM_LIMITS.maximum, this.view.zoom * factor)) }; this.draw();
+    clearTimeout(this.viewCommit); this.viewCommit = setTimeout(() => this.update({ trajectoryView: this.view, trajectoryViewFit: false }), 200);
   }
 
   // ---- data & drawing ---------------------------------------------------------------------------
@@ -241,11 +254,6 @@ export class TrajectoryCard implements ComparisonCard {
     return { x: trajectoryAxisScale(all.map((point) => point.x)), y: trajectoryAxisScale(all.map((point) => point.y)), z: trajectoryAxisScale(all.map((point) => point.z ?? 0)) };
   }
 
-  /** Screen pixels per data unit at zoom 1 (3D: widest axis spans 68% of the shorter side). */
-  private scale(width: number, height: number, tracks: readonly Track[]): number {
-    const s = this.scales(tracks); const span = Math.max(s.x.maximum - s.x.minimum, s.y.maximum - s.y.minimum, this.is3d ? s.z.maximum - s.z.minimum : 0, 1e-9);
-    return Math.max(1, Math.min(width, height)) * .68 / span;
-  }
 
   scheduleDraw(): void { if (this.drawScheduled) return; this.drawScheduled = true; requestAnimationFrame(() => { this.drawScheduled = false; this.draw(); }); }
 
@@ -253,6 +261,7 @@ export class TrajectoryCard implements ComparisonCard {
     this.element.classList.toggle('view-unconfigured', !this.isConfigured);
     this.header.removeAttribute('title');
     this.buttons.up.disabled = this.host.isFirst(this);
+    const handedness = this.options.querySelector<HTMLElement>('.coordinate-system-row'); if (handedness) handedness.hidden = !this.is3d;
     const tracks = this.tracks(); this.renderLegend(tracks);
     const width = Math.max(320, this.canvas.parentElement!.clientWidth); const ratio = devicePixelRatio || 1;
     this.canvas.width = width * ratio; this.canvas.height = this.height * ratio; this.canvas.style.width = `${width}px`; this.canvas.style.height = `${this.height}px`;
@@ -272,14 +281,21 @@ export class TrajectoryCard implements ComparisonCard {
     const label = (id?: string) => { const definition = id ? byId.get(id) : undefined; return definition ? `${definition.name}${definition.unit ? ` (${definition.unit})` : ''}` : ''; };
     let project: (point: TrajectoryPoint) => { x: number; y: number; depth: number };
     if (this.is3d) {
-      const scale = this.scale(width, height, tracks); if (top === 0) this.pixelsPerUnit = scale; const center = [(s.x.minimum + s.x.maximum) / 2, (s.y.minimum + s.y.maximum) / 2, (s.z.minimum + s.z.maximum) / 2];
-      project = (point) => { const value = projectPoint3d({ x: point.x - center[0], y: point.y - center[1], z: (point.z ?? 0) - center[2] }, this.view); return { x: width / 2 + value.x * scale, y: top + height / 2 - value.y * scale, depth: value.depth }; };
+      // Centred on the data, whose widest extent spans 68% of the shorter side at zoom 1.
+      const frame = trajectorySceneFrame(tracks.flatMap((track) => track.points)); const center = frame.center;
+      const scale = Math.max(1, Math.min(width, height)) * .68 / frame.span; if (top === 0) this.pixelsPerUnit = scale;
+      // A fitted camera is fitted again to every size it is drawn at: the card after a resize, or an exported image.
+      const view = this.fitted ? fitTrajectoryView(this.view, tracks.flatMap((track) => track.points).map((point) => ({ x: point.x - center[0], y: point.y - center[1], z: (point.z ?? 0) - center[2] })), Math.max(1, width - 2 * TRAJECTORY_FIT_MARGIN) / scale, Math.max(1, height - 2 * TRAJECTORY_FIT_MARGIN) / scale, this.coordinateSystem) : this.view;
+      if (top === 0) this.view = view;
+      project = (point) => { const value = projectPoint3d({ x: point.x - center[0], y: point.y - center[1], z: (point.z ?? 0) - center[2] }, view, this.coordinateSystem); return { x: width / 2 + value.x * scale, y: top + height / 2 - value.y * scale, depth: value.depth }; };
       this.paint3dAxes(context, s, project, label(axes.x), label(axes.y), label(axes.z));
     } else {
       const plotW = width - PAD.left - PAD.right; const plotH = height - PAD.top - PAD.bottom; const spanX = s.x.maximum - s.x.minimum || 1; const spanY = s.y.maximum - s.y.minimum || 1;
       let kx = plotW / spanX; let ky = plotH / spanY; if (this.definitionValue.equalAspect !== false) kx = ky = Math.min(kx, ky);
       if (top === 0) this.pixelsPerUnit = Math.min(kx, ky);
-      const zoom = this.view.zoom; const cx = (s.x.minimum + s.x.maximum) / 2 - this.view.panX; const cy = (s.y.minimum + s.y.maximum) / 2 - this.view.panY;
+      // In 2D the whole plot already fits at zoom 1.
+      const view2d = this.fitted ? { ...this.view, zoom: 1, panX: 0, panY: 0 } : this.view; if (top === 0) this.view = view2d;
+      const zoom = view2d.zoom; const cx = (s.x.minimum + s.x.maximum) / 2 - view2d.panX; const cy = (s.y.minimum + s.y.maximum) / 2 - view2d.panY;
       project = (point) => ({ x: PAD.left + plotW / 2 + (point.x - cx) * kx * zoom, y: top + PAD.top + plotH / 2 - (point.y - cy) * ky * zoom, depth: 0 });
       this.paint2dAxes(context, s, project, width, height, top, label(axes.x), label(axes.y));
     }
@@ -370,7 +386,9 @@ export class TrajectoryCard implements ComparisonCard {
       context.fillStyle = css('--vscode-foreground', '#ddd'); context.font = '600 20px sans-serif'; context.fillText(heading, 24, 34);
       let x = 24; context.font = '12px sans-serif';
       for (const track of tracks) { context.save(); context.strokeStyle = targetColor(track.index); context.setLineDash(dashFor(track.index)); context.lineWidth = 2; context.beginPath(); context.moveTo(x, 54); context.lineTo(x + 24, 54); context.stroke(); context.restore(); context.fillStyle = css('--vscode-foreground', '#ddd'); context.fillText(track.name, x + 30, 58); x += 50 + context.measureText(track.name).width; }
-      this.paint(context, width, height - top, top, tracks, undefined);
+      // Clipped to the plot: a fitted camera can carry the axis lines past it, over the heading and legend.
+      context.save(); context.beginPath(); context.rect(0, top, width, height - top); context.clip();
+      this.paint(context, width, height - top, top, tracks, undefined); context.restore();
     };
     const png = document.createElement('canvas'); png.width = width; png.height = height; const context = png.getContext('2d'); if (!context) return undefined; paintAll(context);
     const vector = createSvgCanvas(width, height); paintAll(vector.context);

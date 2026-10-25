@@ -1,3 +1,4 @@
+import { errorText } from './i18n';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 
@@ -52,7 +53,7 @@ export async function saveRenderedImage({ title, japaneseTitle, defaultBasePath,
   });
   if (!target) return;
   try { await vscode.workspace.fs.writeFile(target, bytes); void vscode.window.showInformationMessage(japanese ? `${path.basename(target.fsPath)} を保存しました。` : `Saved ${path.basename(target.fsPath)}`); }
-  catch (error) { void vscode.window.showErrorMessage(japanese ? `${japaneseTitle}を保存できませんでした: ${(error as Error).message}` : `Could not save ${title}: ${(error as Error).message}`); }
+  catch (error) { void vscode.window.showErrorMessage(japanese ? `${japaneseTitle}を保存できませんでした: ${errorText(error)}` : `Could not save ${title}: ${errorText(error)}`); }
 }
 
 function pngBytes(dataUrl: string): Buffer | undefined {

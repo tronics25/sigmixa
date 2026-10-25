@@ -1,3 +1,4 @@
+import { diagnosticText } from '../../shared/diagnosticText';
 import { stepperButtons } from '../shared/numberStepper';
 import { enhanceChoiceSelect } from '../shared/choiceGroup';
 import { bindColumnHover, bindResizeKeyboard, widthToFit } from '../shared/tableBehavior';
@@ -648,7 +649,7 @@ function buildSignalTable(value: ManualFrameDefinition): HTMLElement {
     insert.type = 'button'; insert.className = 'insert-zone'; insert.setAttribute('aria-label', pill.textContent);
     if (!newSignalAt(value, signalIndex, 'probe').fits) { insert.classList.add('is-full'); insert.title = frameFullMessage(); }
     insertRow.appendChild(insert); wrap.appendChild(insertRow);
-    const row = document.createElement('div'); const signalErrors = validation.filter((item) => item.details?.signalId === signal.id); row.className = `signal-row${signalErrors.length ? ' invalid-row' : ''}`; row.title = signalErrors.map((item) => item.message).join('\n'); row.style.gridTemplateColumns = template(columns);
+    const row = document.createElement('div'); const signalErrors = validation.filter((item) => item.details?.signalId === signal.id); row.className = `signal-row${signalErrors.length ? ' invalid-row' : ''}`; row.title = signalErrors.map((item) => diagnosticText(item.message, document.documentElement.lang)).join('\n'); row.style.gridTemplateColumns = template(columns);
     const cells = [
       cell(signalNameInput(signal)),
       cell(sizedTextInput(signal.unit, (next) => updateSignal(signal.id, (current) => ({ ...current, unit: next })), 'unit', columns, '.signal-header,.signal-row')),
@@ -662,7 +663,7 @@ function buildSignalTable(value: ManualFrameDefinition): HTMLElement {
       cell(optionalNumberInput(signal.maximum, (next) => updateSignal(signal.id, (current) => ({ ...current, maximum: next }))))
     ];
     if (value.multiplexing) cells.push(cell(multiplexerActivationInput(signal)));
-    cells.push(cell(trashButton(`Delete ${signal.name}`, () => { if (frame) updateFrame({ signals: frame.signals.filter((item) => item.id !== signal.id) }); render(); })));
+    cells.push(cell(trashButton(t(`Delete ${signal.name}`, `${signal.name}を削除`), () => { if (frame) updateFrame({ signals: frame.signals.filter((item) => item.id !== signal.id) }); render(); })));
     cells.forEach((element, index) => { const group = columnGroupClass(index); if (group) element.classList.add(group); });
     row.append(...cells); linkSignalRow(row, signal.id, columns); wrap.appendChild(row);
     if (expandedValueLabelsId === signal.id) wrap.appendChild(valueLabelsEditor(signal));
@@ -735,14 +736,14 @@ function buildDerivedTable(value: ManualFrameDefinition): HTMLElement {
   for (const column of derivedColumnDefinitions) header.appendChild(definitionHeader(column, derivedColumnDefinitions, () => frame?.derivedSignals ?? [], '.derived-header,.derived-row')); wrap.appendChild(header);
   const validation = validateFrameDefinition(value).diagnostics;
   derived.forEach((signal, index) => {
-    const errors = validation.filter((item) => item.details?.signalId === signal.id); const row = document.createElement('div'); row.className = `derived-row${errors.length ? ' invalid-row' : ''}`; row.title = errors.map((item) => item.message).join('\n'); row.style.gridTemplateColumns = template(derivedColumnDefinitions);
+    const errors = validation.filter((item) => item.details?.signalId === signal.id); const row = document.createElement('div'); row.className = `derived-row${errors.length ? ' invalid-row' : ''}`; row.title = errors.map((item) => diagnosticText(item.message, document.documentElement.lang)).join('\n'); row.style.gridTemplateColumns = template(derivedColumnDefinitions);
     const available = [...value.signals.map((item) => item.name), ...derived.slice(0, index).map((item) => item.name)].filter(Boolean);
     row.append(
       cell(derivedNameInput(signal)),
       cell(sizedTextInput(signal.unit, (next) => updateDerivedSignal(signal.id, (current) => ({ ...current, unit: next })), 'derivedUnit', derivedColumnDefinitions, '.derived-header,.derived-row')),
       cell(selectInput([['expression',t('Expression','計算式')],['lookup',t('Linear interpolation','線形補間')],['filter',t('Filter','フィルター')]], signal.operation.type, (next) => { expandedDerivedId = signal.id; updateDerivedSignal(signal.id, (current) => ({ ...current, operation: operationForType(next as ManualDerivedSignalDefinition['operation']['type'], current.operation, available) })); }, false)),
       cell(derivedDefinitionInput(signal, available)),
-      cell(trashButton(`Delete ${signal.name}`, () => { if (frame) updateFrame({ derivedSignals: (frame.derivedSignals ?? []).filter((item) => item.id !== signal.id) }); render(); }))
+      cell(trashButton(t(`Delete ${signal.name}`, `${signal.name}を削除`), () => { if (frame) updateFrame({ derivedSignals: (frame.derivedSignals ?? []).filter((item) => item.id !== signal.id) }); render(); }))
     ); linkSignalRow(row, signal.id, derivedColumnDefinitions); wrap.appendChild(row);
     if (expandedDependencyId === signal.id) wrap.appendChild(makeDependencyDiagram(value, signal.id));
   });
@@ -854,14 +855,14 @@ function numberInput(value: number, min: number, max: number, change: (value: nu
 function optionalNumberInput(value: number | undefined, change: (value: number | undefined) => void): HTMLInputElement { const input = document.createElement('input'); input.type = 'number'; input.value = value === undefined ? '' : String(value); input.addEventListener('change', () => { change(input.value.trim() ? Number(input.value) : undefined); serverDiagnostics = []; render(); }); return input; }
 function selectInput(options: readonly (readonly [string,string])[], value: string, change: (value: string) => void, finite = true): HTMLSelectElement { const select = document.createElement('select'); if (finite) select.dataset.finiteChoice = 'true'; for (const [id,label] of options) { const option = document.createElement('option'); option.value = id; option.textContent = label; option.selected = id === value; select.appendChild(option); } select.addEventListener('change', () => { change(select.value); serverDiagnostics = []; render(); }); return select; }
 function scaleFor(signal: ManualSignalDefinition): { readonly type: 'scale-offset'; readonly lsb: number; readonly lsbText: string; readonly offset: number } { return signal.conversion; }
-function scaleInput(signal: ManualSignalDefinition): HTMLElement { const conversion = scaleFor(signal); const container = document.createElement('div'); const wrap = document.createElement('div'); wrap.className = 'resolution'; const factor = resolutionStepFactor(conversion.lsbText); const input = document.createElement('input'); input.value = conversion.lsbText; input.setAttribute('aria-label', `Scale for ${signal.name}`); const parsed = parseResolution(input.value); if (!parsed.valid) input.setAttribute('aria-invalid','true'); input.addEventListener('change', () => { const result = parseResolution(input.value); updateSignal(signal.id, (current) => ({ ...current, conversion: { ...scaleFor(current), lsbText: input.value, ...(result.valid ? { lsb: result.resolution.value } : {}) } })); render(); }); wrap.append(input, stepperButtons(() => stepScale(signal, 'increase'), () => stepScale(signal, 'decrease'), { up: `Scale ×${factor}`, down: `Scale ÷${factor}` })); container.appendChild(wrap); if (!parsed.valid) { const error = document.createElement('span'); error.className = 'inline-error'; error.textContent = parsed.error; container.appendChild(error); } return container; }
+function scaleInput(signal: ManualSignalDefinition): HTMLElement { const conversion = scaleFor(signal); const container = document.createElement('div'); const wrap = document.createElement('div'); wrap.className = 'resolution'; const factor = resolutionStepFactor(conversion.lsbText); const input = document.createElement('input'); input.value = conversion.lsbText; input.setAttribute('aria-label', t(`Scale for ${signal.name}`, `${signal.name}のSCALE`)); const parsed = parseResolution(input.value); if (!parsed.valid) input.setAttribute('aria-invalid','true'); input.addEventListener('change', () => { const result = parseResolution(input.value); updateSignal(signal.id, (current) => ({ ...current, conversion: { ...scaleFor(current), lsbText: input.value, ...(result.valid ? { lsb: result.resolution.value } : {}) } })); render(); }); wrap.append(input, stepperButtons(() => stepScale(signal, 'increase'), () => stepScale(signal, 'decrease'), { up: `Scale ×${factor}`, down: `Scale ÷${factor}` })); container.appendChild(wrap); return container; }
 function stepScale(signal: ManualSignalDefinition, direction: 'increase'|'decrease'): void { const current = scaleFor(signal); const adjusted = adjustResolution(current.lsbText, direction); if (!adjusted.valid) return; updateSignal(signal.id, (item) => ({ ...item, conversion: { ...scaleFor(item), lsb: adjusted.resolution.value, lsbText: adjusted.resolution.text } })); render(); }
 function offsetInput(signal: ManualSignalDefinition): HTMLElement { const conversion = scaleFor(signal); return numberInput(conversion.offset, -Number.MAX_VALUE, Number.MAX_VALUE, (next) => updateSignal(signal.id, (current) => ({ ...current, conversion: { ...scaleFor(current), offset: next } }))); }
 function expressionInput(signal: ManualDerivedSignalDefinition, names: readonly string[]): HTMLElement {
   const wrap = document.createElement('div'); wrap.className = 'expression-wrap';
   const expression = signal.operation.type === 'expression' ? signal.operation.expression : '';
   const updateExpression = (value: string) => updateDerivedSignal(signal.id, (current) => ({ ...current, operation: current.operation.type === 'expression' ? { ...current.operation, expression: value } : current.operation }));
-  const input = document.createElement('input'); input.value = expression; input.placeholder = '[Vehicle Speed] * 3.6'; input.setAttribute('aria-label', `Expression for ${signal.name}`);
+  const input = document.createElement('input'); input.value = expression; input.placeholder = '[Vehicle Speed] * 3.6'; input.setAttribute('aria-label', t(`Expression for ${signal.name}`, `${signal.name}の計算式`));
   const suggestions = document.createElement('div'); suggestions.className = 'expression-suggestions hidden';
   let candidates: readonly string[] = []; let active = 0; let replaceStart = -1;
   const close = () => { suggestions.classList.add('hidden'); suggestions.replaceChildren(); };
@@ -961,7 +962,7 @@ function startResize<T>(event: MouseEvent, column: SizingColumn<T>, columns: rea
   const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); persist(); };
   window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
 }
-function buildDiagnostics(items: readonly Diagnostic[]): HTMLElement { const box = document.createElement('div'); box.className = 'diagnostics'; const strong = document.createElement('strong'); strong.textContent = t(`Definition has ${items.length} issue${items.length === 1 ? '' : 's'}`, `定義に${items.length}件の問題があります`); const list = document.createElement('ul'); for (const item of items.slice(0, 20)) { const row = document.createElement('li'); row.textContent = item.message; list.appendChild(row); } box.append(strong,list); return box; }
+function buildDiagnostics(items: readonly Diagnostic[]): HTMLElement { const box = document.createElement('div'); box.className = 'diagnostics'; const strong = document.createElement('strong'); strong.textContent = t(`Definition has ${items.length} issue${items.length === 1 ? '' : 's'}`, `定義に${items.length}件の問題があります`); const list = document.createElement('ul'); for (const item of items.slice(0, 20)) { const row = document.createElement('li'); row.textContent = diagnosticText(item.message, document.documentElement.lang); list.appendChild(row); } box.append(strong,list); return box; }
 function saveFrame(): void {
   saveTimer = undefined;
   if (!frame) return;
@@ -985,7 +986,7 @@ function refreshValidation(): void {
   content.querySelector('.diagnostics')?.remove();
   for (const row of Array.from(content.querySelectorAll<HTMLElement>('[data-signal-id]'))) {
     const errors = diagnostics.filter((item) => item.details?.signalId === row.dataset.signalId);
-    row.classList.toggle('invalid-row', errors.length > 0); row.title = errors.map((item) => item.message).join('\n');
+    row.classList.toggle('invalid-row', errors.length > 0); row.title = errors.map((item) => diagnosticText(item.message, document.documentElement.lang)).join('\n');
   }
   if (diagnostics.length) content.appendChild(buildDiagnostics(diagnostics));
 }

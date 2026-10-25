@@ -1,7 +1,7 @@
 import { resolveViewSettings, saveViewSettings, switchViewSettingsScope, viewSettingsScope } from '../../core/project/viewSettings';
 import { clipRange, clipRangeLabel, type ClipDefinition } from '../../core/project/schema';
 import * as vscode from 'vscode';
-import { t } from '../i18n';
+import { t, errorText } from '../i18n';
 import { RawLogDocument } from './rawLogDocument';
 import { rawLogHtml } from './rawLogHtml';
 import type { LogViewState, ToExtensionMessage, ToWebviewMessage } from './rawLogProtocol';
@@ -162,12 +162,12 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       } else if (message.type === 'setViewSettingsScope') {
         const group = currentGroup(); if (!group) return;
         ownViewSave++;
-        void this.projectStore.update((project) => staleSettings ? project : switchViewSettingsScope(project, viewStateKey, message.state as Record<string, unknown>, group, message.scope)).then(() => { panel.webview.html = rawLogHtml(panel.webview, this.extensionUri, document.fileName, vscode.env.language); }).catch((error) => vscode.window.showErrorMessage(`${t('Could not switch where view settings are saved', '表示設定の切り替えに失敗しました')}: ${(error as Error).message}`)).finally(() => { ownViewSave--; });
+        void this.projectStore.update((project) => staleSettings ? project : switchViewSettingsScope(project, viewStateKey, message.state as Record<string, unknown>, group, message.scope)).then(() => { panel.webview.html = rawLogHtml(panel.webview, this.extensionUri, document.fileName, vscode.env.language); }).catch((error) => vscode.window.showErrorMessage(`${t('Could not switch where view settings are saved', '表示設定の切り替えに失敗しました')}: ${errorText(error)}`)).finally(() => { ownViewSave--; });
       } else if (message.type === 'updateClipRange') {
         // The graphs already show the dragged range; whatever happens, they are told what is saved.
         // The Clip is one of this log's: it is named by this log and its ID, so no Clip of another log can be meant.
         void this.projectStore.update((project) => withClipRange(project, { id: message.clipId, sourcePath: source }, message.startTimestamp, message.endTimestamp))
-          .catch((error) => vscode.window.showErrorMessage(t(`Could not change the Clip: ${(error as Error).message}`, `クリップを変更できませんでした: ${(error as Error).message}`)))
+          .catch((error) => vscode.window.showErrorMessage(t(`Could not change the Clip: ${errorText(error)}`, `クリップを変更できませんでした: ${errorText(error)}`)))
           .then(() => { knownClipRanges = JSON.stringify(clipRanges()); return send({ type: 'clipRanges', clips: clipRanges() }); });
       } else if (message.type === 'openClip') {
         // Opened from this log's graph, the Clip opens in the same place (group) as the log.
@@ -261,7 +261,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
           return saveViewSettings(project, viewStateKey, message.state as Record<string, unknown>, currentGroup());
         }).then(() => { viewStateSaveErrorShown = false; }).catch((error) => {
           if (viewStateSaveErrorShown) return; viewStateSaveErrorShown = true;
-          void vscode.window.showErrorMessage(`Could not save the current SigMixa view settings: ${(error as Error).message}`);
+          void vscode.window.showErrorMessage(t(`Could not save the current SigMixa view settings: ${errorText(error)}`, `表示設定を保存できませんでした: ${errorText(error)}`));
         }).finally(() => { ownViewSave--; });
       }
     });
@@ -272,7 +272,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       const result = document.selectedRowsText(message.ranges, message.filter, sourceProject(this.projectStore, document.uri), this.projectStore.analysisRevision, message.contentMode, message.action === 'open');
       if (message.action === 'copy') { await vscode.env.clipboard.writeText(result.text); void send({ type: 'rowsCopied', count: result.count }); }
       else { const textDocument = await vscode.workspace.openTextDocument({ content: result.text, language: 'plaintext' }); await vscode.window.showTextDocument(textDocument, { viewColumn: vscode.ViewColumn.Beside, preview: false }); }
-    } catch (error) { void vscode.window.showErrorMessage(`Could not ${message.action === 'copy' ? 'copy' : 'open'} RAW Log rows: ${(error as Error).message}`); }
+    } catch (error) { void vscode.window.showErrorMessage(t(`Could not ${message.action === 'copy' ? 'copy' : 'open'} RAW Log rows: ${errorText(error)}`, `RAWログの行を${message.action === 'copy' ? 'コピー' : '開くことが'}できませんでした: ${errorText(error)}`)); }
   }
 
   private async transferSignalTableRows(document: RawLogDocument, message: Extract<ToExtensionMessage, { type: 'signalTableRowsRequest' }>, send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {
@@ -280,7 +280,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       const result = document.selectedSignalRowsText(message.ranges, message.selectedIds, message.action === 'open');
       if (message.action === 'copy') { await vscode.env.clipboard.writeText(result.text); void send({ type: 'signalTableRowsCopied', count: result.count }); }
       else { const textDocument = await vscode.workspace.openTextDocument({ content: result.text, language: 'plaintext' }); await vscode.window.showTextDocument(textDocument, { viewColumn: vscode.ViewColumn.Beside, preview: false }); }
-    } catch (error) { void vscode.window.showErrorMessage(`Could not ${message.action === 'copy' ? 'copy' : 'open'} Signal Table rows: ${(error as Error).message}`); }
+    } catch (error) { void vscode.window.showErrorMessage(t(`Could not ${message.action === 'copy' ? 'copy' : 'open'} Signal Table rows: ${errorText(error)}`, `シグナルテーブルの行を${message.action === 'copy' ? 'コピー' : '開くことが'}できませんでした: ${errorText(error)}`)); }
   }
 
   /** The Clips of a log, as time ranges of it. */
@@ -325,16 +325,16 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         id, name: name.trim(), sourcePath: portableClipPath(document.filePath, root.fsPath), sourceFileName: document.fileName, startTimestamp: range.start, endTimestamp: range.end,
       }] }));
       void send({ type: 'clipCreated', clipId: id });
-    } catch (error) { void vscode.window.showErrorMessage(t(`Could not create Clip: ${(error as Error).message}`, `クリップを作成できませんでした: ${(error as Error).message}`)); }
+    } catch (error) { void vscode.window.showErrorMessage(t(`Could not create Clip: ${errorText(error)}`, `クリップを作成できませんでした: ${errorText(error)}`)); }
   }
 
   private async exportSignals(document: RawLogDocument, selectedIds: readonly string[]): Promise<void> {
-    if (!selectedIds.length) { void vscode.window.showWarningMessage('Select at least one Signal to export.'); return; }
+    if (!selectedIds.length) { void vscode.window.showWarningMessage(t('Select at least one Signal to export.', "エクスポートするシグナルを選択してください。")); return; }
     const target = await vscode.window.showSaveDialog({ filters: { CSV: ['csv'] }, defaultUri: vscode.Uri.file(`${document.fileName.replace(/\.asc$/i, '')}-signals.csv`) });
     if (!target) return;
-    if (target.scheme !== 'file') { void vscode.window.showErrorMessage('Signal CSV export currently requires a local file target.'); return; }
-    try { await document.exportSignalCsv(target.fsPath, selectedIds); void vscode.window.showInformationMessage(`Signal CSV exported: ${target.fsPath}`); }
-    catch (error) { void vscode.window.showErrorMessage(`Signal CSV export failed: ${(error as Error).message}`); }
+    if (target.scheme !== 'file') { void vscode.window.showErrorMessage(t('Signal CSV export currently requires a local file target.', "シグナルCSVの保存先にはローカルファイルを選択してください。")); return; }
+    try { await document.exportSignalCsv(target.fsPath, selectedIds); void vscode.window.showInformationMessage(t(`Signal CSV exported: ${target.fsPath}`, `シグナルCSVを保存しました: ${target.fsPath}`)); }
+    catch (error) { void vscode.window.showErrorMessage(t(`Signal CSV export failed: ${errorText(error)}`, `シグナルCSVを保存できませんでした: ${errorText(error)}`)); }
   }
 
   private async saveTimeSeriesImage(document: RawLogDocument, image: RenderedImage): Promise<void> {
@@ -348,13 +348,13 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
   private async selectExternalCsv(send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {
     const root = this.projectStore.requireWorkspace();
     if (!root) return;
-    const selected = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { CSV: ['csv'] }, title: 'Import External CSV' });
+    const selected = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { CSV: ['csv'] }, title: t('Import External CSV', "外部CSVをインポート") });
     const uri = selected?.[0];
     if (!uri) return;
-    if (uri.scheme !== 'file') { void vscode.window.showErrorMessage('External CSV import currently requires a local file.'); return; }
+    if (uri.scheme !== 'file') { void vscode.window.showErrorMessage(t('External CSV import currently requires a local file.', "外部CSVにはローカルファイルを選択してください。")); return; }
     try {
       const headers = await readExternalCsvHeader(uri.fsPath);
-      if (headers.length < 2) { void vscode.window.showErrorMessage('The CSV needs a header row with a Timestamp column and at least one value column.'); return; }
+      if (headers.length < 2) { void vscode.window.showErrorMessage(t('The CSV needs a header row with a Timestamp column and at least one value column.', "CSVにはヘッダー行と、時刻列および1列以上の値列が必要です。")); return; }
       const importId = randomUUID(); this.pendingExternalCsv.set(importId, { uri, headers });
       const suggestedTimestampColumn = headers.find((header) => /^(?:time|timestamp)(?:\b|[_ (])/i.test(header.trim())) ?? headers[0];
       const normalized = suggestedTimestampColumn.toLowerCase();
@@ -362,17 +362,17 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         : /(?:^|[_ (])(?:ms|milliseconds?)(?:\b|[)])/i.test(normalized) ? 'milliseconds' : 'seconds';
       void send({ type: 'externalCsvPreview', importId, fileName: path.basename(uri.fsPath), headers, suggestedTimestampColumn, suggestedTimestampUnit });
     } catch (error) {
-      void vscode.window.showErrorMessage(`External CSV import failed: ${(error as Error).message}`);
+      void vscode.window.showErrorMessage(t(`External CSV import failed: ${errorText(error)}`, `外部CSVをインポートできませんでした: ${errorText(error)}`));
     }
   }
 
   /** An External CSV belongs to the level of the log it was added from, so it travels with that folder. */
   private async commitExternalCsv(message: Extract<ToExtensionMessage, { type: 'commitExternalCsv' }>, groupId?: string): Promise<void> {
     const root = this.projectStore.requireWorkspace(); const pending = this.pendingExternalCsv.get(message.importId);
-    if (!root || !pending) { void vscode.window.showErrorMessage('The selected CSV import has expired. Choose the file again.'); return; }
+    if (!root || !pending) { void vscode.window.showErrorMessage(t('The selected CSV import has expired. Choose the file again.', "CSVの選択が無効になりました。ファイルを選択し直してください。")); return; }
     const uri = pending.uri; const available = new Set(pending.headers);
     if (!available.has(message.timestampColumn) || !message.valueColumns.length || message.valueColumns.some((column) => !available.has(column.column) || column.column === message.timestampColumn)) {
-      void vscode.window.showErrorMessage('Choose one Timestamp column and at least one different value column.'); return;
+      void vscode.window.showErrorMessage(t('Choose one Timestamp column and at least one different value column.', "時刻列と、それとは別の値列を1列以上選択してください。")); return;
     }
     const configured: ExternalCsvValueColumn[] = message.valueColumns.map((column) => ({ column: column.column, name: column.name.trim() || column.column, unit: column.unit?.trim() || undefined }));
     try {
@@ -391,7 +391,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         : { ...project, externalCsvSources: [...project.externalCsvSources.filter((source) => source.id !== id), added] });
       this.pendingExternalCsv.delete(message.importId);
     } catch (error) {
-      void vscode.window.showErrorMessage(`External CSV import failed: ${(error as Error).message}`);
+      void vscode.window.showErrorMessage(t(`External CSV import failed: ${errorText(error)}`, `外部CSVをインポートできませんでした: ${errorText(error)}`));
     }
   }
 
@@ -405,7 +405,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         externalCsvSources: removeExternalCsvSignal({ ...project, externalCsvSources: item.definitionDependencies.externalCsvSources }, sourceId, column).externalCsvSources,
       } } : item) } : removeExternalCsvSignal(project, sourceId, column));
     } catch (error) {
-      void vscode.window.showErrorMessage(`External CSV Signal removal failed: ${(error as Error).message}`);
+      void vscode.window.showErrorMessage(t(`External CSV Signal removal failed: ${errorText(error)}`, `外部CSVのシグナルを削除できませんでした: ${errorText(error)}`));
     }
   }
 

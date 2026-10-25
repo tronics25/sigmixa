@@ -1,3 +1,4 @@
+import { isTextEditing } from '../shared/keyboard';
 import type { ComparisonDefinition, ComparisonGraphDefinition, ComparisonTarget } from '../../core/project/comparison';
 import type { SignalDefinition } from '../../core/signal/signal';
 import type { ComparisonTargetStateDto, ComparisonToExtension, ComparisonToWebview } from '../../extension/comparison/comparisonProtocol';
@@ -30,6 +31,8 @@ let definitions: readonly SignalDefinition[] = [];
 let groups: readonly SignalGroupDto[] = [];
 let availability: Readonly<Record<string, readonly string[]>> = {};
 let measuredIds: readonly string[] | undefined;
+/** Until the first catalog arrives, a graph counts every Signal it was given as chosen. */
+let catalogReceived = false;
 let clipSpans: readonly { readonly id: string; readonly name: string; readonly start: number; readonly end: number }[] = [];
 const colors = new Map<string, string>();
 const cards: ComparisonCard[] = [];
@@ -69,6 +72,10 @@ const setSelection = (range: { start: number; end: number } | undefined) => {
   if (selection) rangeControls.querySelector('.clip-range')!.textContent = `${trim(selection.start)}–${trim(selection.end)} s · ${trim(selection.end - selection.start)} s`;
   cards.forEach((card) => card.scheduleDraw());
 };
+window.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || event.defaultPrevented || !selection || isTextEditing(event.target)) return;
+  event.preventDefault(); setSelection(undefined);
+});
 labeledIconButton(app.querySelector<HTMLButtonElement>('.range-zoom')!, 'zoom-in', t('Zoom to range', '選択範囲を拡大')).addEventListener('click', () => { const range = selection; if (!range) return; setSelection(undefined); time.setView(range); });
 labeledIconButton(app.querySelector<HTMLButtonElement>('.range-clear')!, 'close', t('Clear', '解除'), t('Clear selected range', '選択範囲を解除')).addEventListener('click', () => setSelection(undefined));
 const updateTimeButtons = () => { zoomAllIn.disabled = !time.canZoomIn; zoomAllOut.disabled = !time.zoomed; zoomAllReset.disabled = !time.zoomed; };
@@ -140,7 +147,7 @@ const host: GraphHost = {
 function addCard(definition: ComparisonGraphDefinition, before?: ComparisonCard): ComparisonCard {
   const card: ComparisonCard = definition.kind === 'trajectory' ? new TrajectoryCard(definition, host, list, optionsHost) : new GraphCard(definition, host, list, optionsHost);
   if (before) { list.insertBefore(card.element, before.element); cards.splice(cards.indexOf(before), 0, card); } else cards.push(card);
-  card.setCatalog(definitions, groups, measuredIds); card.request();
+  if (catalogReceived) card.setCatalog(definitions, groups, measuredIds); card.request();
   updateOptions(); return card;
 }
 
@@ -317,7 +324,7 @@ window.addEventListener('message', (event: MessageEvent<ComparisonToWebview>) =>
     case 'targets': targets = message.targets; renderTargets(); cards.forEach((card) => card.draw()); return;
     case 'clipSpans': clipSpans = message.clips; cards.forEach((card) => card.scheduleDraw()); return;
     case 'catalog':
-      definitions = message.definitions; groups = message.groups; availability = message.availability; measuredIds = message.measuredIds;
+      catalogReceived = true; definitions = message.definitions; groups = message.groups; availability = message.availability; measuredIds = message.measuredIds;
       for (const card of cards) card.setCatalog(definitions, groups, measuredIds);
       return;
     case 'series': { const graphId = pendingSeries.get(message.requestId); pendingSeries.delete(message.requestId); cards.find((card) => card.id === graphId)?.receive(message.requestId, message.seriesByTarget); return; }

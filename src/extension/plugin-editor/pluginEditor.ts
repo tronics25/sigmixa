@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import * as vscode from 'vscode';
 import type { Diagnostic } from '../../core/diagnostics/diagnostic';
 import type { ProjectStore } from '../storage/projectStore';
@@ -16,7 +17,7 @@ export class PluginEditor implements vscode.Disposable {
 
   open(id: string, preserveFocus = false): void {
     const registration = this.store.current.plugins.find((item) => item.id === id);
-    if (!registration) { void vscode.window.showErrorMessage('Plugin registration was not found.'); return; }
+    if (!registration) { void vscode.window.showErrorMessage(t('Plugin registration was not found.', "プラグインの登録が見つかりません。")); return; }
     const existing = this.panels.get(id);
     if (existing) { existing.reveal(undefined, preserveFocus); void this.sendModel(id, existing); return; }
     const panel = vscode.window.createWebviewPanel('sigmixa.pluginConfiguration', `Plugin: ${id}`, { viewColumn: vscode.ViewColumn.One, preserveFocus }, { enableScripts: true, retainContextWhenHidden: true, enableFindWidget: true });
@@ -42,8 +43,8 @@ export class PluginEditor implements vscode.Disposable {
         await this.sendModel(id, panel);
       } else if (message.type === 'addBinding') await this.addBinding(id);
       else if (message.type === 'unregister') {
-        const answer = await vscode.window.showWarningMessage(`Unregister Plugin “${id}”? Bindings and unused Plugin-owned Frames will be removed.`, { modal: true }, 'Unregister');
-        if (answer === 'Unregister') { await this.manager.unregister(id); panel.dispose(); }
+        const answer = await vscode.window.showWarningMessage(t(`Unregister Plugin “${id}”? Bindings and unused Plugin-owned Frames will be removed.`, `プラグイン「${id}」の登録を解除しますか？ 割り当てと、使われていないプラグイン提供のフレームも削除されます。`), { modal: true }, t('Unregister', '登録解除'));
+        if (answer === t('Unregister', '登録解除')) { await this.manager.unregister(id); panel.dispose(); }
       }
     } catch (error) {
       const diagnostic: Diagnostic = { id: `plugin:${id}:operation`, source: 'plugin', code: 'PLUGIN_OPERATION_FAILED', severity: 'error', message: (error as Error).message, details: { pluginId: id } };
@@ -57,8 +58,8 @@ export class PluginEditor implements vscode.Disposable {
       label: `${formatCanId(frame.canId, frame.extended)}  ${frame.name}`,
       frameId: frame.id,
     }));
-    if (!choices.length) { void vscode.window.showInformationMessage('All registered CAN Frames are already bound to this Plugin.'); return; }
-    const selected = await vscode.window.showQuickPick(choices, { title: `Bind ${pluginId} to a CAN Frame`, placeHolder: 'Select a registered Frame' });
+    if (!choices.length) { void vscode.window.showInformationMessage(t('All registered CAN Frames are already bound to this Plugin.', "登録済みのフレームはすべてこのプラグインに割り当てられています。")); return; }
+    const selected = await vscode.window.showQuickPick(choices, { title: t(`Bind ${pluginId} to a CAN Frame`, `${pluginId}をフレームに割り当て`), placeHolder: t('Select a registered Frame', "登録済みのフレームを選択") });
     if (selected) await this.manager.addBinding(pluginId, selected.frameId);
   }
 

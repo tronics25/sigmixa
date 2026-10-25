@@ -56,7 +56,7 @@ Choose Signals by Frame and inspect their values at the original event timestamp
 
 **Visualize** stacks any number of graph and trajectory views that share one time position. Each graph converts compatible units onto one axis (for example km/h from CAN and m/s from a CSV file) and shows up to two unit systems on real-value axes. Hover or pin markers to inspect original samples; hover a legend entry to emphasize a Signal. **Connect gaps** joins samples taken at different periods without changing the measured values.
 
-Trajectories draw X/Y and optional Z Signals in 2D or 3D, with several series in one view, such as the four wheels of a vehicle. Rotate, zoom, use Top/Front/Side presets, inspect points or measure between two points.
+Trajectories draw X/Y and optional Z Signals in 2D or 3D, with several series in one view, such as the four wheels of a vehicle. Rotate, zoom, view along X, Y or Z, choose a right- or left-handed coordinate system, inspect points or measure between two points.
 
 Below the views, the **trace** lists every CAN ID's latest values at the time position, with receive count, intervals and the deviation from an expected period. Play or step through time and every view follows. Export the views as SVG/PNG or as an HTML report.
 

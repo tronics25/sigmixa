@@ -84,7 +84,7 @@ canvas{display:block}
 .display-settings{border-bottom:1px solid var(--vscode-panel-border);margin:0 0 var(--sm-space-xs)}
 .display-settings[open]{padding-bottom:var(--sm-space-md)}
 .display-settings>summary{padding:var(--sm-space-md) 0;cursor:pointer;font-weight:var(--sm-weight-semibold)}
-.settings-row{display:flex;align-items:center;flex-wrap:wrap;gap:var(--sm-space-md);margin:var(--sm-space-xs) 0}
+.settings-row{display:flex;align-items:center;flex-wrap:wrap;gap:var(--sm-space-md);margin:var(--sm-space-xs) 0}.settings-row[hidden]{display:none}
 .trajectory-axes{padding:var(--sm-space-md) 0;display:grid;gap:var(--sm-space-sm)}
 .trajectory-axis-row{display:grid;grid-template-columns:72px minmax(0,1fr);align-items:center;gap:var(--sm-space-sm);font-size:var(--sm-font-small)}
 .trajectory-axis-row select{min-width:0;width:100%}

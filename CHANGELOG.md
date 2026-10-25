@@ -1,5 +1,20 @@
 # Change Log
 
+## 2.2.0 - 2026-10-25
+
+- Analysis Groups pane: the + and Open CAN Log buttons at the top act where the selection is, as in the Explorer: inside a selected group or folder; for a selected log or Clip, inside the group or folder its row is shown in (for a log added to a group, that group); and on the top level of the workspace when nothing is selected, for example after clicking empty space in the pane. In 2.1.0 they always acted on the top level.
+- Analysis Groups pane: right-clicking a log or Clip also offers Add Analysis Group, Open CAN Log and Paste Logs, and dropping logs on a log or Clip adds them to the group or folder its row is shown in. Dropping on a Clip failed before.
+- Analysis Groups pane: a group you add is selected and scrolled into view.
+- Analysis Groups pane: ⌘C / Ctrl+C copies the paths of the selected logs, and ⌘V / Ctrl+V pastes them into the group or folder of the selection.
+- Analysis Groups pane: Delete (⌘⌫ on macOS), ⌘C and ⌘V no longer act on the tree while you type in its filter box.
+- Fixed deleting logs and Clips together asking twice, where cancelling one dialog still ran the other. One confirmation now covers the whole selection, and Cancel changes nothing, including links to added logs, which were removed before even when the trash was cancelled.
+- Fixed the 3D trajectory's camera buttons mirroring the view: the same data at the same angle could look mirrored or not depending on the last button pressed. The buttons now only move the camera. A view saved mirrored by an earlier version opens unmirrored.
+- The 3D camera buttons are now **X**, **Y** and **Z** (formerly Top, Front and Side) and look along that axis from its + side, with the − side going away.
+- 3D trajectories have a new **Coordinate system** setting: Right-handed (default) or Left-handed, for axes such as X forward, Y right and Z up. It applies to every view of the graph, to the comparison screen and to exported images and reports; when Left-handed, a sideways drag still turns the view in the direction you drag. If your data looked right with Top, Front and Side before, choose Left-handed.
+- **X**, **Y**, **Z** and **Reset view** fit the whole trajectory to the view, using its full width and height, also for data far from the origin. The fit follows when the view is resized or a series is added, until you zoom, pan or rotate. Zooming in now goes up to 10,000× (before, 200×), also on the comparison screen, so that long, thin data can fill the view. A camera saved by an earlier version keeps its angle, but its size and position can differ, because the scale now follows the data instead of axis ranges that include the origin; for data far from the origin it can look much larger.
+- Fixed the Table showing “No events were found for the selected Signals.” with no Signal checked. This happened when the saved choice held only Signals the current list lacks, such as deleted or renamed ones. The Table, Visualize graphs and comparison graphs now count only the Signals shown checked and ask you to select Signals; the saved choice is kept, so those Signals are checked again if they come back.
+- Fixed axis labels with rounding noise, such as 0.6000000000000001, on graphs, comparison graphs and HTML reports. Tick values are now exact decimals.
+
 ## 2.1.0 - 2026-10-17
 
 - Graphs and trajectories of long logs miss fewer short peaks and dips when they are drawn with fewer points: each stretch keeps its first, lowest, highest and last sample (before, samples were taken at even spacing).

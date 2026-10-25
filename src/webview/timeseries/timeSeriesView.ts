@@ -1,3 +1,5 @@
+import { isTextEditing } from '../shared/keyboard';
+import { chartTicks } from '../shared/chartAxes';
 import { enhanceChoiceSelect } from '../shared/choiceGroup';
 import { buttonContextAction, type ViewContextAction } from '../shared/viewContextAction';
 import { signalAxisKey, graphDisplayPolicy, partitionActualGraphs } from '../shared/graphDisplayPolicy';
@@ -43,7 +45,9 @@ export class TimeSeriesView {
   private unsubscribeVisibility?: () => void;
   private unsubscribeRange?: () => void;
   private readonly timelineSource = crypto.randomUUID();
-  get isConfigured(): boolean { return this.selected.size > 0; }
+  get isConfigured(): boolean { return this.shown.length > 0; }
+  /** The selected Signals the graph can show (those shown checked). */
+  private get shown(): string[] { return this.selector.shownSelection(); }
   dispose(): void { this.hide(); this.lifetime.abort(); this.resizeObserver?.disconnect(); this.unsubscribeTimeline?.(); this.unsubscribePosition?.(); this.unsubscribeVisibility?.(); this.unsubscribeRange?.(); this.unsubscribeViewRange?.(); this.unsubscribeClipRanges?.(); }
   private listenWindow<K extends keyof WindowEventMap>(type: K, listener: (event: WindowEventMap[K]) => void): void { window.addEventListener(type, listener, { signal: this.lifetime.signal }); }
   private readonly selected: Set<string>;
@@ -142,7 +146,7 @@ export class TimeSeriesView {
   onCardState?: (state: ViewCardState) => void;
   setLegendLead(lead: HTMLElement): void { this.legendLead = lead; }
   /** No selected Signal has a single sample in this log, so there is nothing a graph could show. */
-  private get noData(): boolean { return this.selected.size > 0 && !this.seriesPending && !!this.fullRangeKnown && this.series.every((item) => item.globalMinimum === undefined && !item.samples.length); }
+  private get noData(): boolean { return this.shown.length > 0 && !this.seriesPending && !!this.fullRangeKnown && this.series.every((item) => item.globalMinimum === undefined && !item.samples.length); }
   private fullRangeKnown = false;
   private reportCardState(inlineTitle: boolean): void {
     const next = { inlineTitle, noData: this.noData }; if (next.inlineTitle === this.cardState.inlineTitle && next.noData === this.cardState.noData) return;
@@ -165,13 +169,13 @@ export class TimeSeriesView {
     this.elements = new ViewElements(host, optionsHost, actionsHost);
     this.selectedRange = this.timeline?.range;
     this.unsubscribeClipRanges = this.timeline?.subscribeClipRanges(() => { if (this.visible) this.draw(false); });
-    this.unsubscribeViewRange = this.timeline?.subscribeViewRange((_range, source) => { if (source !== this.timelineSource && this.selected.size) this.requestSeries(this.fullRange); });
+    this.unsubscribeViewRange = this.timeline?.subscribeViewRange((_range, source) => { if (source !== this.timelineSource && this.shown.length) this.requestSeries(this.fullRange); });
     this.unsubscribeRange = this.timeline?.subscribeRange((range, source) => { if (source === this.timelineSource) return; if (!range) { this.latestRangeRequest = ++this.counter; this.rangePending = false; } this.selectedRange = range; this.updateRangeControls(); this.draw(false); });
     this.measured = new MeasuredSamples((requestId, query) => this.post({ type: 'measuredSignalsRequest', requestId, selectedIds: query.signalIds, timestamp: query.timestamp }), () => this.scheduleInteractionDraw());
     this.selected = new Set(initial?.chartSelectedIds ?? []);
     this.colors = new Map(Object.entries(initial?.chartColors ?? {}));
     this.mode = initial?.chartMode ?? 'raw'; this.connectGaps = initial?.chartConnectGaps !== false; this.axisRange = initialAxisRange(initial); this.groupLayout = normalizeChartGroupLayout(initial?.chartGroupLayout); this.paneWidth = initial?.chartPaneWidth ?? 250; this.paneCollapsed = initial?.chartPaneCollapsed ?? false;
-    host.innerHTML = `<div class="chart-layout"><aside class="signal-pane chart-pane"><div class="chart-source-actions"><button class="import-external-csv">+ ${t('External CSV…', '外部CSV…')}</button></div><div class="external-import-host"></div><div class="chart-selector"></div></aside><div class="pane-separator"></div><section class="signal-main chart-main"><div class="view-toolbar"><button class="pane-toggle">${t('Signals', 'シグナル')}</button><div class="segmented choice-group" role="group" aria-label="${t('Display mode', '表示形式')}"><button class="mode-raw">${t('Actual (converted units)', '実値（単位換算）')}</button><button class="mode-normalized">${t('Normalized 0–100%', '正規化 0–100%')}</button></div><label class="chart-option"><input class="connect-gaps" type="checkbox">${t('Connect gaps', '欠損を補完')}</label><span class="chart-axis-global"><label class="chart-axis-mode">${t('Y axis', 'Y軸')}<select class="axis-range-mode" aria-label="${t('Y-axis range', 'Y軸範囲')}"><option value="visible">${t('Visible interval', '表示区間')}</option><option value="global">${t('All data', '全データ')}</option></select></label><label class="chart-option"><input class="axis-include-zero" type="checkbox">${t('Include 0', '0を含める')}</label></span><button class="save-chart-image">${t('Save Image…', '画像を保存…')}</button><span class="spacer"></span><span class="chart-status muted">${t('Select Signals', 'シグナルを選択')}</span><button class="analysis-cancel" hidden>${t('Cancel analysis', '解析を中止')}</button></div><div class="view-toolbar chart-navigation"><div class="segmented"><button class="zoom-out">−</button><button class="zoom-in">＋</button></div><button class="zoom-reset" disabled>${t('Reset Zoom', 'ズームをリセット')}</button><span class="view-range muted"></span><span class="spacer"></span><button class="chart-marker-clear" disabled>${t('Clear Markers', 'マーカーを全解除')}</button></div><div class="view-toolbar range-controls" hidden><strong>${t('Selected range', '選択範囲')}</strong><span class="clip-range muted"></span><span class="spacer"></span><span class="range-edge"><span class="clip-edge-label">${t('Start', '開始')}</span><span class="segmented"><button class="clip-start-prev" title="${t('Previous CAN Timestamp', '前のCANタイムスタンプ')}">◀</button><button class="clip-start-next" title="${t('Next CAN Timestamp', '次のCANタイムスタンプ')}">▶</button></span></span><span class="range-edge"><span class="clip-edge-label">${t('End', '終了')}</span><span class="segmented"><button class="clip-end-prev" title="${t('Previous CAN Timestamp', '前のCANタイムスタンプ')}">◀</button><button class="clip-end-next" title="${t('Next CAN Timestamp', '次のCANタイムスタンプ')}">▶</button></span></span><div class="range-actions segmented"><button class="range-zoom primary">${t('Zoom to Range', '選択範囲を拡大')}</button><button class="clip-create">${t('Create Clip', 'クリップ作成')}</button></div><button class="clip-clear" title="${t('Clear selected range', '選択範囲を解除')}" aria-label="${t('Clear selected range', '選択範囲を解除')}">×</button></div><div class="chart-canvas-wrap"><canvas aria-label="${t('Time-series graph. Click to add a marker; drag to select a range.', '時系列グラフ。クリックでマーカー追加、ドラッグで範囲選択。')}"></canvas><div class="chart-legend"></div><div class="chart-markers"></div></div></section></div>`;
+    host.innerHTML = `<div class="chart-layout"><aside class="signal-pane chart-pane"><div class="chart-source-actions"><button class="import-external-csv">+ ${t('External CSV…', '外部CSV…')}</button></div><div class="external-import-host"></div><div class="chart-selector"></div></aside><div class="pane-separator"></div><section class="signal-main chart-main"><div class="view-toolbar"><button class="pane-toggle">${t('Signals', 'シグナル')}</button><div class="segmented choice-group" role="group" aria-label="${t('Display mode', '表示形式')}"><button class="mode-raw">${t('Actual (converted units)', '実値（単位換算）')}</button><button class="mode-normalized">${t('Normalized 0–100%', '正規化 0–100%')}</button></div><label class="chart-option"><input class="connect-gaps" type="checkbox">${t('Connect gaps', '欠損区間を接続')}</label><span class="chart-axis-global"><label class="chart-axis-mode">${t('Y axis', 'Y軸')}<select class="axis-range-mode" aria-label="${t('Y-axis range', 'Y軸範囲')}"><option value="visible">${t('Visible interval', '表示区間')}</option><option value="global">${t('All data', '全データ')}</option></select></label><label class="chart-option"><input class="axis-include-zero" type="checkbox">${t('Include 0', '0を含める')}</label></span><button class="save-chart-image">${t('Save Image…', '画像を保存…')}</button><span class="spacer"></span><span class="chart-status muted">${t('Select Signals', 'シグナルを選択')}</span><button class="analysis-cancel" hidden>${t('Cancel analysis', '解析を中止')}</button></div><div class="view-toolbar chart-navigation"><div class="segmented"><button class="zoom-out">−</button><button class="zoom-in">＋</button></div><button class="zoom-reset" disabled>${t('Reset Zoom', 'ズームをリセット')}</button><span class="view-range muted"></span><span class="spacer"></span><button class="chart-marker-clear" disabled>${t('Clear Markers', 'マーカーを全解除')}</button></div><div class="view-toolbar range-controls" hidden><strong>${t('Selected range', '選択範囲')}</strong><span class="clip-range muted"></span><span class="spacer"></span><span class="range-edge"><span class="clip-edge-label">${t('Start', '開始')}</span><span class="segmented"><button class="clip-start-prev" title="${t('Previous CAN Timestamp', '前のCANタイムスタンプ')}">◀</button><button class="clip-start-next" title="${t('Next CAN Timestamp', '次のCANタイムスタンプ')}">▶</button></span></span><span class="range-edge"><span class="clip-edge-label">${t('End', '終了')}</span><span class="segmented"><button class="clip-end-prev" title="${t('Previous CAN Timestamp', '前のCANタイムスタンプ')}">◀</button><button class="clip-end-next" title="${t('Next CAN Timestamp', '次のCANタイムスタンプ')}">▶</button></span></span><div class="range-actions segmented"><button class="range-zoom primary">${t('Zoom to Range', '選択範囲を拡大')}</button><button class="clip-create">${t('Create Clip', 'クリップ作成')}</button></div><button class="clip-clear" title="${t('Clear selected range', '選択範囲を解除')}" aria-label="${t('Clear selected range', '選択範囲を解除')}">×</button></div><div class="chart-canvas-wrap"><canvas aria-label="${t('Time-series graph. Click to add a marker; drag to select a range.', '時系列グラフ。クリックでマーカー追加、ドラッグで範囲選択。')}"></canvas><div class="chart-legend"></div><div class="chart-markers"></div></div></section></div>`;
     this.canvas = this.elements.querySelector('canvas')!; this.pane = this.elements.querySelector('.chart-pane')!; this.separator = this.elements.querySelector('.pane-separator')!; this.status = this.elements.querySelector('.chart-status')!; this.saveImageButton = this.elements.querySelector('.save-chart-image')!;
     const mainToolbar = this.elements.querySelector<HTMLElement>('.chart-main>.view-toolbar')!; const paneToggle = iconButton(this.elements.querySelector<HTMLButtonElement>('.pane-toggle')!, 'layout-sidebar-left', t('Toggle Signal selection', 'シグナル選択を表示／非表示')); iconButton(this.saveImageButton, 'export', t('Save image', '画像を保存')); const secondary = secondaryToolbar(paneToggle, this.saveImageButton); secondary.setAttribute('aria-label', t('Secondary actions', '補助操作')); mainToolbar.appendChild(secondary);
     this.selector = new SignalSelector({
@@ -218,10 +222,10 @@ export class TimeSeriesView {
     this.listenWindow('mouseup', (event) => { if (this.selectionAnchor !== undefined && event.target !== this.canvas) this.endRangeSelection(event); });
     this.listenWindow('mousemove', (event) => this.updateClipEdit(event));
     this.listenWindow('mouseup', (event) => this.endClipEdit(event));
-    this.listenWindow('keydown', (event) => { if (event.key === 'Escape' && this.clipEdit) { event.preventDefault(); this.endClipEdit(undefined); } });
+    this.listenWindow('keydown', (event) => { if (event.key !== 'Escape' || event.defaultPrevented) return; if (this.clipEdit) { event.preventDefault(); this.endClipEdit(undefined); } else if (this.visible && (this.selectedRange || this.selectionAnchor !== undefined) && !isTextEditing(event.target)) { event.preventDefault(); this.selectionAnchor = undefined; this.selectionAnchorClientX = undefined; this.clearSelectedRange(); } });
     (this.resizeObserver = new ResizeObserver(() => this.draw())).observe(this.elements.querySelector('.chart-canvas-wrap')!);
     this.applyPane(); this.updateModeButtons(); this.updateRangeControls(); this.updateMarkerControls(); this.updateStatus();
-    this.unsubscribeTimeline = this.timeline?.subscribe((timestamp, source) => { if (source === this.timelineSource) return; this.cursorTimestamp = timestamp; if (this.visible && this.selected.size) this.scheduleInteractionDraw(); });
+    this.unsubscribeTimeline = this.timeline?.subscribe((timestamp, source) => { if (source === this.timelineSource) return; this.cursorTimestamp = timestamp; if (this.visible && this.shown.length) this.scheduleInteractionDraw(); });
     this.unsubscribePosition = this.timeline?.subscribePosition(() => { if (this.visible) this.scheduleInteractionDraw(); });
     this.unsubscribeVisibility = this.timeline?.subscribePositionVisibility(() => { if (this.visible) this.scheduleInteractionDraw(); });
     if (optionsHost) {
@@ -279,7 +283,7 @@ export class TimeSeriesView {
   show(): void {
     const wasVisible = this.visible; this.visible = true;
     if (!this.catalogRequested) { this.catalogRequested = true; this.latestCatalogRequest = ++this.counter; this.post({ type: 'signalCatalogRequest', requestId: this.latestCatalogRequest, view: 'timeSeries' }); }
-    else if (!wasVisible && this.selected.size) this.requestSeries();
+    else if (!wasVisible && this.shown.length) this.requestSeries();
     this.draw();
   }
   hide(): void { this.visible = false; this.cursorTimestamp = undefined; this.hoverGraphIndex = undefined; this.measured.update([]); }
@@ -292,8 +296,8 @@ export class TimeSeriesView {
       this.renderImportWizard();
     } else if (message.type === 'signalCatalog' && message.requestId === this.latestCatalogRequest) {
       message.definitions.forEach((definition, index) => { if (!this.colors.has(definition.id)) this.colors.set(definition.id, SIGNAL_COLOR_PRESETS[index % SIGNAL_COLOR_PRESETS.length]); });
-      this.catalogDefinitions = message.definitions; this.applyDisplayPolicy(); this.persist();
-      this.selector.setCatalog(message.definitions, message.groups, message); if (this.selected.size) this.requestSeries(); else { this.updateStatus(); this.updateZoomControls(); this.draw(); }
+      this.catalogDefinitions = message.definitions; this.applyDisplayPolicy();
+      this.selector.setCatalog(message.definitions, message.groups, message); this.persist(); this.requestSeries();
     } else if (message.type === 'signalSeries' && message.requestId === this.latestSeriesRequest) {
       this.measured.invalidate();
       this.seriesPending = false; this.series = message.series; this.fullRange = message.fullRange; this.fullRangeKnown = true;
@@ -305,16 +309,16 @@ export class TimeSeriesView {
     } else if (message.type === 'analysisProgress') {
       const percent = message.total ? Math.floor(message.processed / message.total * 100) : 100; this.status.textContent = `${t('Analyzing', '解析中')} ${percent}% · ${message.processed.toLocaleString()} ${t('frames', 'フレーム')}`; (this.elements.querySelector('.analysis-cancel') as HTMLButtonElement).hidden = false;
     } else if (message.type === 'analysisComplete') {
-      (this.elements.querySelector('.analysis-cancel') as HTMLButtonElement).hidden = true; if (this.visible && this.selected.size) this.requestSeries(); else this.updateStatus();
+      (this.elements.querySelector('.analysis-cancel') as HTMLButtonElement).hidden = true; if (this.visible && this.shown.length) this.requestSeries(); else this.updateStatus();
     } else if (message.type === 'definitionsChanged') {
       this.measured.invalidate();
-      this.catalogRequested = false; this.latestSeriesRequest = 0; this.seriesPending = this.selected.size > 0; this.series = []; this.fullRange = undefined; this.viewRange = undefined; this.requestedViewRange = undefined; this.updateStatus(); this.updateZoomControls(); if (this.visible) this.show();
+      this.catalogRequested = false; this.selector.expectCatalog(); this.latestSeriesRequest = 0; this.seriesPending = this.shown.length > 0; this.series = []; this.fullRange = undefined; this.viewRange = undefined; this.requestedViewRange = undefined; this.updateStatus(); this.updateZoomControls(); if (this.visible) this.show();
     } else if (message.type === 'clipCreated') {
       this.clearRangeSelection();
     } else if (message.type === 'timeRangeAdjusted' && message.requestId === this.latestRangeRequest) {
       this.rangePending = false; this.selectedRange = { start: message.startTimestamp, end: message.endTimestamp }; const edge = this.activeRangeEdge; if (edge) this.cursorTimestamp = this.selectedRange[edge]; this.hoverGraphIndex = findGraphIndexBySignals(timeSeriesGraphSignalIds(timeSeriesGraphs(this.series, this.mode, this.groupLayout)), this.rangeSignalIds); this.updateRangeControls(); this.draw(false);
-    } else if (message.type === 'progress' && this.visible && this.selected.size) this.scheduleSeriesRefresh();
-    else if (message.type === 'parseComplete' && this.visible && this.selected.size) this.requestSeries();
+    } else if (message.type === 'progress' && this.visible && this.shown.length) this.scheduleSeriesRefresh();
+    else if (message.type === 'parseComplete' && this.visible && this.shown.length) this.requestSeries();
   }
 
   private selectionChanged(): void { this.series = []; this.applyDisplayPolicy(); this.persist(); this.updateRangeControls(); this.requestSeries(); }
@@ -392,7 +396,7 @@ export class TimeSeriesView {
   private requestSeries(range = this.viewRange, navigate = false): void {
     if (navigate) this.timeline?.setViewRange(range && this.fullRange && range.start <= this.fullRange.start && range.end >= this.fullRange.end ? undefined : range, this.timelineSource);
     else range = this.timeline?.viewRange ?? range;
-    if (!this.selected.size) { this.seriesPending = false; this.series = []; this.fullRange = undefined; this.viewRange = undefined; this.requestedViewRange = undefined; this.updateStatus(); this.updateZoomControls(); this.draw(); return; } this.seriesPending = true; this.requestedViewRange = range ? { ...range } : undefined; this.updateStatus(); this.updateExportAction(); this.latestSeriesRequest = ++this.counter; this.post({ type: 'signalSeriesRequest', requestId: this.latestSeriesRequest, selectedIds: [...this.selected], range: this.requestedViewRange, maxPoints: 4000 }); if (!this.series.length) this.draw(); }
+    if (!this.shown.length) { this.seriesPending = false; this.series = []; this.fullRange = undefined; this.viewRange = undefined; this.requestedViewRange = undefined; this.updateStatus(); this.updateZoomControls(); this.draw(); return; } this.seriesPending = true; this.requestedViewRange = range ? { ...range } : undefined; this.updateStatus(); this.updateExportAction(); this.latestSeriesRequest = ++this.counter; this.post({ type: 'signalSeriesRequest', requestId: this.latestSeriesRequest, selectedIds: this.shown, range: this.requestedViewRange, maxPoints: 4000 }); if (!this.series.length) this.draw(); }
   private scheduleSeriesRefresh(): void { if (this.refreshTimer !== undefined) return; this.refreshTimer = window.setTimeout(() => { this.refreshTimer = undefined; if (this.visible) this.requestSeries(); }, 250); }
 
   private zoom(factor: number, centerTimestamp?: number): void {
@@ -448,7 +452,7 @@ export class TimeSeriesView {
   private updateRangeControls(): void {
     this.canvas.setAttribute('aria-label', this.selectedRange ? t('Time-series graph. Click to clear the selected range; drag to replace it.', '時系列グラフ。クリックで範囲選択を解除、ドラッグで選択範囲を変更。') : t('Time-series graph. Click to add a marker; drag to select a range.', '時系列グラフ。クリックでマーカー追加、ドラッグで範囲選択。'));
     this.timeline?.setRange(this.selectedRange, this.timelineSource);
-    const range = this.selectedRange; const valid = Boolean(range && range.end > range.start && this.selected.size && !this.rangePending);
+    const range = this.selectedRange; const valid = Boolean(range && range.end > range.start && this.shown.length && !this.rangePending);
     const controls = this.elements.querySelector<HTMLElement>('.range-controls')!; const visible = Boolean(range && this.selectionAnchor === undefined); controls.hidden = this.actionsHost ? true : !visible;
     this.elements.querySelector<HTMLElement>('.chart-navigation')!.hidden = this.actionsHost ? true : visible;
     (this.elements.querySelector('.range-zoom') as HTMLButtonElement).disabled = !valid;
@@ -464,7 +468,7 @@ export class TimeSeriesView {
   /** True once this graph has data, so it can drive the shared time axis. */
   get canZoom(): boolean { return !!this.fullRange; }
   /** Shows exactly `range` on the time axis, keeping the selection. */
-  zoomToRange(range: { start: number; end: number }): void { if (range.end > range.start && this.selected.size) this.requestSeries({ ...range }, true); }
+  zoomToRange(range: { start: number; end: number }): void { if (range.end > range.start && this.shown.length) this.requestSeries({ ...range }, true); }
   adjustSelectedRange(edge: 'start' | 'end', direction: -1 | 1): void { this.adjustRange(edge, direction); }
   clearSelectedRange(): void { this.clearRangeSelection(); }
   createClipFromSelectedRange(): void { if (this.selectedRange && this.selectedRange.end > this.selectedRange.start && !this.rangePending) this.post({ type: 'createClip', startTimestamp: this.selectedRange.start, endTimestamp: this.selectedRange.end, signalIds: [] }); }
@@ -489,7 +493,7 @@ export class TimeSeriesView {
   private draw(renderControls = true): void {
     this.updateMeasuredSamples();
     if (!this.visible) return; const wrapper = this.canvas.parentElement!; const width = Math.max(1, wrapper.clientWidth); const graphCount = Math.max(1, timeSeriesGraphs(this.series, this.mode, this.groupLayout).length); if (renderControls || this.legendHeights.length !== graphCount) this.legendHeights = this.renderLegend(width); this.axisGutters = this.measureAxisGutters(width, true); let legendTop = 0; this.elements.querySelectorAll<HTMLElement>('.chart-legend-group').forEach((row, index) => { row.style.top = `${legendTop}px`; legendTop += (this.legendHeights[index] ?? 0) + this.plotHeight + (this.axisGutters[index] ?? 0); }); const contentHeight = this.axisGutters.reduce((a, b) => a + b, 0) + graphCount * this.plotHeight + this.legendHeights.reduce((sum, value) => sum + value, 0); const height = contentHeight; const ratio = window.devicePixelRatio || 1; this.canvas.width = width * ratio; this.canvas.height = height * ratio; this.canvas.style.width = `${width}px`; this.canvas.style.height = `${height}px`; const context = this.canvas.getContext('2d')!; context.scale(ratio, ratio); context.clearRect(0, 0, width, height); context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height); if (renderControls) this.updateZoomControls();
-    if (!this.series.length || !this.viewRange) { context.font = '12px sans-serif'; context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.fillText(this.seriesPending ? t('Loading selected Signals…', '選択したシグナルを読み込んでいます…') : this.selected.size ? t('No samples in this range.', 'この範囲にサンプルがありません。') : this.optionsHost ? t('Select Signals in Graph settings.', 'グラフ設定でシグナルを選択してください。') : t('Select Signals from the left pane.', '左側からシグナルを選択してください。'), 24, 34); this.updateExportAction(); return; }
+    if (!this.series.length || !this.viewRange) { context.font = '12px sans-serif'; context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.fillText(this.seriesPending ? t('Loading selected Signals…', '選択したシグナルを読み込んでいます…') : this.shown.length ? t('No samples in this range.', 'この範囲にサンプルがありません。') : this.optionsHost ? t('Select Signals in Graph settings.', 'グラフ設定でシグナルを選択してください。') : t('Select Signals from the left pane.', '左側からシグナルを選択してください。'), 24, 34); this.updateExportAction(); return; }
     this.paintChart(context, width, height, 0, 0, true, this.legendHeights); this.updateExportAction();
   }
 
@@ -515,7 +519,7 @@ export class TimeSeriesView {
     for (let graphIndex = 0; graphIndex < graphCount; graphIndex++) {
       const legendHeight = legendHeights[graphIndex] ?? 0; const blockTop = top + precedingHeight; const graphTop = blockTop + legendHeight; const laneTop = graphTop + 30; const laneHeight = (interactions ? this.plotHeight : GRAPH_HEIGHT) - 58; const pair = graphs[graphIndex] ?? []; const hoverValues: CanvasHoverValue[] = []; const markerValues = new Map<string, CanvasHoverValue[]>(); if (!interactions) this.paintGraphLegend(context, pair, width, blockTop); precedingHeight += legendHeight + (interactions ? this.plotHeight : GRAPH_HEIGHT) + (gutters[graphIndex] ?? 0);
       context.strokeStyle = css('--vscode-panel-border', '#777'); context.strokeRect(left, laneTop, plotW, laneHeight);
-      for (let tick = 0; tick <= 5; tick++) { const px = left + plotW * tick / 5; context.globalAlpha = .48; context.beginPath(); context.moveTo(px, laneTop); context.lineTo(px, laneTop + laneHeight); context.stroke(); context.globalAlpha = 1; const timestamp = this.viewRange.start + (this.viewRange.end - this.viewRange.start) * tick / 5; const label = `${formatNumber(timestamp)}s`; const labelWidth = context.measureText(label).width; context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.fillText(label, Math.max(left, Math.min(left + plotW - labelWidth, px - labelWidth / 2)), laneTop + laneHeight + 20); }
+      for (const timestamp of chartTicks(this.viewRange.start, this.viewRange.end, Math.max(1, Math.min(5, Math.floor(plotW / 100))))) { const px = x(timestamp); context.globalAlpha = .48; context.beginPath(); context.moveTo(px, laneTop); context.lineTo(px, laneTop + laneHeight); context.stroke(); context.globalAlpha = 1; const label = `${timestamp} s`; const labelWidth = context.measureText(label).width; context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.fillText(label, Math.max(left, Math.min(left + plotW - labelWidth, px - labelWidth / 2)), laneTop + laneHeight + 20); }
       pair.forEach((group, axisIndex) => {
         const range = this.mode === 'normalized' ? { minimum: 0, maximum: 100 } : displaySeriesRange(group.items, this.axisRange, this.viewRange, group.displayUnit); let { minimum, maximum } = range; if (minimum === maximum) { const pad = Math.abs(minimum) * .05 || 1; minimum -= pad; maximum += pad; }
         const y = (value: number) => laneTop + (1 - (value - minimum) / (maximum - minimum)) * laneHeight; const rightAxis = axisIndex % 2 === 1; const axisX = rightAxis ? left + plotW + Math.floor(axisIndex / 2) * axisWidth : left - Math.floor(axisIndex / 2) * axisWidth;
@@ -524,11 +528,11 @@ export class TimeSeriesView {
         context.fillText(ellipsize(context, group.label, Math.max(1, axisWidth - 14)), axisX + (rightAxis ? 7 : -7), graphTop + 16);
         context.strokeStyle = axisColor; context.beginPath(); context.moveTo(axisX, laneTop); context.lineTo(axisX, laneTop + laneHeight); context.stroke();
         context.font = '11px sans-serif';
-        for (let tick = 0; tick <= 4; tick++) {
-          const py = laneTop + laneHeight * tick / 4; const value = maximum - (maximum - minimum) * tick / 4;
+        for (const value of chartTicks(minimum, maximum, 4)) {
+          const py = y(value);
           if (axisIndex === 0) { context.save(); context.strokeStyle = css('--vscode-panel-border', '#777'); context.globalAlpha = .58; context.beginPath(); context.moveTo(left, py); context.lineTo(left + plotW, py); context.stroke(); context.restore(); }
           context.beginPath(); context.moveTo(axisX, py); context.lineTo(axisX + (rightAxis ? 4 : -4), py); context.stroke();
-          const label = formatNumber(value);
+          const label = String(value);
           context.save(); context.translate(axisX + (rightAxis ? 7 : -7), Math.min(laneTop + laneHeight - 2, py + 4));
           context.scale(Math.min(1, Math.max(1, axisWidth - 14) / Math.max(1, context.measureText(label).width)), 1);
           context.fillText(label, 0, 0); context.restore();
@@ -635,7 +639,7 @@ export class TimeSeriesView {
   }
 
   private hover(event: MouseEvent): void {
-    if (!this.viewRange || !this.selected.size) return;
+    if (!this.viewRange || !this.shown.length) return;
     const timestamp = this.timestampAt(event);
     if (timestamp === undefined) { this.cursorTimestamp = undefined; this.timeline?.set(undefined, this.timelineSource); this.hoverGraphIndex = undefined; this.scheduleInteractionDraw(); return; }
     const rect = this.canvas.getBoundingClientRect();
@@ -646,7 +650,7 @@ export class TimeSeriesView {
   private addMarker(event: MouseEvent): void {
     if (this.suppressNextClick) { this.suppressNextClick = false; return; }
     if (this.selectedRange) { this.clearRangeSelection(); return; }
-    const timestamp = this.timestampAt(event); if (timestamp === undefined || !this.selected.size) return;
+    const timestamp = this.timestampAt(event); if (timestamp === undefined || !this.shown.length) return;
     const rect = this.canvas.getBoundingClientRect(); const graphIndex = graphIndexAtOffset(event.clientY - rect.top, this.legendHeights, this.axisGutters, this.plotHeight); if (graphIndex === undefined) return;
     this.addMarkerAt(timestamp, graphIndex);
   }
@@ -709,7 +713,7 @@ export class TimeSeriesView {
     this.scheduleInteractionDraw();
   }
   private updateStatus(): void {
-    if (!this.selected.size) this.status.textContent = t('Select Signals', 'シグナルを選択');
+    if (!this.shown.length) this.status.textContent = t('Select Signals', 'シグナルを選択');
     else if (this.seriesPending) this.status.textContent = t('Loading selected Signals…', '選択したシグナルを読み込み中…');
     else this.status.textContent = `${this.series.length} ${t('series', '系列')} · ${this.series.reduce((sum, item) => sum + item.totalSamplesInRange, 0).toLocaleString()} ${t('source samples', '元サンプル')}`;
   }

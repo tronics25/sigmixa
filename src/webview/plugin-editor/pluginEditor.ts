@@ -1,3 +1,4 @@
+import { diagnosticText } from '../../shared/diagnosticText';
 import { enhanceChoiceSelect } from '../shared/choiceGroup';
 import { COMPONENT_STYLES, DESIGN_TOKENS } from '../shared/designTokens';
 import { EDITABLE_TABLE_STYLES } from '../shared/dataTableStyle';
@@ -29,7 +30,7 @@ function render(model: PluginEditorModel): void {
   const enabledLabel = document.createElement('label'); enabledLabel.append(enable, ` ${t('Enabled', '有効')}`); card.appendChild(enabledLabel);
   const meta = document.createElement('div'); meta.className = 'meta';
   addMeta(meta, t('Version', 'バージョン'), model.registration.version); addMeta(meta, t('Source', '参照元'), model.registration.source);
-  addMeta(meta, t('Load state', '読み込み状態'), model.loaded ? t('Loaded', '読み込み済み') : `${t('Failed', '失敗')}: ${model.loadMessage ?? t('Unknown error', '不明なエラー')}`, model.loaded ? 'status-ok' : 'status-error');
+  addMeta(meta, t('Load state', '読み込み状態'), model.loaded ? t('Loaded', '読み込み済み') : `${t('Failed', '失敗')}: ${model.loadMessage ? diagnosticText(model.loadMessage, document.documentElement.lang) : t('Unknown error', '不明なエラー')}`, model.loaded ? 'status-ok' : 'status-error');
   card.appendChild(meta); content.appendChild(card);
 
   heading(t('Frame Bindings', 'フレーム割り当て'));
@@ -201,5 +202,5 @@ function showDiagnostics(items: readonly { severity: string; code: string; messa
   const host = document.getElementById('diagnostics'); if (!host) return; host.replaceChildren();
   if (!items.length) { host.textContent = t('No Plugin diagnostics.', 'プラグインの診断はありません。'); host.className = 'card diagnostics muted'; return; }
   host.className = 'card diagnostics';
-  for (const item of items) { const row = document.createElement('div'); row.className = 'diag-' + item.severity; row.textContent = item.severity.toUpperCase() + ' · ' + item.code + ': ' + item.message; host.appendChild(row); }
+  for (const item of items) { const row = document.createElement('div'); row.className = 'diag-' + item.severity; row.textContent = item.severity.toUpperCase() + ' · ' + item.code + ': ' + diagnosticText(item.message, document.documentElement.lang); host.appendChild(row); }
 }

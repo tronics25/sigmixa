@@ -19,7 +19,7 @@ export function downsampleEven<T>(items: readonly T[], limit: number): readonly 
 
 /**
  * Thins samples without losing their shape: they are cut into equal runs, and of each run the first, the last, the lowest
- * and the highest of every measure are kept, and every one `keep` asks for (the ends of a break in the line). Peaks, dips and
+ * and the highest of every measure are kept, plus the first and last item `keep` asks for in each run. Peaks, dips and
  * short events therefore survive, where even spacing (`downsampleEven`) can step over them. Kept items are the originals:
  * their time and value are never changed.
  */
@@ -27,7 +27,7 @@ export function downsampleExtremes<T>(items: readonly T[], limit: number, measur
   const count = Math.max(0, Math.floor(limit));
   if (count === 0 || items.length === 0) return [];
   if (items.length <= count) return items;
-  const perRun = 3 + 2 * measures(items[0]).length;
+  const perRun = 4 + 2 * measures(items[0]).length;
   if (count < perRun) return downsampleEven(items, count);
   // A run keeps at most `perRun` samples, mostly fewer (one sample is often both the first and the lowest): start with the
   // runs that surely fit, then use more runs while the result stays within the limit.
@@ -44,16 +44,17 @@ function extremesOfRuns<T>(items: readonly T[], runs: number, measures: (item: T
   const width = measures(items[0]).length; const result: T[] = [];
   for (let run = 0; run < runs; run++) {
     const start = Math.floor(run * items.length / runs); const end = Math.floor((run + 1) * items.length / runs); if (end <= start) continue;
-    const low = new Array<number>(width).fill(-1); const high = new Array<number>(width).fill(-1); const lowValue: number[] = []; const highValue: number[] = []; const kept: number[] = [];
+    const low = new Array<number>(width).fill(-1); const high = new Array<number>(width).fill(-1); const lowValue: number[] = []; const highValue: number[] = [];
+    let firstKept = -1; let lastKept = -1;
     for (let index = start; index < end; index++) {
-      const item = items[index]; if (keep(item)) kept.push(index);
+      const item = items[index]; if (keep(item)) { if (firstKept < 0) firstKept = index; lastKept = index; }
       measures(item).forEach((value, axis) => {
         if (!Number.isFinite(value)) return;
         if (low[axis] < 0 || value < lowValue[axis]) { low[axis] = index; lowValue[axis] = value; }
         if (high[axis] < 0 || value > highValue[axis]) { high[axis] = index; highValue[axis] = value; }
       });
     }
-    for (const index of [...new Set([start, end - 1, ...kept, ...low, ...high])].filter((value) => value >= 0).sort((a, b) => a - b)) result.push(items[index]);
+    for (const index of [...new Set([start, end - 1, firstKept, lastKept, ...low, ...high])].filter((value) => value >= 0).sort((a, b) => a - b)) result.push(items[index]);
   }
   return result;
 }

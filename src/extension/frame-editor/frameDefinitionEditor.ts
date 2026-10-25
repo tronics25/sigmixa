@@ -25,7 +25,7 @@ export class FrameDefinitionEditor implements vscode.Disposable {
   async create(prefill: NewFramePrefill = {}): Promise<void> {
     if (!this.store.requireWorkspace()) return;
     const defaultId = prefill.canId === undefined ? '' : formatCanId(prefill.canId, prefill.extended === true);
-    const idText = await vscode.window.showInputBox({ title: 'Register CAN Frame', prompt: 'CAN ID', value: defaultId, validateInput: (value) => parseCanId(value) ? undefined : 'Enter a valid CAN ID.' });
+    const idText = await vscode.window.showInputBox({ title: t('Register CAN Frame', "フレームを登録"), prompt: 'CAN ID', value: defaultId, validateInput: (value) => parseCanId(value) ? undefined : t('Enter a valid CAN ID.', "有効なCAN IDを入力してください。") });
     if (!idText) return;
     const parsed = parseCanId(idText);
     if (!parsed) return;
@@ -34,7 +34,7 @@ export class FrameDefinitionEditor implements vscode.Disposable {
     // In a group, a CAN ID already defined above it starts from that definition (name, length, Signals).
     const id = `frame-${randomUUID()}`;
     const template = prefill.groupId ? overrideTemplate(this.store.current, prefill.groupId, parsed.canId, parsed.extended, id) : undefined;
-    const name = await vscode.window.showInputBox({ title: 'Register CAN Frame', prompt: template ? `Frame name (starts from the definition above: ${template.name})` : 'Frame name', value: template?.name ?? 'New Frame', validateInput: (value) => value.trim() ? undefined : 'Frame name is required.' });
+    const name = await vscode.window.showInputBox({ title: t('Register CAN Frame', "フレームを登録"), prompt: template ? t(`Frame name (starts from the definition above: ${template.name})`, `フレーム名（上の定義「${template.name}」を元に作成）`) : t('Frame name', "フレーム名"), value: template?.name ?? 'New Frame', validateInput: (value) => value.trim() ? undefined : t('Frame name is required.', "フレーム名を入力してください。") });
     if (!name) return;
     const frame: ManualFrameDefinition = template ? { ...template, name: name.trim() } : {
       id,
@@ -52,7 +52,7 @@ export class FrameDefinitionEditor implements vscode.Disposable {
 
   open(frameId: string, focusSignalId?: string, groupId?: string, preserveFocus = false): void {
     const frame = this.frames(groupId).find((item) => item.id === frameId);
-    if (!frame) { void vscode.window.showErrorMessage('CAN frame definition was not found.'); return; }
+    if (!frame) { void vscode.window.showErrorMessage(t('CAN frame definition was not found.', "フレーム定義が見つかりません。")); return; }
     const panelKey = `${groupId ?? 'common'}:${frameId}`;
     const existing = this.panels.get(panelKey);
     if (existing) { existing.reveal(undefined, preserveFocus); return; }

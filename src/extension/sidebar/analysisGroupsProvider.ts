@@ -16,9 +16,10 @@ import { resolveClipPath } from '../clips/clipPaths';
 export type AnalysisTreeNode =
   | { readonly kind: 'group'; readonly group?: AnalysisGroup; readonly folder: string }
   | { readonly kind: 'folder'; readonly folder: string }
-  | { readonly kind: 'file'; readonly filePath: string; readonly located: string; readonly groupId?: string; readonly external?: boolean; readonly listed?: boolean }
+  /** `parent`: the group or folder the row is shown in ('' = the workspace top level). */
+  | { readonly kind: 'file'; readonly filePath: string; readonly located: string; readonly groupId?: string; readonly external?: boolean; readonly listed?: boolean; readonly parent?: string }
   /** `level`: the place the Clip is shown in, whose definitions and view settings it opens with. */
-  | { readonly kind: 'clip'; readonly clip: ClipDefinition; readonly level: string };
+  | { readonly kind: 'clip'; readonly clip: ClipDefinition; readonly level: string; readonly parent?: string };
 
 /** The level whose definitions a log uses, from where it was opened (undefined = the common definitions only). */
 export function sourceGroup(store: ProjectStore, uri: vscode.Uri | string): AnalysisGroup | undefined {
@@ -39,7 +40,7 @@ export class AnalysisGroupsProvider implements vscode.TreeDataProvider<AnalysisT
 
   getChildren(node?: AnalysisTreeNode): AnalysisTreeNode[] {
     if (node?.kind === 'clip') return [];
-    if (node?.kind === 'file') return this.clipsOf(node.filePath).map((clip) => ({ kind: 'clip', clip, level: node.external ? '' : node.groupId ?? '' }));
+    if (node?.kind === 'file') return this.clipsOf(node.filePath).map((clip) => ({ kind: 'clip', clip, level: node.external ? '' : node.groupId ?? '', parent: node.parent }));
     const folder = node ? node.folder : '';
     const missing = this.missingClipSources();
     const folders = new Set<string>();
@@ -56,13 +57,27 @@ export class AnalysisGroupsProvider implements vscode.TreeDataProvider<AnalysisT
       const group = this.store.current.analysisGroups?.find((item) => item.id === child);
       return this.store.levels.includes(child) ? { kind: 'group', group, folder: child } : { kind: 'folder', folder: child };
     });
-    for (const log of this.store.logs.filter((item) => item.level === undefined && here(item.path)).sort((a, b) => a.path.localeCompare(b.path))) children.push(this.fileNode(log));
+    for (const log of this.store.logs.filter((item) => item.level === undefined && here(item.path)).sort((a, b) => a.path.localeCompare(b.path))) children.push(this.fileNode(log, folder));
     // Added logs are listed under the level that added them, wherever the files are.
-    for (const log of this.store.logs.filter((item) => item.level === folder && (!folder || this.store.levels.includes(folder))).sort((a, b) => path.basename(a.path).localeCompare(path.basename(b.path)))) children.push(this.fileNode(log));
-    for (const source of missing.filter(here)) children.push(this.fileNode({ path: source }));
+    for (const log of this.store.logs.filter((item) => item.level === folder && (!folder || this.store.levels.includes(folder))).sort((a, b) => path.basename(a.path).localeCompare(path.basename(b.path)))) children.push(this.fileNode(log, folder));
+    for (const source of missing.filter(here)) children.push(this.fileNode({ path: source }, folder));
     // Clips of logs outside the workspace (from before analysis groups were folders) stay listed at the top level.
-    if (!folder) for (const source of this.externalClipSources()) children.push({ kind: 'file', filePath: source, located: source, external: true });
+    if (!folder) for (const source of this.externalClipSources()) children.push({ kind: 'file', filePath: source, located: source, external: true, parent: '' });
     return children;
+  }
+
+  /** The row a row is shown under, so VS Code can reveal a row (such as a new group) in the tree. */
+  getParent(node: AnalysisTreeNode): AnalysisTreeNode | undefined {
+    if (node.kind === 'clip') {
+      const parent = node.parent ? this.placeNode(node.parent) : undefined; const source = path.resolve(resolveClipPath(node.clip, this.root()));
+      return this.getChildren(parent).find((item) => item.kind === 'file' && path.resolve(item.filePath) === source);
+    }
+    const parent = node.kind === 'file' ? node.parent ?? '' : path.posix.dirname(node.folder) === '.' ? '' : path.posix.dirname(node.folder);
+    return parent ? this.placeNode(parent) : undefined;
+  }
+  /** The row of a group or folder. */
+  placeNode(folder: string): AnalysisTreeNode {
+    return this.store.levels.includes(folder) ? { kind: 'group', group: this.store.current.analysisGroups?.find((item) => item.id === folder), folder } : { kind: 'folder', folder };
   }
 
   getTreeItem(node: AnalysisTreeNode): vscode.TreeItem {
@@ -103,10 +118,10 @@ export class AnalysisGroupsProvider implements vscode.TreeDataProvider<AnalysisT
   }
 
   private root(): string { return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? ''; }
-  private fileNode(log: WorkspaceLog): AnalysisTreeNode {
+  private fileNode(log: WorkspaceLog, parent: string): AnalysisTreeNode {
     const listed = log.level !== undefined; const filePath = path.isAbsolute(log.path) ? log.path : path.join(this.root(), ...log.path.split('/'));
     const level = levelOfLog(this.store.levels, log);
-    return { kind: 'file', filePath, located: log.path, groupId: level || undefined, listed };
+    return { kind: 'file', filePath, located: log.path, groupId: level || undefined, listed, parent };
   }
   /** A log's Clips: the same ones wherever the log is shown. */
   private clipsOf(filePath: string): ClipDefinition[] {

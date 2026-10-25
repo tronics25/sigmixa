@@ -1,5 +1,6 @@
 import type { SignalSample } from '../signal/signal';
 import { downsampleExtremes } from '../timeline/timeline';
+import { tickStep, tickValue } from '../chart/axisTicks';
 
 export interface TrajectoryPoint {
   readonly timestamp: number; readonly x: number; readonly y: number; readonly z?: number;
@@ -17,7 +18,11 @@ export interface TrajectoryMeasurement {
   readonly pathLength: number;
   readonly averageSpeed?: number;
 }
-export interface TrajectoryViewTransform { readonly yaw: number; readonly pitch: number; readonly zoom: number; readonly panX: number; readonly panY: number; readonly mirrorHorizontal?: boolean; }
+/** Where the 3D camera is. It only moves the camera: the handedness of the scene is `TrajectoryCoordinateSystem`. */
+export interface TrajectoryViewTransform { readonly yaw: number; readonly pitch: number; readonly zoom: number; readonly panX: number; readonly panY: number; }
+/** Handedness of the X/Y/Z axes, a setting of the graph. Left-handed shows every view as the mirror image of the right-handed one. */
+export type TrajectoryCoordinateSystem = 'right' | 'left';
+export type TrajectoryViewPreset = 'x' | 'y' | 'z' | 'reset';
 export type TrajectoryTrail = { readonly type: 'all' } | { readonly type: 'to-current' } | { readonly type: 'last-seconds'; readonly seconds: number };
 
 export function buildTrajectoryPoints(
@@ -49,17 +54,56 @@ export function trailAt(points: readonly TrajectoryPoint[], current: number, tra
 }
 
 export function defaultTrajectoryView(): TrajectoryViewTransform { return { yaw: Math.PI / 4, pitch: Math.atan(1 / Math.sqrt(2)), zoom: 1, panX: 0, panY: 0 }; }
-export function presetTrajectoryView(preset: 'top' | 'front' | 'side' | 'reset'): TrajectoryViewTransform {
-  if (preset === 'top') return { yaw: Math.PI, pitch: Math.PI / 2, zoom: 1, panX: 0, panY: 0, mirrorHorizontal: true };
-  if (preset === 'front') return { yaw: 0, pitch: 0, zoom: 1, panX: 0, panY: 0, mirrorHorizontal: true };
-  if (preset === 'side') return { yaw: Math.PI / 2, pitch: 0, zoom: 1, panX: 0, panY: 0, mirrorHorizontal: true };
+/** Looks from the + side of the axis, with its − side going away. Right-handed: X shows Y right and Z up, Y shows X left and Z up, Z shows X right and Y up (as in 2D). */
+export function presetTrajectoryView(preset: TrajectoryViewPreset): TrajectoryViewTransform {
+  if (preset === 'x') return { yaw: 0, pitch: 0, zoom: 1, panX: 0, panY: 0 };
+  if (preset === 'y') return { yaw: Math.PI / 2, pitch: 0, zoom: 1, panX: 0, panY: 0 };
+  if (preset === 'z') return { yaw: -Math.PI / 2, pitch: Math.PI / 2, zoom: 1, panX: 0, panY: 0 };
   return defaultTrajectoryView();
 }
 
-export function projectPoint3d(point: { x: number; y: number; z: number }, view: TrajectoryViewTransform): { x: number; y: number; depth: number } {
+/**
+ * Where a 3D scene is centred and how large it is at zoom 1: the middle and the widest extent of the data itself.
+ * (Not the rounded axis ranges, which always reach 0 and so shrank data far from the origin.)
+ */
+export function trajectorySceneFrame(points: readonly { x: number; y: number; z?: number }[]): { readonly center: readonly [number, number, number]; readonly span: number } {
+  if (!points.length) return { center: [0, 0, 0], span: 1 };
+  const extent = (value: (point: { x: number; y: number; z?: number }) => number) => { let minimum = Infinity; let maximum = -Infinity; for (const point of points) { const item = value(point); if (item < minimum) minimum = item; if (item > maximum) maximum = item; } return [minimum, maximum] as const; };
+  const [x, y, z] = [extent((point) => point.x), extent((point) => point.y), extent((point) => point.z ?? 0)];
+  const span = Math.max(x[1] - x[0], y[1] - y[0], z[1] - z[0]);
+  return { center: [(x[0] + x[1]) / 2, (y[0] + y[1]) / 2, (z[0] + z[1]) / 2], span: span > 0 ? span : 1 };
+}
+
+/** Zoom range of the 3D camera, for the user's zoom and for fitting alike: wide enough to fill the view with a long, thin path seen end-on. */
+export const TRAJECTORY_ZOOM_LIMITS = { minimum: .1, maximum: 10_000 } as const;
+
+/** Screen pixels left free around a fitted trajectory, for the axis labels and the point labels at its edges. */
+export const TRAJECTORY_FIT_MARGIN = 48;
+
+/**
+ * Zooms and pans `view` so the projected points just fill an area of `width` × `height` scene units (at zoom 1), centred on them.
+ * The angle is kept. Without a spread to fit (one point, or all on one line seen end-on) only the pan centres them.
+ */
+export function fitTrajectoryView(view: TrajectoryViewTransform, points: readonly { x: number; y: number; z: number }[], width: number, height: number, coordinateSystem: TrajectoryCoordinateSystem = 'right'): TrajectoryViewTransform {
+  if (!points.length || !(width > 0) || !(height > 0)) return view;
+  const camera = { ...view, zoom: 1, panX: 0, panY: 0 }; let left = Infinity; let right = -Infinity; let bottom = Infinity; let top = -Infinity;
+  for (const point of points) { const value = projectPoint3d(point, camera, coordinateSystem); left = Math.min(left, value.x); right = Math.max(right, value.x); bottom = Math.min(bottom, value.y); top = Math.max(top, value.y); }
+  const spanX = right - left; const spanY = top - bottom; const fits = [spanX > 1e-12 ? width / spanX : Infinity, spanY > 1e-12 ? height / spanY : Infinity];
+  const zoom = Math.min(...fits); return { ...view, zoom: Number.isFinite(zoom) ? Math.max(TRAJECTORY_ZOOM_LIMITS.minimum, Math.min(TRAJECTORY_ZOOM_LIMITS.maximum, zoom)) : view.zoom, panX: -(left + right) / 2, panY: -(bottom + top) / 2 };
+}
+
+/** Views saved by older versions may carry `mirrorHorizontal` from the old presets: only the camera is kept. */
+export function trajectoryViewFrom(saved: { readonly yaw?: unknown; readonly pitch?: unknown; readonly zoom?: unknown; readonly panX?: unknown; readonly panY?: unknown } | undefined): TrajectoryViewTransform {
+  const fallback = defaultTrajectoryView(); if (!saved) return fallback;
+  const value = (key: keyof TrajectoryViewTransform) => { const item = saved[key]; return typeof item === 'number' && Number.isFinite(item) ? item : fallback[key]; };
+  return { yaw: value('yaw'), pitch: value('pitch'), zoom: value('zoom'), panX: value('panX'), panY: value('panY') };
+}
+
+/** Screen x grows to the right and y upwards; a larger depth is nearer the viewer. Pan is in screen units, so it moves the same way in both coordinate systems. */
+export function projectPoint3d(point: { x: number; y: number; z: number }, view: TrajectoryViewTransform, coordinateSystem: TrajectoryCoordinateSystem = 'right'): { x: number; y: number; depth: number } {
   const cy = Math.cos(view.yaw); const sy = Math.sin(view.yaw); const cp = Math.cos(view.pitch); const sp = Math.sin(view.pitch);
   const horizontal = point.y * cy - point.x * sy; const depthHorizontal = point.x * cy + point.y * sy;
-  return { x: ((view.mirrorHorizontal ? -horizontal : horizontal) + view.panX) * view.zoom, y: (point.z * cp - depthHorizontal * sp + view.panY) * view.zoom, depth: point.z * sp + depthHorizontal * cp };
+  return { x: ((coordinateSystem === 'left' ? -horizontal : horizontal) + view.panX) * view.zoom, y: (point.z * cp - depthHorizontal * sp + view.panY) * view.zoom, depth: point.z * sp + depthHorizontal * cp };
 }
 
 /** Produces stable, human-readable tick values while keeping zero visible as the coordinate origin. */
@@ -68,11 +112,12 @@ export function trajectoryAxisScale(values: readonly number[], targetTickCount =
   let minimum = Math.min(0, ...finite); let maximum = Math.max(0, ...finite);
   if (!finite.length) { minimum = -1; maximum = 1; }
   if (minimum === maximum) { const pad = Math.abs(minimum) * .1 || 1; minimum -= pad; maximum += pad; }
-  const rawStep = (maximum - minimum) / Math.max(2, targetTickCount);
-  const magnitude = 10 ** Math.floor(Math.log10(rawStep)); const normalized = rawStep / magnitude;
-  const step = (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * magnitude;
-  const first = Math.floor(minimum / step) * step; const last = Math.ceil(maximum / step) * step; const ticks: number[] = [];
-  for (let value = first; value <= last + step * 1e-9 && ticks.length < 100; value += step) ticks.push(Math.abs(value) < step * 1e-9 ? 0 : Number(value.toPrecision(12)));
+  const step = tickStep((maximum - minimum) / Math.max(2, targetTickCount), [1, 2, 5]) ?? { mantissa: 1, exponent: 0, size: 1 };
+  let firstIndex = Math.floor(minimum / step.size); let lastIndex = Math.ceil(maximum / step.size);
+  // Decimal-exact bounds can land one ulp inside the data; step out so the scale still encloses it.
+  if (tickValue(firstIndex, step) > minimum) firstIndex--; if (tickValue(lastIndex, step) < maximum) lastIndex++;
+  const first = tickValue(firstIndex, step); const last = tickValue(lastIndex, step); const ticks: number[] = [];
+  for (let index = firstIndex; index <= lastIndex && ticks.length < 100; index++) ticks.push(tickValue(index, step));
   return { minimum: first, maximum: last, ticks };
 }
 

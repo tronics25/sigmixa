@@ -2,7 +2,7 @@
   "name": "sigmixa",
   "displayName": "SigMixa — CAN Log Analyzer",
   "description": "%sigmixa.description%",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "publisher": "tronics25",
   "license": "MIT",
   "private": true,
@@ -383,8 +383,13 @@
           "group": "inline"
         },
         {
+          "command": "sigmixa.openLog",
+          "when": "view == sigmixa.analysisGroups && !listMultiSelection",
+          "group": "1_group@0"
+        },
+        {
           "command": "sigmixa.addGroup",
-          "when": "view == sigmixa.analysisGroups && viewItem =~ /sigmixa\\.(analysisGroup|folder)/",
+          "when": "view == sigmixa.analysisGroups && !listMultiSelection",
           "group": "1_group@1"
         },
         {
@@ -464,7 +469,7 @@
         },
         {
           "command": "sigmixa.pasteLogs",
-          "when": "view == sigmixa.analysisGroups && !listMultiSelection && viewItem =~ /sigmixa\\.(analysisGroup|folder)/",
+          "when": "view == sigmixa.analysisGroups && !listMultiSelection",
           "group": "5_transfer"
         },
         {
@@ -587,13 +592,19 @@
         "command": "sigmixa.deleteItem",
         "key": "delete",
         "mac": "cmd+backspace",
-        "when": "focusedView == sigmixa.analysisGroups"
+        "when": "focusedView == sigmixa.analysisGroups && !inputFocus"
+      },
+      {
+        "command": "sigmixa.copyPath",
+        "key": "ctrl+c",
+        "mac": "cmd+c",
+        "when": "focusedView == sigmixa.analysisGroups && !inputFocus"
       },
       {
         "command": "sigmixa.pasteLogs",
         "key": "ctrl+v",
         "mac": "cmd+v",
-        "when": "focusedView == sigmixa.analysisGroups"
+        "when": "focusedView == sigmixa.analysisGroups && !inputFocus"
       },
       {
         "command": "sigmixa.renameFrame",

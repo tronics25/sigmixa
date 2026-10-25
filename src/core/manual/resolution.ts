@@ -19,20 +19,20 @@ function gcd(a: number, b: number): number {
 
 export function parseResolution(text: string): ResolutionParseResult {
   const normalized = text.trim();
-  if (!normalized) return { valid: false, error: 'Resolution is required.' };
+  if (!normalized) return { valid: false, error: 'Scale is required.' };
   const fraction = /^([+\-]?\d+)\s*\/\s*([+\-]?\d+)$/.exec(normalized);
   let value: number;
   let ratio: ParsedResolution['fraction'];
   if (fraction) {
     const numerator = Number(fraction[1]);
     const denominator = Number(fraction[2]);
-    if (denominator === 0) return { valid: false, error: 'Resolution denominator must not be zero.' };
+    if (denominator === 0) return { valid: false, error: 'Scale denominator must not be zero.' };
     value = numerator / denominator;
     ratio = { numerator, denominator };
   } else {
     value = Number(normalized);
   }
-  if (!Number.isFinite(value)) return { valid: false, error: 'Resolution must be finite.' };
+  if (!Number.isFinite(value)) return { valid: false, error: 'Scale must be finite.' };
   if (value === 0) return { valid: false, error: 'Scale must not be zero.' };
   if (Math.abs(value) < MIN_RESOLUTION || Math.abs(value) > MAX_RESOLUTION) return { valid: false, error: `Scale magnitude must be between ${MIN_RESOLUTION} and ${MAX_RESOLUTION}.` };
   return { valid: true, resolution: { value, text: normalized, ...(ratio ? { fraction: ratio } : {}) } };

@@ -110,7 +110,8 @@ The Table shows selected Signals at their original event timestamps.
 ### Trajectories
 
 - **Series.** A trajectory draws X, Y and optional Z Signals from one source. Without Z it is 2D. One view can draw several series at once, for example four wheel positions, or a vehicle and an obstacle.
-- **Camera.** The default coordinates are X forward, Y right and Z up. **Top**, **Front** and **Side** change the camera without changing the data. Drag to rotate and scroll to zoom.
+- **Camera.** **X**, **Y** and **Z** look along that axis from its + side, and **Reset view** returns to the default angle. They only move the camera, and fit the whole trajectory to the view; the fit follows when the view is resized until you zoom, pan or rotate. Drag to rotate and scroll to zoom.
+- **Coordinate system.** A 3D trajectory is right-handed by default. If your axes are left-handed, such as X forward, Y right and Z up, choose **Left-handed** in the drawing settings; every view is then shown mirrored, so the axes appear the way they are defined.
 - **Inspection.** Show data points, inspect coordinates, or select two points to measure elapsed time, coordinate differences, straight distance, path length and average speed.
 
 ### The trace

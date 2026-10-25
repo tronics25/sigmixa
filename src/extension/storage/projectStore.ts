@@ -5,7 +5,7 @@ import { CURRENT_PROJECT_SCHEMA_VERSION, emptyProject, migrateProject, parseProj
 import { clipViewKey, composeWorkspace, addedLogsOf, GROUP_VIEW_KEY, LEVEL_DIRECTORY, LEVEL_FILE, locationLevel, logViewKey, parseLogViewKey, splitWorkspace, type LevelFile, type WorkspaceLog } from '../../core/project/folderLevels';
 import { findClip, type ClipRef, type LogMove } from '../../core/project/clipIdentity';
 import { scanWorkspace } from './workspaceScan';
-import { t } from '../i18n';
+import { t, errorText } from '../i18n';
 import { issuedLocation, SOURCE_SCHEME, sourceUri, type SourceLocation } from './sourceUri';
 import { clipIdFromUri } from '../clips/clipPaths';
 
@@ -78,7 +78,7 @@ export class ProjectStore implements vscode.Disposable {
         this.written.set(folder, text);
         // A file from an older version (e.g. 1.0.1) is backed up before it is first saved in the current format.
         if (Number(record(JSON.parse(text)).schemaVersion) < CURRENT_PROJECT_SCHEMA_VERSION) this.migrationBytes.set(folder, bytes);
-        if (issues.length) { this.migrationBytes.set(folder, bytes); void vscode.window.showWarningMessage(`Skipped ${issues.length} invalid entr${issues.length === 1 ? 'y' : 'ies'} in ${this.label(folder)}. The original file is backed up before the next save. ${issues.join('; ')}`); }
+        if (issues.length) { this.migrationBytes.set(folder, bytes); void vscode.window.showWarningMessage(t(`Skipped ${issues.length} invalid entr${issues.length === 1 ? 'y' : 'ies'} in ${this.label(folder)}. The original file is backed up before the next save. ${issues.join('; ')}`, `${this.label(folder)}の不正な項目を${issues.length}件スキップしました。次回の保存前に元のファイルをバックアップします。${issues.join('; ')}`)); }
         if (!folder) this.legacyGroups = parsed.analysisGroups ?? [];
         const converted = folder ? parsed : this.withConvertedLegacyKeys(parsed, scan.logs, root.fsPath);
         if (converted !== parsed) this.migrationBytes.set(folder, bytes);
@@ -87,8 +87,8 @@ export class ProjectStore implements vscode.Disposable {
         if (error instanceof vscode.FileSystemError && error.code === 'FileNotFound') { this.written.delete(folder); levels.push({ folder, project: emptyProject() }); continue; }
         this.failed.add(folder); levels.push({ folder, project: emptyProject() });
         const backup = vscode.Uri.joinPath(file, '..', `${LEVEL_FILE}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}.bak`);
-        try { await vscode.workspace.fs.copy(file, backup, { overwrite: false }); void vscode.window.showErrorMessage(`Could not load ${this.label(folder)}. An unchanged recovery copy was saved as ${path.basename(backup.path)}. ${(error as Error).message}`); }
-        catch { void vscode.window.showErrorMessage(`Could not load ${this.label(folder)} and a recovery copy could not be created. ${(error as Error).message}`); }
+        try { await vscode.workspace.fs.copy(file, backup, { overwrite: false }); void vscode.window.showErrorMessage(t(`Could not load ${this.label(folder)}. An unchanged recovery copy was saved as ${path.basename(backup.path)}. ${errorText(error)}`, `${this.label(folder)}を読み込めませんでした。復旧用コピーを${path.basename(backup.path)}に保存しました。${errorText(error)}`)); }
+        catch { void vscode.window.showErrorMessage(t(`Could not load ${this.label(folder)} and a recovery copy could not be created. ${errorText(error)}`, `${this.label(folder)}を読み込めず、復旧用コピーも作成できませんでした。${errorText(error)}`)); }
       }
     }
     // A log added to a level appears there as well as where it is, like a shortcut.
@@ -127,7 +127,7 @@ export class ProjectStore implements vscode.Disposable {
 
   requireWorkspace(): vscode.Uri | undefined {
     const root = this.root();
-    if (!root) void vscode.window.showErrorMessage('Open a workspace folder before saving SigMixa definitions.');
+    if (!root) void vscode.window.showErrorMessage(t('Open a workspace folder before saving SigMixa definitions.', "定義を保存するにはワークスペースフォルダを開いてください。"));
     return root;
   }
 

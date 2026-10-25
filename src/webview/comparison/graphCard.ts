@@ -1,3 +1,4 @@
+import { chartTicks } from '../shared/chartAxes';
 import type { ComparisonGraphDefinition } from '../../core/project/comparison';
 import type { SignalDefinition } from '../../core/signal/signal';
 import { normalizeValue } from '../../core/timeline/timeline';
@@ -175,7 +176,9 @@ export class GraphCard implements ComparisonCard {
   get id(): string { return this.definitionValue.id; }
   get definition(): ComparisonGraphDefinition { return this.definitionValue; }
   get name(): string { return this.definitionValue.name; }
-  get isConfigured(): boolean { return this.selected.size > 0; }
+  get isConfigured(): boolean { return this.shown.length > 0; }
+  /** The selected Signals this graph can show (those shown checked). */
+  private get shown(): string[] { return this.selector.shownSelection(); }
 
   setDefinition(definition: ComparisonGraphDefinition): void {
     const signalsChanged = definition.signalIds.join('\n') !== [...this.selected].join('\n');
@@ -184,7 +187,7 @@ export class GraphCard implements ComparisonCard {
     this.syncSettings(); this.draw();
   }
 
-  setCatalog(definitions: readonly SignalDefinition[], groups: readonly SignalGroupDto[], measuredIds?: readonly string[]): void { this.selector.setCatalog(definitions, groups, { measuredIds }); }
+  setCatalog(definitions: readonly SignalDefinition[], groups: readonly SignalGroupDto[], measuredIds?: readonly string[]): void { this.selector.setCatalog(definitions, groups, { measuredIds }); this.scheduleDraw(); }
   revealSignal(signalId: string): void { this.selector.reveal(signalId); }
   setEditing(editing: boolean): void { this.element.classList.toggle('options-editing', editing); this.options.hidden = !(this.host.selectedGraph() === this); }
   focusHeader(): void { this.header.focus({ preventScroll: true }); }
@@ -192,8 +195,8 @@ export class GraphCard implements ComparisonCard {
 
   /** Asks the extension for this graph's samples in every target. */
   request(): void {
-    this.series.clear(); this.pending = this.selected.size > 0;
-    this.latestRequest = this.selected.size ? this.host.requestSeries(this.id, [...this.selected]) : 0;
+    const shown = this.shown; this.series.clear(); this.pending = shown.length > 0;
+    this.latestRequest = shown.length ? this.host.requestSeries(this.id, shown) : 0;
     this.draw();
   }
 
@@ -216,7 +219,7 @@ export class GraphCard implements ComparisonCard {
     const details = document.createElement('details'); details.className = 'display-settings';
     details.innerHTML = `<summary>${t('Drawing settings', '描画設定')}</summary>
       <div class="settings-row"><div class="choice-group" role="group" aria-label="${t('Display mode', '表示形式')}"><button type="button" class="mode-raw">${t('Actual (converted units)', '実値（単位換算）')}</button><button type="button" class="mode-normalized">${t('Normalized 0–100%', '正規化 0–100%')}</button></div></div>
-      <div class="settings-row"><label class="chart-option"><input class="connect-gaps" type="checkbox">${t('Connect gaps', '欠損を補完')}</label></div>
+      <div class="settings-row"><label class="chart-option"><input class="connect-gaps" type="checkbox">${t('Connect gaps', '欠損区間を接続')}</label></div>
       <div class="settings-row axis-settings"><label class="axis-mode">${t('Y axis', 'Y軸')}<select class="axis-range-mode"><option value="visible">${t('Visible interval', '表示区間')}</option><option value="global">${t('All data', '全データ')}</option></select></label><label class="chart-option"><input class="axis-include-zero" type="checkbox">${t('Include 0', '0を含める')}</label></div>`;
     details.querySelector('.mode-raw')!.addEventListener('click', () => this.switchToActual());
     details.querySelector('.mode-normalized')!.addEventListener('click', () => { this.update({ mode: 'normalized' }); this.syncSettings(); this.draw(); });
@@ -445,7 +448,7 @@ export class GraphCard implements ComparisonCard {
     context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, this.plotHeight);
     if (!full || !this.viewRange || !groups.length) {
       context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.font = '12px sans-serif';
-      context.fillText(this.pending || this.host.targets().some((target) => target.status === 'loading') ? t('Loading selected Signals…', '選択したシグナルを読み込んでいます…') : this.selected.size ? t('No comparable samples for the selected Signals.', '選択したシグナルに比較可能なサンプルがありません。') : t('Select Signals in Graph settings.', 'グラフ設定でシグナルを選択してください。'), 20, 30);
+      context.fillText(this.pending || this.host.targets().some((target) => target.status === 'loading') ? t('Loading selected Signals…', '選択したシグナルを読み込んでいます…') : this.shown.length ? t('No comparable samples for the selected Signals.', '選択したシグナルに比較可能なサンプルがありません。') : t('Select Signals in Graph settings.', 'グラフ設定でシグナルを選択してください。'), 20, 30);
       return;
     }
     this.paint(context, width, 0, groups, this.viewRange, true);
@@ -459,8 +462,7 @@ export class GraphCard implements ComparisonCard {
     const xMin = range.start; const xMax = range.end === range.start ? range.start + 1 : range.end; const x = (time: number) => left + (time - xMin) / (xMax - xMin) * plotW;
     const highlighted = interactive ? this.host.highlighted() : undefined;
     context.font = '11px sans-serif'; context.lineWidth = 1; context.strokeStyle = css('--vscode-panel-border', '#777'); context.strokeRect(left, laneTop, plotW, laneHeight);
-    for (let tick = 0; tick <= 5; tick++) {
-      const value = xMin + (xMax - xMin) * tick / 5; const label = `${format(value)} s`; const px = x(value);
+    for (const value of chartTicks(xMin, xMax, Math.max(1, Math.min(5, Math.floor(plotW / 100))))) { const label = `${value} s`; const px = x(value);
       context.globalAlpha = .48; context.beginPath(); context.moveTo(px, laneTop); context.lineTo(px, laneTop + laneHeight); context.stroke(); context.globalAlpha = 1;
       context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.fillText(label, Math.max(left, Math.min(width - right - context.measureText(label).width, px - context.measureText(label).width / 2)), laneTop + laneHeight + 18);
     }
@@ -477,10 +479,10 @@ export class GraphCard implements ComparisonCard {
       const y = (value: number) => laneTop + (1 - (value - yMin) / (yMax - yMin)) * laneHeight; const rightAxis = axisIndex === 1;
       context.save(); context.font = '600 11px sans-serif'; context.textAlign = rightAxis ? 'right' : 'left'; context.fillStyle = css('--vscode-foreground', '#ddd');
       context.fillText(group.label, rightAxis ? left + plotW : left, laneTop - 8); context.restore();
-      for (let tick = 0; tick <= 4; tick++) {
-        const value = yMax - (yMax - yMin) * tick / 4; const py = y(value);
+      for (const value of chartTicks(yMin, yMax, 4)) {
+        const py = y(value);
         if (axisIndex === 0) { context.strokeStyle = css('--vscode-panel-border', '#777'); context.globalAlpha = .55; context.beginPath(); context.moveTo(left, py); context.lineTo(left + plotW, py); context.stroke(); context.globalAlpha = 1; }
-        const label = format(value); context.fillStyle = css('--vscode-descriptionForeground', '#888');
+        const label = String(value); context.fillStyle = css('--vscode-descriptionForeground', '#888');
         context.fillText(label, rightAxis ? left + plotW + 7 : Math.max(4, left - context.measureText(label).width - 7), Math.min(laneTop + laneHeight - 2, py + 4));
       }
       for (const entry of group.entries) {
@@ -519,12 +521,12 @@ export class GraphCard implements ComparisonCard {
   }
 
   private renderLegend(): void {
-    clearLegend(this.legend, this.title); placeCardTitle(this.element, this.header, this.legend, this.title, this.selected.size > 0);
+    clearLegend(this.legend, this.title); placeCardTitle(this.element, this.header, this.legend, this.title, this.shown.length > 0);
     const entries = this.entries(); const bySignal = new Map<string, Entry[]>();
     for (const entry of entries) bySignal.set(entry.signalId, [...(bySignal.get(entry.signalId) ?? []), entry]);
     const definitions = new Map(this.host.definitions().map((definition) => [definition.id, definition]));
     const readyTargets = this.host.targets().filter((target) => target.status === 'ready' && !this.host.hidden(target.id));
-    for (const signalId of this.selected) {
+    for (const signalId of this.shown) {
       const definition = definitions.get(signalId); const color = this.host.color(signalId);
       const entry = createLegendEntry(`${definition?.name ?? signalId}${definition?.unit ? ` (${definition.unit})` : ''}`, color, (active) => this.host.highlight(active ? signalId : undefined));
       entry.className = 'chart-legend-entry'; entry.dataset.signalId = signalId;
@@ -549,13 +551,13 @@ export class GraphCard implements ComparisonCard {
   renderImage(heading = `SigMixa · ${this.definitionValue.name}`, width = 1600): SheetImage | undefined {
     const entries = this.entries(); const groups = this.axisGroups(entries); if (!this.viewRange || !groups.length) return undefined;
     const targets = this.host.targets().filter((target) => target.status === 'ready' && !this.host.hidden(target.id));
-    const legendRows = 1 + Math.ceil(targets.length / Math.max(1, Math.floor(width / 533))) + Math.ceil(this.selected.size / Math.max(1, Math.floor(width / 400))); const header = 60 + legendRows * 20; const height = header + this.plotHeight + 20;
+    const legendRows = 1 + Math.ceil(targets.length / Math.max(1, Math.floor(width / 533))) + Math.ceil(this.shown.length / Math.max(1, Math.floor(width / 400))); const header = 60 + legendRows * 20; const height = header + this.plotHeight + 20;
     const paintAll = (context: CanvasRenderingContext2D) => {
       context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height);
       context.fillStyle = css('--vscode-foreground', '#ddd'); context.font = '600 20px sans-serif'; context.fillText(heading, 24, 34);
       context.font = '12px sans-serif'; context.fillStyle = css('--vscode-descriptionForeground', '#999'); const range = `${format(this.viewRange!.start)}–${format(this.viewRange!.end)} s`; context.fillText(range, width - context.measureText(range).width - 24, 32);
       let y = 60; let x = 24; const definitions = new Map(this.host.definitions().map((definition) => [definition.id, definition]));
-      for (const signalId of this.selected) { const label = definitions.get(signalId)?.name ?? signalId; if (x > width - 320) { x = 24; y += 20; } context.fillStyle = this.host.color(signalId); context.fillRect(x, y - 6, 16, 3); context.fillStyle = css('--vscode-foreground', '#ddd'); context.fillText(label, x + 22, y); x += 30 + context.measureText(label).width + 16; }
+      for (const signalId of this.shown) { const label = definitions.get(signalId)?.name ?? signalId; if (x > width - 320) { x = 24; y += 20; } context.fillStyle = this.host.color(signalId); context.fillRect(x, y - 6, 16, 3); context.fillStyle = css('--vscode-foreground', '#ddd'); context.fillText(label, x + 22, y); x += 30 + context.measureText(label).width + 16; }
       y += 20; x = 24;
       for (const target of targets) { const label = `${target.name} (${target.rangeLabel})`; if (x > width - 420) { x = 24; y += 20; } context.save(); context.setLineDash(dashFor(this.host.targetIndex(target.id))); context.strokeStyle = css('--vscode-foreground', '#ddd'); context.lineWidth = 2; context.beginPath(); context.moveTo(x, y - 4); context.lineTo(x + 24, y - 4); context.stroke(); context.restore(); context.fillStyle = css('--vscode-foreground', '#ddd'); context.fillText(label, x + 30, y); x += 40 + context.measureText(label).width + 16; }
       this.paint(context, width, header, groups, this.viewRange!, false);

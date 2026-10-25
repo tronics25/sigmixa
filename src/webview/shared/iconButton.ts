@@ -11,6 +11,17 @@ export function iconButton(button: HTMLButtonElement, icon: string, label: strin
   return button;
 }
 
+/** An icon button whose glyph is a short text such as an axis letter, for actions the icon font has no mark for. */
+export function textIconButton(button: HTMLButtonElement, text: string, label: string): HTMLButtonElement {
+  let glyph = button.firstElementChild as HTMLElement | null;
+  if (button.childNodes.length !== 1 || !glyph?.classList.contains('icon-button-text')) {
+    glyph = document.createElement('span'); glyph.className = 'icon-button-text'; glyph.setAttribute('aria-hidden', 'true'); button.replaceChildren(glyph);
+  }
+  glyph.textContent = text;
+  button.classList.add('icon-button'); button.title = label; button.setAttribute('aria-label', label);
+  return button;
+}
+
 /** An icon with its name beside it, for the few actions of a top bar where there is room to say what they do. */
 export function labeledIconButton(button: HTMLButtonElement, icon: string, text: string, tooltip = text): HTMLButtonElement {
   const glyph = document.createElement('span'); setGlyph(glyph, icon); glyph.setAttribute('aria-hidden', 'true');
@@ -34,6 +45,7 @@ export function viewActionGroup(label: string, ...controls: HTMLElement[]): HTML
 export const ICON_BUTTON_STYLES = `
 button.icon-button{box-sizing:border-box;display:inline-flex;flex:0 0 28px;width:28px;height:28px;min-width:28px;min-height:28px;max-width:28px;padding:0;margin:0;align-items:center;justify-content:center;vertical-align:middle;border:0;border-radius:var(--sm-radius-legacy-3);box-shadow:none;background:transparent;color:var(--vscode-icon-foreground,var(--vscode-foreground));cursor:pointer;line-height:1}
 button.icon-button .codicon{font-size:var(--sm-font-heading);line-height:16px;width:16px;height:16px}
+button.icon-button .icon-button-text{font-family:var(--vscode-font-family);font-size:var(--sm-font-body);font-weight:var(--sm-weight-semibold);line-height:16px;min-width:16px;text-align:center}
 button.icon-button:hover:not(:disabled){background:var(--vscode-toolbar-hoverBackground,var(--vscode-list-hoverBackground))}
 button.icon-button.primary,button.icon-button[aria-pressed=true]{color:var(--vscode-focusBorder);background:color-mix(in srgb,var(--vscode-focusBorder) 13%,transparent)}
 button.icon-button.danger{color:var(--vscode-errorForeground)}

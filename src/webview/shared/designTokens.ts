@@ -34,6 +34,9 @@ button:disabled{opacity:.55;cursor:default}
 export const COMPONENT_STYLES = `
 /* One keyboard-focus line for every control on every screen. Without it the browser draws its own ring in the system accent colour. */
 input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible,summary:focus-visible{outline:1px solid var(--vscode-focusBorder);outline-offset:1px}
+input[aria-invalid=true],select[aria-invalid=true],textarea[aria-invalid=true]{border-color:var(--vscode-inputValidation-errorBorder);background:var(--vscode-inputValidation-errorBackground,var(--vscode-input-background))}
+.table-wrap .cell input[aria-invalid=true],.table-wrap .cell select[aria-invalid=true]{border-color:var(--vscode-inputValidation-errorBorder);background:var(--vscode-inputValidation-errorBackground,var(--vscode-input-background))}
+.cell:has([aria-invalid=true]),.data-table td:has([aria-invalid=true]){background:var(--vscode-inputValidation-errorBackground,var(--vscode-input-background));box-shadow:inset 0 0 0 1px var(--vscode-inputValidation-errorBorder)}
 /* Number up/down: one button width split into upper and lower chevrons, everywhere; the browser's spin buttons are hidden. */
 input[type=number]{appearance:textfield}input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{appearance:none;margin:0}
 .stepper-buttons{display:flex;flex-direction:column;flex:0 0 20px;width:20px;height:var(--sm-control-height-compact)}

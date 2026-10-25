@@ -3,7 +3,7 @@
  * it references them by ID/path only and never copies CAN data or definitions. Each target has its own time shift.
  */
 
-import type { TrajectoryTrail, TrajectoryViewTransform } from '../trajectory/trajectory';
+import type { TrajectoryCoordinateSystem, TrajectoryTrail, TrajectoryViewTransform } from '../trajectory/trajectory';
 
 export type ComparisonTargetKind = 'file' | 'clip';
 
@@ -33,6 +33,10 @@ export interface ComparisonGraphDefinition {
   readonly showGrid?: boolean;
   readonly invert?: { readonly x: boolean; readonly y: boolean; readonly z: boolean };
   readonly trajectoryView?: TrajectoryViewTransform;
+  /** Zoom and pan follow the data and the canvas size; true when no camera is saved. */
+  readonly trajectoryViewFit?: boolean;
+  /** Right-handed when absent. */
+  readonly coordinateSystem?: TrajectoryCoordinateSystem;
   readonly trajectoryTrail?: TrajectoryTrail;
   /** Absolute source time captured when exporting a log/Clip report. */
   readonly trajectoryCurrentTime?: number;

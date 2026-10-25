@@ -44,3 +44,47 @@ test('thinning for drawing keeps both ends of a gap in reception, so the line on
   const [series] = store.seriesSlice(['v'], undefined, 1000);
   assert.ok(series.samples.some((sample) => sample.timestamp === 199.99) && series.samples.some((sample) => sample.timestamp === 1200), 'both ends of the gap are drawn');
 });
+
+test('a long invalid interval keeps its boundaries without exceeding the drawing budget', () => {
+  const store = new InMemorySignalStore(); const definition = axis('v');
+  const samples = Array.from({ length: 100_000 }, (_, index) => ({ timestamp: index, value: index >= 20_001 && index <= 80_001 ? NaN : 1 }));
+  store.appendSeries(definition, samples);
+  assert.deepEqual([...lineBreakSamples(samples)].map((sample) => sample.timestamp), [20_000, 20_001, 80_001, 80_002]);
+  const [series] = store.seriesSlice(['v'], undefined, 4000);
+  assert.ok(series.samples.length <= 4000);
+  for (const timestamp of [0, 20_000, 20_001, 80_001, 80_002, 99_999]) assert.ok(series.samples.some((sample) => sample.timestamp === timestamp));
+  assert.deepEqual(series.gaps, [{ startTimestamp: 20_000, endTimestamp: 80_002 }]);
+});
+
+test('all-invalid and alternating-invalid series stay bounded, including joined trajectory axes', () => {
+  for (const alternating of [false, true]) {
+    const store = new InMemorySignalStore();
+    for (const id of ['x', 'y']) store.appendSeries(axis(id), Array.from({ length: 100_000 }, (_, index) => ({
+      timestamp: index, value: alternating && index % 2 === 0 ? index : NaN,
+    })));
+    for (const joined of [false, true]) {
+      const series = store.seriesSlice(['x', 'y'], undefined, 4000, undefined, joined);
+      for (const item of series) {
+        assert.ok(item.samples.length <= 4000);
+        assert.equal(item.samples[0].timestamp, 0);
+        assert.equal(item.samples.at(-1)!.timestamp, 99_999);
+        assert.deepEqual(item.gaps, [{ startTimestamp: 0, endTimestamp: 99_999 }]);
+      }
+      if (joined) assert.deepEqual(series[0].samples.map((sample) => sample.timestamp), series[1].samples.map((sample) => sample.timestamp));
+    }
+  }
+});
+
+test('requested break boundaries cannot overflow the downsampling limit', () => {
+  const samples = Array.from({ length: 10_000 }, (_, index) => ({ timestamp: index, value: Math.sin(index) }));
+  const result = downsampleExtremes(samples, 100, (sample) => [sample.value], () => true);
+  assert.ok(result.length <= 100);
+  assert.equal(result[0], samples[0]); assert.equal(result.at(-1), samples.at(-1));
+});
+
+test('joined axes with repeated timestamps stay within the per-series drawing limit', () => {
+  const store = new InMemorySignalStore();
+  for (const id of ['x', 'y']) store.appendSeries(axis(id), Array.from({ length: 10_000 }, (_, index) => ({ timestamp: Math.floor(index / 100), value: index })));
+  const series = store.seriesSlice(['x', 'y'], undefined, 100, undefined, true);
+  for (const item of series) assert.ok(item.samples.length <= 100);
+});

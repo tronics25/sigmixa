@@ -77,7 +77,7 @@ export class SignalTableView {
     host.querySelector('.table-clip')!.addEventListener('click', () => { const range = this.selectionRanges[0]; if (this.selectionRanges.length === 1 && range.end > range.start && !this.parsing && !this.analysisProgress) this.post({ type: 'createTableClip', startRow: range.start, endRow: range.end, generation: this.rowsGeneration, signalIds: [...this.selected] }); });
     iconButton(this.exportButton, 'export', t('Export CSV', 'CSVへ出力'));
     iconButton(host.querySelector<HTMLButtonElement>('.table-clip')!, 'new-file', t('Create Clip from selection', '選択範囲からクリップ作成'));
-    this.exportButton.addEventListener('click', () => this.post({ type: 'exportSignalCsv', selectedIds: this.columnOrder.filter((id) => this.selected.has(id)) }));
+    this.exportButton.addEventListener('click', () => this.post({ type: 'exportSignalCsv', selectedIds: this.shownIds() }));
     host.querySelector('.table-pane-toggle')!.addEventListener('click', () => { this.paneCollapsed = !this.paneCollapsed; this.applyPane(); this.persist(); });
     this.analysisCancel.addEventListener('click', () => this.post({ type: 'cancelAnalysis' }));
     this.separator.addEventListener('mousedown', (event) => this.startPaneResize(event));
@@ -94,7 +94,7 @@ export class SignalTableView {
   handle(message: ToWebviewMessage): void {
     if (message.type === 'signalCatalog' && message.requestId === this.latestCatalogRequest) {
       this.definitions.clear(); for (const definition of message.definitions) this.definitions.set(definition.id, definition);
-      this.syncColumnOrder(); this.selector.setCatalog(message.definitions, message.groups, message); this.buildHeader(); this.updateActions(); this.pagePending = this.selected.size > 0; this.requestPage(true); this.requestMissingWidths(); this.updatePresentation();
+      this.syncColumnOrder(); this.selector.setCatalog(message.definitions, message.groups, message); this.buildHeader(); this.updateActions(); this.pagePending = this.shownIds().length > 0; this.requestPage(true); this.requestMissingWidths(); this.updatePresentation();
     } else if (message.type === 'signalTablePage' && message.requestId === this.latestPageRequest) {
       if (this.rowsGeneration !== message.generation) { this.rows.clear(); this.clearSelection(); } this.rowsGeneration = message.generation; this.pagePending = false; this.total = message.total; for (let index = 0; index < message.rows.length; index++) this.rows.set(message.offset + index, message.rows[index]);
       this.pruneRows(); this.draw();
@@ -104,26 +104,28 @@ export class SignalTableView {
       else { Object.assign(this.widths, fitted); for (const id of Object.keys(fitted)) this.fittedWidths.add(id); }
       this.autoFitTargets = undefined; this.persistWidths(); this.applyWidths();
     } else if (message.type === 'definitionsChanged') {
-      this.catalogRequested = false; this.rows.clear(); this.rowWindow.replaceChildren(); this.total = 0; this.pagePending = this.selected.size > 0; this.clearSelection(); if (this.visible) this.show();
+      this.catalogRequested = false; this.selector.expectCatalog(); this.rows.clear(); this.rowWindow.replaceChildren(); this.total = 0; this.pagePending = this.shownIds().length > 0; this.clearSelection(); if (this.visible) this.show();
     } else if (message.type === 'progress') {
-      this.parsing = true; if (this.visible && this.selected.size) this.requestPage(true, Math.floor(this.grid.scrollTop / ROW_HEIGHT)); this.updatePresentation();
+      this.parsing = true; if (this.visible && this.shownIds().length) this.requestPage(true, Math.floor(this.grid.scrollTop / ROW_HEIGHT)); this.updatePresentation();
     } else if (message.type === 'parseComplete') {
-      this.parsing = false; if (this.visible && this.selected.size) this.requestPage(true, Math.floor(this.grid.scrollTop / ROW_HEIGHT)); this.updatePresentation();
+      this.parsing = false; if (this.visible && this.shownIds().length) this.requestPage(true, Math.floor(this.grid.scrollTop / ROW_HEIGHT)); this.updatePresentation();
     } else if (message.type === 'analysisProgress') {
       this.analysisProgress = { processed: message.processed, total: message.total }; this.analysisCancel.hidden = false; this.updatePresentation();
     } else if (message.type === 'analysisComplete') {
-      this.analysisProgress = undefined; this.analysisCancel.hidden = true; if (this.visible && this.selected.size) this.requestPage(true, Math.floor(this.grid.scrollTop / ROW_HEIGHT)); else this.updatePresentation();
+      this.analysisProgress = undefined; this.analysisCancel.hidden = true; if (this.visible && this.shownIds().length) this.requestPage(true, Math.floor(this.grid.scrollTop / ROW_HEIGHT)); else this.updatePresentation();
     } else if (message.type === 'signalTableRowsCopied') {
       this.showCopyFeedback(message.count);
     }
   }
 
   private selectionChanged(): void {
-    this.syncColumnOrder(); this.rows.clear(); this.rowWindow.replaceChildren(); this.total = 0; this.pagePending = this.selected.size > 0; this.grid.scrollTop = 0; this.clearSelection(); this.buildHeader(); this.draw(); this.requestPage(true); this.requestMissingWidths();
+    this.syncColumnOrder(); this.rows.clear(); this.rowWindow.replaceChildren(); this.total = 0; this.pagePending = this.shownIds().length > 0; this.grid.scrollTop = 0; this.clearSelection(); this.buildHeader(); this.draw(); this.requestPage(true); this.requestMissingWidths();
     this.updateActions(); this.persist();
   }
 
-  private updateActions(): void { this.exportButton.disabled = this.selected.size === 0; }
+  /** The selected Signals the Table can show (those shown checked), in column order. */
+  private shownIds(): string[] { const shown = new Set(this.selector.shownSelection()); return this.columnOrder.filter((id) => shown.has(id)); }
+  private updateActions(): void { this.exportButton.disabled = this.shownIds().length === 0; }
 
   private columns(): readonly { id: string; definition?: SignalDefinition }[] {
     return [{ id: 'time' }, ...this.columnOrder.map((id) => ({ id, definition: this.definitions.get(id) })).filter((item): item is { id: string; definition: SignalDefinition } => this.selected.has(item.id) && Boolean(item.definition))];
@@ -220,24 +222,24 @@ export class SignalTableView {
   }
 
   private requestPage(force = false, start = 0, end = PAGE_SIZE): void {
-    if (!this.selected.size) { this.rows.clear(); this.total = 0; this.pagePending = false; this.updatePresentation(); return; }
+    if (!this.shownIds().length) { this.rows.clear(); this.total = 0; this.pagePending = false; this.updatePresentation(); return; }
     const offset = Math.max(0, Math.floor(start / PAGE_SIZE) * PAGE_SIZE);
     if (!force && this.rows.has(start) && this.rows.has(Math.min(Math.max(0, end - 1), this.total - 1))) return;
     if (force && this.total === 0) { this.pagePending = true; this.updatePresentation(); }
-    this.latestPageRequest = ++this.counter; this.post({ type: 'signalTablePageRequest', requestId: this.latestPageRequest, selectedIds: this.columnOrder.filter((id) => this.selected.has(id)), offset, limit: PAGE_SIZE * 2 });
+    this.latestPageRequest = ++this.counter; this.post({ type: 'signalTablePageRequest', requestId: this.latestPageRequest, selectedIds: this.shownIds(), offset, limit: PAGE_SIZE * 2 });
   }
 
   private updatePresentation(): void {
     (this.host.querySelector('.table-clip') as HTMLButtonElement).disabled = this.parsing || !!this.analysisProgress || this.selectionRanges.length !== 1 || selectionCount(this.selectionRanges) < 2;
     const count = selectionCount(this.selectionRanges); this.selectionStatus.hidden = count === 0;
     if (count) this.selectionStatus.textContent = `${count.toLocaleString()} ${t(count === 1 ? 'row selected' : 'rows selected', '行選択')}`;
-    if (!this.selected.size) this.status.textContent = t('Select Signals', 'シグナルを選択');
+    if (!this.shownIds().length) this.status.textContent = t('Select Signals', 'シグナルを選択');
     else if (this.analysisProgress) { const percent = this.analysisProgress.total ? Math.floor(this.analysisProgress.processed / this.analysisProgress.total * 100) : 100; this.status.textContent = `${t('Analyzing', '解析中')} ${percent}%`; }
     else if (this.parsing) this.status.textContent = `${this.total.toLocaleString()} ${t('event rows', 'イベント行')} · ${t('importing', '読込中')}`;
     else if (this.pagePending && this.total === 0) this.status.textContent = t('Loading events…', 'イベントを読み込み中…');
     else this.status.textContent = `${this.total.toLocaleString()} ${t('event rows', 'イベント行')}`;
     const text = this.empty.querySelector('span')!;
-    if (!this.selected.size) text.textContent = t('Select one or more Signals to build the event table.', 'シグナルを選択するとイベントテーブルを表示します。');
+    if (!this.shownIds().length) text.textContent = t('Select one or more Signals to build the event table.', 'シグナルを選択するとイベントテーブルを表示します。');
     else if (this.analysisProgress) text.textContent = t('Analyzing Signal events…', 'シグナルイベントを解析しています…');
     else if (this.parsing || (this.pagePending && this.total === 0)) text.textContent = t('Loading Signal events…', 'シグナルイベントを読み込んでいます…');
     else text.textContent = t('No events were found for the selected Signals.', '選択したシグナルのイベントはありません。');
@@ -295,10 +297,10 @@ export class SignalTableView {
     for (const range of this.selectionRanges) for (let index = range.start; index <= range.end; index++) { const row = this.rows.get(index); if (!row) return undefined; result.push(row); } return result;
   }
 
-  private rowValues(row: SignalTableRowDto): readonly string[] { return [row.timestamp.toFixed(6), ...this.columnOrder.filter((id) => this.selected.has(id)).map((id) => row.values[id] === undefined ? '' : formatNumber(row.values[id]))]; }
+  private rowValues(row: SignalTableRowDto): readonly string[] { return [row.timestamp.toFixed(6), ...this.shownIds().map((id) => row.values[id] === undefined ? '' : formatNumber(row.values[id]))]; }
   private selectedRowsAsText(rows: readonly SignalTableRowDto[]): string { return `${rows.map((row) => this.rowValues(row).map(cleanCell).join('\t')).join('\r\n')}\r\n`; }
   private selectedRowsAsHtml(rows: readonly SignalTableRowDto[]): string { const table = document.createElement('table'); const body = document.createElement('tbody'); table.appendChild(body); for (const row of rows) { const tr = document.createElement('tr'); for (const value of this.rowValues(row)) { const td = document.createElement('td'); td.textContent = value; tr.appendChild(td); } body.appendChild(tr); } return table.outerHTML; }
-  private requestSelectedRows(action: 'copy' | 'open'): void { if (this.selectionRanges.length) this.post({ type: 'signalTableRowsRequest', action, ranges: this.selectionRanges, selectedIds: this.columnOrder.filter((id) => this.selected.has(id)) }); }
+  private requestSelectedRows(action: 'copy' | 'open'): void { if (this.selectionRanges.length) this.post({ type: 'signalTableRowsRequest', action, ranges: this.selectionRanges, selectedIds: this.shownIds() }); }
   private copySelectedRows(): void { if (this.selectionRanges.length && !document.execCommand('copy')) this.requestSelectedRows('copy'); }
 
   private copyEvent(event: ClipboardEvent): void {
@@ -345,7 +347,7 @@ export class SignalTableView {
   private applyPane(): void { const toggle = this.host.querySelector('.table-pane-toggle')!; toggle.setAttribute('aria-expanded', String(!this.paneCollapsed)); toggle.setAttribute('title', this.paneCollapsed ? t('Show Signal selection', 'シグナル選択を表示') : t('Hide Signal selection', 'シグナル選択を隠す')); iconButton(toggle as HTMLButtonElement, this.paneCollapsed ? 'layout-sidebar-left-off' : 'layout-sidebar-left', toggle.getAttribute('title')!); this.pane.hidden = this.paneCollapsed; this.separator.hidden = this.paneCollapsed; this.pane.style.width = `${this.paneWidth}px`; this.pane.style.flex = `0 0 ${this.paneWidth}px`; requestAnimationFrame(() => { if (this.visible) { this.applyWidths(); this.draw(); } }); }
   private startPaneResize(event: MouseEvent): void { event.preventDefault(); const start = event.clientX; const initial = this.paneWidth; const move = (next: MouseEvent) => { this.paneWidth = Math.max(180, Math.min(440, initial + next.clientX - start)); this.applyPane(); }; const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); this.persist(); }; window.addEventListener('mousemove', move); window.addEventListener('mouseup', up); }
 
-  private requestSample(targets?: ReadonlySet<string>): void { if (!this.selected.size) return; this.autoFitTargets = targets; this.latestSampleRequest = ++this.counter; this.post({ type: 'signalTableSampleRequest', requestId: this.latestSampleRequest, selectedIds: this.columnOrder.filter((id) => this.selected.has(id)) }); }
+  private requestSample(targets?: ReadonlySet<string>): void { if (!this.shownIds().length) return; this.autoFitTargets = targets; this.latestSampleRequest = ++this.counter; this.post({ type: 'signalTableSampleRequest', requestId: this.latestSampleRequest, selectedIds: this.shownIds() }); }
   private requestMissingWidths(): void { const missing = new Set(this.columns().map((column) => column.id).filter((id) => !this.fittedWidths.has(id))); if (missing.size) this.requestSample(missing); }
   private displayWidths(): Readonly<Record<string, number>> { return fitColumnsToView(this.sizingColumns(), this.widths, this.grid.clientWidth); }
   private template(): string { const visible = this.displayWidths(); return this.columns().map((column) => `${Math.round(visible[column.id])}px`).join(' '); }

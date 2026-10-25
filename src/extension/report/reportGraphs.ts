@@ -1,4 +1,5 @@
 import type { ComparisonGraphDefinition } from '../../core/project/comparison';
+import { trajectoryViewFrom } from '../../core/trajectory/trajectory';
 import type { LogViewState } from '../editors/rawLogProtocol';
 
 /** The Visualize tab's graphs as report graphs. A trajectory view with several XYZ series becomes one trajectory per series. */
@@ -13,7 +14,7 @@ export function reportGraphs(state: Partial<LogViewState>, trajectoryCurrentTime
       axes: { x: item.xId, y: item.yId, z: item.zId }, signalIds: [item.xId, item.yId, item.zId].filter((id): id is string => Boolean(id)),
       equalAspect: settings.trajectoryEqualAspect, showPoints: settings.trajectoryShowPoints !== false,
       showGrid: settings.trajectoryShowGrid, connectGaps: settings.trajectoryConnectGaps,
-      invert: settings.trajectoryInvert, trajectoryView: settings.trajectoryView,
+      invert: settings.trajectoryInvert, trajectoryView: settings.trajectoryView && trajectoryViewFrom(settings.trajectoryView), trajectoryViewFit: settings.trajectoryViewFit, coordinateSystem: settings.trajectoryCoordinateSystem,
       trajectoryTrail: settings.trajectoryTrail === 'last-seconds'
         ? { type: 'last-seconds', seconds: settings.trajectoryTrailSeconds ?? 10 }
         : { type: settings.trajectoryTrail ?? 'all' },

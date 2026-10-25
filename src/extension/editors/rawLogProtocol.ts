@@ -56,7 +56,11 @@ export interface LogViewState {
   readonly trajectoryTrail?: 'all' | 'to-current' | 'last-seconds';
   readonly trajectoryTrailSeconds?: number;
   readonly trajectorySpeed?: 0.25 | 0.5 | 1 | 2 | 5;
-  readonly trajectoryView?: { readonly yaw: number; readonly pitch: number; readonly zoom: number; readonly panX: number; readonly panY: number; readonly mirrorHorizontal?: boolean };
+  readonly trajectoryCoordinateSystem?: 'right' | 'left';
+  /** The 3D camera. Views saved by older versions may also hold `mirrorHorizontal`, which is ignored. */
+  readonly trajectoryView?: { readonly yaw: number; readonly pitch: number; readonly zoom: number; readonly panX: number; readonly panY: number };
+  /** The camera's zoom and pan follow the data and the view size (set by X/Y/Z and Reset view, cleared by zooming, panning or rotating). True when no camera is saved. */
+  readonly trajectoryViewFit?: boolean;
 }
 
 export interface ChartAxisRangeSetting {
