@@ -3,6 +3,7 @@ import { assertCanFrame } from '../../core/frame/canFrame';
 import type { Diagnostic } from '../../core/diagnostics/diagnostic';
 import { createDiagnostic } from '../../core/diagnostics/diagnostic';
 import { parseCanId } from '../../core/frame/canId';
+import { parseAscDate } from '../../core/time/timeFormat';
 
 export type AscNumericBase = 'hex' | 'dec';
 
@@ -16,6 +17,8 @@ export interface AscParseContext {
 export type AscLineResult =
   | { readonly type: 'frame'; readonly frame: CanFrame }
   | { readonly type: 'base'; readonly base: AscNumericBase }
+  /** The measurement start written on the `date` line, in clock seconds. */
+  | { readonly type: 'date'; readonly start: number }
   | { readonly type: 'ignored' }
   | { readonly type: 'diagnostic'; readonly diagnostic: Diagnostic };
 
@@ -87,7 +90,8 @@ export function parseAscLine(line: string, context: AscParseContext): AscLineRes
   const trimmed = line.trim();
   if (!trimmed) return { type: 'ignored' };
   if (/^base\s+/i.test(trimmed)) return { type: 'base', base: /\bdec\b/i.test(trimmed) ? 'dec' : 'hex' };
-  if (/^(date\s|\/\/|internal events|timestamps)/i.test(trimmed)) return { type: 'ignored' };
+  if (/^date\s/i.test(trimmed)) { const start = parseAscDate(trimmed); return start === undefined ? { type: 'ignored' } : { type: 'date', start }; }
+  if (/^(\/\/|internal events|timestamps)/i.test(trimmed)) return { type: 'ignored' };
   const fd = FD_RE.exec(line);
   if (fd) return parseFd(fd[1], fd[2], context);
   const classic = CLASSIC_RE.exec(line);

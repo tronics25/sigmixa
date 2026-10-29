@@ -44,12 +44,25 @@ export interface ExternalCsvValueColumn {
   readonly unit?: string;
 }
 
+/**
+ * What the times of an External CSV are, so they are placed on the log's time axis:
+ * `log`: the log's own timestamps (what SigMixa did before this choice existed; the default for older projects);
+ * `relative`: seconds from the log's measurement start; `unix`: Unix seconds; `datetime`: written dates and times.
+ */
+export type ExternalCsvTimeBase = 'log' | 'relative' | 'unix' | 'datetime';
+
+export function isExternalCsvTimeBase(value: unknown): value is ExternalCsvTimeBase {
+  return value === 'log' || value === 'relative' || value === 'unix' || value === 'datetime';
+}
+
 export interface ExternalCsvSourceDefinition {
   readonly id: string;
   readonly path: string;
   readonly fileName: string;
   readonly timestampColumn: string;
   readonly timestampUnit: 'seconds' | 'milliseconds' | 'microseconds';
+  /** Absent: `log`. */
+  readonly timeBase?: ExternalCsvTimeBase;
   readonly valueColumns: readonly ExternalCsvValueColumn[];
 }
 
@@ -213,6 +226,7 @@ function coerceExternalSource(value: unknown): ExternalCsvSourceDefinition {
     id: String(source.id ?? ''), path: String(source.path ?? ''), fileName: String(source.fileName ?? ''),
     timestampColumn: String(source.timestampColumn ?? ''),
     timestampUnit: source.timestampUnit === 'milliseconds' || source.timestampUnit === 'microseconds' ? source.timestampUnit : 'seconds',
+    ...(isExternalCsvTimeBase(source.timeBase) && source.timeBase !== 'log' ? { timeBase: source.timeBase } : {}),
     valueColumns: Array.isArray(source.valueColumns) ? source.valueColumns.map((item) => {
       const column = record(item); return { column: String(column.column ?? ''), name: String(column.name ?? column.column ?? ''), unit: column.unit === undefined ? undefined : String(column.unit) };
     }) : [],

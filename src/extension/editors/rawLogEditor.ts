@@ -11,8 +11,9 @@ import type { FrameDefinitionEditor } from '../frame-editor/frameDefinitionEdito
 import { createHash, randomUUID } from 'crypto';
 import type { PluginManager } from '../plugins/pluginManager';
 import * as path from 'path';
-import { readExternalCsvHeader } from '../external/externalCsvLoader';
-import { removeExternalCsvSignal, type ExternalCsvValueColumn } from '../../core/project/schema';
+import { readExternalCsvPreview } from '../external/externalCsvLoader';
+import { suggestCsvTimeBase } from '../../core/external/csv';
+import { isExternalCsvTimeBase, removeExternalCsvSignal, type ExternalCsvValueColumn } from '../../core/project/schema';
 import { signalCatalogGroups } from './signalCatalogGroups';
 import { reportCatalog, reportGraphs, reportSeries, reportTable, saveReport } from '../report/reportExporter';
 import { REPORT_FORMAT_VERSION } from '../report/reportData';
@@ -21,6 +22,7 @@ import { groupUnusablePlugins, updateGroup } from '../../core/project/analysisGr
 import { portableClipPath, resolveClipPath } from '../clips/clipPaths';
 import { withClipRange } from '../../core/project/clipRangeEdit';
 import { movedSource } from '../../core/project/clipIdentity';
+import { displaySeconds, effectiveTimeMode, formatClockTime, formatTimeRange, type TimeDisplayMode } from '../../core/time/timeFormat';
 import { chooseExportFormat, requireRenderedImage, saveRenderedImage, type RenderedImage } from '../imageExport';
 
 /**
@@ -89,6 +91,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       else if (update.type === 'analysisDiagnostics') void send({ type: 'analysisDiagnostics', groups: update.groups, total: update.total });
       else if (update.type === 'analysisProgress') void send({ type: 'analysisProgress', processed: update.processed, total: update.total });
       else if (update.type === 'analysisComplete') void send({ type: 'analysisComplete', processed: update.processed, cancelled: update.cancelled });
+      else if (update.type === 'timeReference') void send({ type: 'timeReference', reference: update.reference });
       else {
         void send({ type: 'parseComplete', cancelled: update.summary.cancelled, frames: update.summary.framesParsed, diagnostics: update.summary.diagnostics, channels: document.channelValues });
         void send({ type: 'definitionsChanged' });
@@ -155,7 +158,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         staleSettings = false;
         const state = currentSettings();
         const viewState = state && typeof state === 'object' ? state as LogViewState : undefined;
-        void send({ type: 'init', viewSettingsScope: viewSettingsScope(this.projectStore.current, viewStateKey, currentGroup()), place: this.projectStore.placeLabel(this.projectStore.levelOfUri(document.uri)), groupName: sourceGroup(this.projectStore, document.uri)?.name, fileName: document.fileName, parsing: document.isParsing, frames: document.store.size, diagnostics: document.diagnosticCount, channels: document.channelValues, viewState, clip: clip ? { name: clip.name, startTimestamp: clip.startTimestamp, endTimestamp: clip.endTimestamp } : undefined });
+        void send({ type: 'init', viewSettingsScope: viewSettingsScope(this.projectStore.current, viewStateKey, currentGroup()), place: this.projectStore.placeLabel(this.projectStore.levelOfUri(document.uri)), groupName: sourceGroup(this.projectStore, document.uri)?.name, fileName: document.fileName, parsing: document.isParsing, frames: document.store.size, diagnostics: document.diagnosticCount, channels: document.channelValues, viewState, clip: clip ? { name: clip.name, startTimestamp: clip.startTimestamp, endTimestamp: clip.endTimestamp } : undefined, timeReference: document.timeReference });
         void send({ type: 'clipRanges', clips: clipRanges() });
         void send({ type: 'sourceDiagnostics', groups: document.sourceDiagnosticGroups, total: document.diagnosticCount });
         void send({ type: 'analysisDiagnostics', groups: document.analysisDiagnosticGroups, total: document.analysisDiagnosticCount });
@@ -219,7 +222,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       } else if (message.type === 'cancelAnalysis') {
         document.cancelAnalysis();
       } else if (message.type === 'importExternalCsv') {
-        void this.selectExternalCsv(send);
+        void this.selectExternalCsv(document, send);
       } else if (message.type === 'commitExternalCsv') {
         void this.commitExternalCsv(message, sourceGroup(this.projectStore, document.uri)?.id);
       } else if (message.type === 'cancelExternalCsvImport') {
@@ -227,7 +230,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       } else if (message.type === 'removeExternalCsvSignal') {
         void this.removeExternalCsvSignal(message.sourceId, message.column, sourceGroup(this.projectStore, document.uri)?.id);
       } else if (message.type === 'exportSignalCsv') {
-        void this.exportSignals(document, message.selectedIds);
+        void this.exportSignals(document, message.selectedIds, message.timeDisplay);
       } else if (message.type === 'saveTimeSeriesImage') {
         void this.saveTimeSeriesImage(document, message);
       } else if (message.type === 'exportVisualize') {
@@ -251,9 +254,9 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         if (document.isParsing || document.isAnalyzing || !Number.isInteger(message.startRow) || !Number.isInteger(message.endRow) || message.startRow < 0 || message.endRow <= message.startRow) return;
         const first = document.signalTablePage(message.signalIds, message.startRow, 1); const last = document.signalTablePage(message.signalIds, message.endRow, 1);
         if (first.generation !== message.generation || last.generation !== message.generation || !first.rows[0] || !last.rows[0]) { void vscode.window.showWarningMessage(t('Analysis results changed. Select the range again.', '解析結果が変わりました。範囲を選択し直してください。')); return; }
-        void this.createClip(document, { type: 'createClip', startTimestamp: first.rows[0].timestamp, endTimestamp: last.rows[0].timestamp, signalIds: message.signalIds }, send);
+        void this.createClip(document, { type: 'createClip', startTimestamp: first.rows[0].timestamp, endTimestamp: last.rows[0].timestamp, signalIds: message.signalIds }, send, (currentSettings() as LogViewState | undefined)?.timeDisplay);
       } else if (message.type === 'createClip') {
-        void this.createClip(document, message, send);
+        void this.createClip(document, message, send, message.viewState?.timeDisplay ?? (currentSettings() as LogViewState | undefined)?.timeDisplay);
       } else if (message.type === 'saveLogViewState') {
         ownViewSave++;
         void this.projectStore.update((project) => {
@@ -269,7 +272,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
 
   private async transferSelectedRows(document: RawLogDocument, message: Extract<ToExtensionMessage, { type: 'selectedRowsRequest' }>, send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {
     try {
-      const result = document.selectedRowsText(message.ranges, message.filter, sourceProject(this.projectStore, document.uri), this.projectStore.analysisRevision, message.contentMode, message.action === 'open');
+      const result = document.selectedRowsText(message.ranges, message.filter, sourceProject(this.projectStore, document.uri), this.projectStore.analysisRevision, message.contentMode, message.action === 'open', message.timeDisplay);
       if (message.action === 'copy') { await vscode.env.clipboard.writeText(result.text); void send({ type: 'rowsCopied', count: result.count }); }
       else { const textDocument = await vscode.workspace.openTextDocument({ content: result.text, language: 'plaintext' }); await vscode.window.showTextDocument(textDocument, { viewColumn: vscode.ViewColumn.Beside, preview: false }); }
     } catch (error) { void vscode.window.showErrorMessage(t(`Could not ${message.action === 'copy' ? 'copy' : 'open'} RAW Log rows: ${errorText(error)}`, `RAWログの行を${message.action === 'copy' ? 'コピー' : '開くことが'}できませんでした: ${errorText(error)}`)); }
@@ -277,7 +280,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
 
   private async transferSignalTableRows(document: RawLogDocument, message: Extract<ToExtensionMessage, { type: 'signalTableRowsRequest' }>, send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {
     try {
-      const result = document.selectedSignalRowsText(message.ranges, message.selectedIds, message.action === 'open');
+      const result = document.selectedSignalRowsText(message.ranges, message.selectedIds, message.action === 'open', message.timeDisplay);
       if (message.action === 'copy') { await vscode.env.clipboard.writeText(result.text); void send({ type: 'signalTableRowsCopied', count: result.count }); }
       else { const textDocument = await vscode.workspace.openTextDocument({ content: result.text, language: 'plaintext' }); await vscode.window.showTextDocument(textDocument, { viewColumn: vscode.ViewColumn.Beside, preview: false }); }
     } catch (error) { void vscode.window.showErrorMessage(t(`Could not ${message.action === 'copy' ? 'copy' : 'open'} Signal Table rows: ${errorText(error)}`, `シグナルテーブルの行を${message.action === 'copy' ? 'コピー' : '開くことが'}できませんでした: ${errorText(error)}`)); }
@@ -298,7 +301,8 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     const notices: string[] = []; const name = clip?.name ?? document.fileName; const groupName = sourceGroup(this.projectStore, document.uri)?.name;
     const series = reportSeries(document, [...included], clip ? clipRange(clip) : undefined);
     const catalog = reportCatalog(document.signalCatalog(), signalCatalogGroups(document.signalCatalog(), sourceProject(this.projectStore, document.uri), true), included);
-    const rangeLabel = clip ? clipRangeLabel(clip, t('Whole file', 'ファイル全体')) : t('Whole file', 'ファイル全体');
+    const clipSpan = clip ? clipRange(clip) : undefined;
+    const rangeLabel = clipSpan ? formatTimeRange(clipSpan.start, clipSpan.end, state.timeDisplay, document.timeReference) : t('Whole file', 'ファイル全体');
     await saveReport(this.extensionUri, {
       formatVersion: REPORT_FORMAT_VERSION, kind: 'log', title: name, generatedAt: new Date().toISOString(), appVersion: extensionVersion(this.extensionUri),
       source: [clip ? `${document.fileName} · ${rangeLabel}` : document.fileName, ...(groupName ? [groupName] : [])], notices,
@@ -307,15 +311,19 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       definitions: catalog.definitions, groups: catalog.groups, availability: { log: [...included] },
       series: [{ targetId: 'log', items: series }], table: reportTable(document, tableIds, { columnOrder: state.tableColumnOrder, graphIds: graphs.flatMap((graph) => graph.signalIds), series }),
       clipSpans: clip ? undefined : this.clipRangesOf(document),
+      time: { ...(document.timeReference ? { reference: document.timeReference } : {}), ...(state.timeDisplay ? { mode: state.timeDisplay } : {}) },
     }, name);
   }
 
-  private async createClip(document: RawLogDocument, message: Extract<ToExtensionMessage, { type: 'createClip' }>, send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {
+  private async createClip(document: RawLogDocument, message: Extract<ToExtensionMessage, { type: 'createClip' }>, send: (message: ToWebviewMessage) => Thenable<boolean>, timeDisplay?: TimeDisplayMode): Promise<void> {
     const root = this.projectStore.requireWorkspace(); if (!root) return;
     // A Clip is always a time range; a whole log is compared or opened as the file itself.
     const range = { start: Math.min(message.startTimestamp, message.endTimestamp), end: Math.max(message.startTimestamp, message.endTimestamp) };
     if (!Number.isFinite(range.start) || !Number.isFinite(range.end) || range.end <= range.start) return;
-    const suggested = `${document.fileName} ${range.start.toFixed(3)}–${range.end.toFixed(3)} s`;
+    // Named by its times as this log shows them, so a BLF Clip is not named by a ten-digit number.
+    const mode = effectiveTimeMode(timeDisplay, document.timeReference);
+    const [start, end] = [range.start, range.end].map((value) => displaySeconds(value, mode, document.timeReference));
+    const suggested = mode === 'datetime' ? `${document.fileName} ${formatClockTime(start, 3)}–${formatClockTime(end, 3)}` : `${document.fileName} ${start.toFixed(3)}–${end.toFixed(3)} s`;
     const name = await vscode.window.showInputBox({ title: t('Create Clip', 'クリップを作成'), prompt: t('Clip name', 'クリップ名'), value: suggested, validateInput: (value) => value.trim() ? undefined : t('Clip name is required.', 'クリップ名を入力してください') });
     if (!name) return;
     const id = `clip-${randomUUID()}`;
@@ -328,12 +336,12 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     } catch (error) { void vscode.window.showErrorMessage(t(`Could not create Clip: ${errorText(error)}`, `クリップを作成できませんでした: ${errorText(error)}`)); }
   }
 
-  private async exportSignals(document: RawLogDocument, selectedIds: readonly string[]): Promise<void> {
+  private async exportSignals(document: RawLogDocument, selectedIds: readonly string[], timeDisplay?: TimeDisplayMode): Promise<void> {
     if (!selectedIds.length) { void vscode.window.showWarningMessage(t('Select at least one Signal to export.', "エクスポートするシグナルを選択してください。")); return; }
     const target = await vscode.window.showSaveDialog({ filters: { CSV: ['csv'] }, defaultUri: vscode.Uri.file(`${document.fileName.replace(/\.asc$/i, '')}-signals.csv`) });
     if (!target) return;
     if (target.scheme !== 'file') { void vscode.window.showErrorMessage(t('Signal CSV export currently requires a local file target.', "シグナルCSVの保存先にはローカルファイルを選択してください。")); return; }
-    try { await document.exportSignalCsv(target.fsPath, selectedIds); void vscode.window.showInformationMessage(t(`Signal CSV exported: ${target.fsPath}`, `シグナルCSVを保存しました: ${target.fsPath}`)); }
+    try { await document.exportSignalCsv(target.fsPath, selectedIds, timeDisplay); void vscode.window.showInformationMessage(t(`Signal CSV exported: ${target.fsPath}`, `シグナルCSVを保存しました: ${target.fsPath}`)); }
     catch (error) { void vscode.window.showErrorMessage(t(`Signal CSV export failed: ${errorText(error)}`, `シグナルCSVを保存できませんでした: ${errorText(error)}`)); }
   }
 
@@ -345,7 +353,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     const base = document.fileName.replace(/\.(?:asc|blf)$/i, ''); await saveRenderedImage({ title: 'Save Trajectory Image', japaneseTitle: '軌跡画像を保存', defaultBasePath: path.join(path.dirname(document.filePath), `${base}-trajectory`), image });
   }
 
-  private async selectExternalCsv(send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {
+  private async selectExternalCsv(document: RawLogDocument, send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {
     const root = this.projectStore.requireWorkspace();
     if (!root) return;
     const selected = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { CSV: ['csv'] }, title: t('Import External CSV', "外部CSVをインポート") });
@@ -353,14 +361,15 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     if (!uri) return;
     if (uri.scheme !== 'file') { void vscode.window.showErrorMessage(t('External CSV import currently requires a local file.', "外部CSVにはローカルファイルを選択してください。")); return; }
     try {
-      const headers = await readExternalCsvHeader(uri.fsPath);
+      const { headers, firstRow } = await readExternalCsvPreview(uri.fsPath);
       if (headers.length < 2) { void vscode.window.showErrorMessage(t('The CSV needs a header row with a Timestamp column and at least one value column.', "CSVにはヘッダー行と、時刻列および1列以上の値列が必要です。")); return; }
       const importId = randomUUID(); this.pendingExternalCsv.set(importId, { uri, headers });
       const suggestedTimestampColumn = headers.find((header) => /^(?:time|timestamp)(?:\b|[_ (])/i.test(header.trim())) ?? headers[0];
       const normalized = suggestedTimestampColumn.toLowerCase();
       const suggestedTimestampUnit = /(?:^|[_ (])(?:us|µs|μs|microseconds?)(?:\b|[)])/i.test(normalized) ? 'microseconds'
         : /(?:^|[_ (])(?:ms|milliseconds?)(?:\b|[)])/i.test(normalized) ? 'milliseconds' : 'seconds';
-      void send({ type: 'externalCsvPreview', importId, fileName: path.basename(uri.fsPath), headers, suggestedTimestampColumn, suggestedTimestampUnit });
+      const suggestedTimeBase = suggestCsvTimeBase(firstRow?.[headers.indexOf(suggestedTimestampColumn)], suggestedTimestampUnit);
+      void send({ type: 'externalCsvPreview', importId, fileName: path.basename(uri.fsPath), headers, suggestedTimestampColumn, suggestedTimestampUnit, suggestedTimeBase, logStartKnown: Boolean(document.timeReference), ...(firstRow ? { firstRow } : {}) });
     } catch (error) {
       void vscode.window.showErrorMessage(t(`External CSV import failed: ${errorText(error)}`, `外部CSVをインポートできませんでした: ${errorText(error)}`));
     }
@@ -384,7 +393,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         return path.normalize(absolute) === path.normalize(uri.fsPath);
       });
       const id = existing?.id ?? `csv-${createHash('sha256').update(uri.fsPath).digest('hex').slice(0, 16)}`;
-      const added = { id, path: portablePath, fileName: path.basename(uri.fsPath), timestampColumn: message.timestampColumn, timestampUnit: message.timestampUnit, valueColumns: configured };
+      const added = { id, path: portablePath, fileName: path.basename(uri.fsPath), timestampColumn: message.timestampColumn, timestampUnit: message.timestampUnit, ...(message.timeBase && isExternalCsvTimeBase(message.timeBase) && message.timeBase !== 'log' ? { timeBase: message.timeBase } : {}), valueColumns: configured };
       await this.projectStore.update((project) => group ? updateGroup(project, group.id, (item) => ({ ...item, definitionDependencies: {
         plugins: [], pluginBindings: [], lookupTables: [], calculations: [], ...item.definitionDependencies,
         externalCsvSources: [...(item.definitionDependencies?.externalCsvSources ?? []).filter((source) => source.id !== id), added] } }))

@@ -9,6 +9,7 @@ import { emphasizeSignal } from '../shared/signalEmphasis';
 import { bindResizeKeyboard, blurTableFocus, widthToFit } from '../shared/tableBehavior';
 import { closeActionMenu, showActionMenu } from '../shared/contextMenu';
 import { t } from '../shared/i18n';
+import { chosenTimeMode, onTimeDisplayChange, timeCellText, timeColumnHeading, timeColumnTitle, timeCopyText, timeFormatActions } from '../shared/timeDisplay';
 import { addSelectionRange, removeSelectionIndex, selectionContains, selectionCount, type SelectionRange } from '../raw/selectionRanges';
 
 const ROW_HEIGHT = DATA_TABLE_ROW_HEIGHT;
@@ -64,6 +65,7 @@ export class SignalTableView {
     this.selected = new Set(initial?.tableSelectedIds ?? []);
     this.columnOrder = [...(initial?.tableColumnOrder ?? initial?.tableSelectedIds ?? [])];
     this.widths = { time: 118, ...(initial?.tableWidths ?? {}) };
+    onTimeDisplayChange(() => { this.buildHeader(); this.draw(); });
     this.fittedWidths = new Set(Object.keys(initial?.tableWidths ?? {}));
     this.paneWidth = Math.max(180, Math.min(440, initial?.tablePaneWidth ?? 250)); this.paneCollapsed = initial?.tablePaneCollapsed ?? false;
     host.innerHTML = `<div class="signal-layout"><aside class="signal-pane table-pane"><div class="table-selector"></div></aside><div class="pane-separator table-pane-separator"></div><section class="signal-main"><div class="view-toolbar"><button class="table-pane-toggle">${t('Signals', 'シグナル')}</button><button class="table-clip" disabled>✂ ${t('Create Clip from selection', '選択範囲からクリップ作成')}</button><button class="table-export">${t('Export CSV…', 'CSVへ出力…')}</button><span class="spacer"></span><span class="table-selection-status status selection-status" hidden></span><span class="table-status muted">${t('Select Signals', 'シグナルを選択')}</span><button class="table-analysis-cancel" hidden>${t('Cancel analysis', '解析を中止')}</button></div><div class="signal-grid" role="table" aria-multiselectable="true" tabindex="0"><div class="signal-grid-header" role="row"></div><div class="signal-grid-sizer"><div class="signal-grid-window"></div></div><div class="table-empty raw-empty" hidden><span></span></div></div></section></div><div class="context-menu table-context-menu" hidden></div>`;
@@ -77,7 +79,7 @@ export class SignalTableView {
     host.querySelector('.table-clip')!.addEventListener('click', () => { const range = this.selectionRanges[0]; if (this.selectionRanges.length === 1 && range.end > range.start && !this.parsing && !this.analysisProgress) this.post({ type: 'createTableClip', startRow: range.start, endRow: range.end, generation: this.rowsGeneration, signalIds: [...this.selected] }); });
     iconButton(this.exportButton, 'export', t('Export CSV', 'CSVへ出力'));
     iconButton(host.querySelector<HTMLButtonElement>('.table-clip')!, 'new-file', t('Create Clip from selection', '選択範囲からクリップ作成'));
-    this.exportButton.addEventListener('click', () => this.post({ type: 'exportSignalCsv', selectedIds: this.shownIds() }));
+    this.exportButton.addEventListener('click', () => this.post({ type: 'exportSignalCsv', selectedIds: this.shownIds(), timeDisplay: chosenTimeMode() }));
     host.querySelector('.table-pane-toggle')!.addEventListener('click', () => { this.paneCollapsed = !this.paneCollapsed; this.applyPane(); this.persist(); });
     this.analysisCancel.addEventListener('click', () => this.post({ type: 'cancelAnalysis' }));
     this.separator.addEventListener('mousedown', (event) => this.startPaneResize(event));
@@ -135,7 +137,7 @@ export class SignalTableView {
 
   private sizingColumns(): readonly SizingColumn<SignalTableRowDto>[] {
     return this.columns().map((column) => column.id === 'time'
-      ? { id: 'time', label: 'TIME(S)', minWidth: 96, maxWidth: 180, value: (row) => row.timestamp.toFixed(6) }
+      ? { id: 'time', label: timeColumnHeading(), minWidth: 96, maxWidth: 180, value: (row) => timeCellText(row.timestamp) }
       : { id: column.id, label: `${column.definition!.name}${column.definition!.unit ? ` (${column.definition!.unit})` : ''}`, minWidth: 90, maxWidth: 320, flex: 1, value: (row) => row.values[column.id] === undefined ? '' : `${formatNumber(row.values[column.id])}${row.valueLabels?.[column.id] ? ` (${row.valueLabels[column.id]})` : ''}` });
   }
 
@@ -150,7 +152,7 @@ export class SignalTableView {
     this.header.replaceChildren(); this.header.style.gridTemplateColumns = this.template(); this.header.style.width = `${this.totalWidth()}px`;
     for (const column of this.columns()) {
       const cell = document.createElement('div'); cell.className = `signal-head${column.id === 'time' ? ' sticky-time' : ''}`; cell.setAttribute('role', 'columnheader'); cell.dataset.columnId = column.id;
-      if (column.id === 'time') cell.textContent = 'TIME(S)';
+      if (column.id === 'time') { cell.textContent = timeColumnHeading(); cell.title = `${timeColumnTitle()}\n${t('Right-click to change the time format', '右クリックで時刻の表示形式を変更')}`; cell.addEventListener('contextmenu', (event) => { event.preventDefault(); showActionMenu(timeFormatActions((mode) => this.save({ timeDisplay: mode })), t('Time format', '時刻の表示形式'), event.clientX, event.clientY, cell, { scroller: this.grid }); }); }
       else {
         const name = document.createElement('span'); name.textContent = column.definition!.name; name.className = 'signal-column-drag'; name.dataset.fitContent = 'true'; name.draggable = true;
         name.addEventListener('dragstart', (event) => { event.dataTransfer?.setData('text/plain', column.id); if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'; cell.classList.add('dragging'); });
@@ -161,7 +163,7 @@ export class SignalTableView {
         cell.addEventListener('drop', (event) => { event.preventDefault(); cell.classList.remove('drag-target'); const source = event.dataTransfer?.getData('text/plain'); if (source) this.moveColumn(source, column.id, event.clientX > cell.getBoundingClientRect().left + cell.clientWidth / 2); });
       }
       const handle = document.createElement('span'); handle.className = 'resize'; handle.addEventListener('mousedown', (event) => this.startResize(event, column.id)); handle.addEventListener('dblclick', () => this.requestSample(new Set([column.id])));
-      bindResizeKeyboard(handle, { label: column.id === 'time' ? 'TIME(S)' : column.definition!.name, width: () => this.displayWidths()[column.id], setWidth: (width) => this.setColumnWidth(column.id, width), fit: () => this.requestSample(new Set([column.id])) });
+      bindResizeKeyboard(handle, { label: column.id === 'time' ? timeColumnHeading() : column.definition!.name, width: () => this.displayWidths()[column.id], setWidth: (width) => this.setColumnWidth(column.id, width), fit: () => this.requestSample(new Set([column.id])) });
       cell.appendChild(handle); this.header.appendChild(cell);
     }
     this.applyWidths();
@@ -179,7 +181,7 @@ export class SignalTableView {
       columns.forEach((column) => {
         const cell = document.createElement('div');
         cell.className = `signal-cell${column.id === 'time' ? ' sticky-time' : ''}`;
-        const value = !data ? t('Loading…', '読み込み中…') : column.id === 'time' ? data.timestamp.toFixed(6) : data.values[column.id] === undefined ? '—' : formatNumber(data.values[column.id]);
+        const value = !data ? t('Loading…', '読み込み中…') : column.id === 'time' ? timeCellText(data.timestamp) : data.values[column.id] === undefined ? '—' : formatNumber(data.values[column.id]);
         const display = `${value}${data?.valueLabels?.[column.id] ? ` (${data.valueLabels[column.id]})` : ''}`;
         const unit = column.definition?.unit ? ` ${column.definition.unit}` : '';
         cell.textContent = display;
@@ -297,10 +299,10 @@ export class SignalTableView {
     for (const range of this.selectionRanges) for (let index = range.start; index <= range.end; index++) { const row = this.rows.get(index); if (!row) return undefined; result.push(row); } return result;
   }
 
-  private rowValues(row: SignalTableRowDto): readonly string[] { return [row.timestamp.toFixed(6), ...this.shownIds().map((id) => row.values[id] === undefined ? '' : formatNumber(row.values[id]))]; }
+  private rowValues(row: SignalTableRowDto): readonly string[] { return [timeCopyText(row.timestamp), ...this.shownIds().map((id) => row.values[id] === undefined ? '' : formatNumber(row.values[id]))]; }
   private selectedRowsAsText(rows: readonly SignalTableRowDto[]): string { return `${rows.map((row) => this.rowValues(row).map(cleanCell).join('\t')).join('\r\n')}\r\n`; }
   private selectedRowsAsHtml(rows: readonly SignalTableRowDto[]): string { const table = document.createElement('table'); const body = document.createElement('tbody'); table.appendChild(body); for (const row of rows) { const tr = document.createElement('tr'); for (const value of this.rowValues(row)) { const td = document.createElement('td'); td.textContent = value; tr.appendChild(td); } body.appendChild(tr); } return table.outerHTML; }
-  private requestSelectedRows(action: 'copy' | 'open'): void { if (this.selectionRanges.length) this.post({ type: 'signalTableRowsRequest', action, ranges: this.selectionRanges, selectedIds: this.shownIds() }); }
+  private requestSelectedRows(action: 'copy' | 'open'): void { if (this.selectionRanges.length) this.post({ type: 'signalTableRowsRequest', action, ranges: this.selectionRanges, selectedIds: this.shownIds(), timeDisplay: chosenTimeMode() }); }
   private copySelectedRows(): void { if (this.selectionRanges.length && !document.execCommand('copy')) this.requestSelectedRows('copy'); }
 
   private copyEvent(event: ClipboardEvent): void {

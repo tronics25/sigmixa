@@ -1,6 +1,9 @@
 import { isTextEditing } from '../shared/keyboard';
 import { chartTicks } from '../shared/chartAxes';
-import { enhanceChoiceSelect } from '../shared/choiceGroup';
+import { onTimeDisplayChange, timeLabel, timeRangeLabel, timeTicks } from '../shared/timeDisplay';
+import { suggestCsvTimeBase } from '../../core/external/csv';
+import type { ExternalCsvTimeBase } from '../../core/project/schema';
+import { enhanceChoiceSelect, focusChoiceSelect } from '../shared/choiceGroup';
 import { buttonContextAction, type ViewContextAction } from '../shared/viewContextAction';
 import { signalAxisKey, graphDisplayPolicy, partitionActualGraphs } from '../shared/graphDisplayPolicy';
 import { chartAxisGeometry } from '../shared/chartAxes';
@@ -48,7 +51,7 @@ export class TimeSeriesView {
   get isConfigured(): boolean { return this.shown.length > 0; }
   /** The selected Signals the graph can show (those shown checked). */
   private get shown(): string[] { return this.selector.shownSelection(); }
-  dispose(): void { this.hide(); this.lifetime.abort(); this.resizeObserver?.disconnect(); this.unsubscribeTimeline?.(); this.unsubscribePosition?.(); this.unsubscribeVisibility?.(); this.unsubscribeRange?.(); this.unsubscribeViewRange?.(); this.unsubscribeClipRanges?.(); }
+  dispose(): void { this.hide(); this.lifetime.abort(); this.resizeObserver?.disconnect(); this.unsubscribeTimeline?.(); this.unsubscribeTimeDisplay?.(); this.unsubscribePosition?.(); this.unsubscribeVisibility?.(); this.unsubscribeRange?.(); this.unsubscribeViewRange?.(); this.unsubscribeClipRanges?.(); }
   private listenWindow<K extends keyof WindowEventMap>(type: K, listener: (event: WindowEventMap[K]) => void): void { window.addEventListener(type, listener, { signal: this.lifetime.signal }); }
   private readonly selected: Set<string>;
   private readonly colors: Map<string, string>;
@@ -96,6 +99,7 @@ export class TimeSeriesView {
   private rangePending = false;
   private unsubscribeViewRange?: () => void;
   private unsubscribeClipRanges?: () => void;
+  private unsubscribeTimeDisplay?: () => void;
   /** Where each Clip's span marker was last drawn, in canvas CSS pixels. */
   private clipMarkers: { id: string; name: string; left: number; right: number; top: number; bottom: number; start: number; end: number; startsHere: boolean; endsHere: boolean }[] = [];
   /** An edge of a Clip being dragged to a new time. The Clips as they were are kept, to put back on Escape. */
@@ -154,7 +158,7 @@ export class TimeSeriesView {
   }
   private readonly status: HTMLElement;
   private readonly saveImageButton: HTMLButtonElement;
-  private pendingImport: (ExternalCsvPreviewDto & { timestampColumn: string; timestampUnit: 'seconds' | 'milliseconds' | 'microseconds'; selectedColumns: Set<string>; units: Map<string, string> }) | undefined;
+  private pendingImport: (ExternalCsvPreviewDto & { timestampColumn: string; timestampUnit: 'seconds' | 'milliseconds' | 'microseconds'; timeBase: ExternalCsvTimeBase; timeBaseChosen: boolean; selectedColumns: Set<string>; units: Map<string, string> }) | undefined;
 
   constructor(
     private readonly host: HTMLElement,
@@ -169,6 +173,7 @@ export class TimeSeriesView {
     this.elements = new ViewElements(host, optionsHost, actionsHost);
     this.selectedRange = this.timeline?.range;
     this.unsubscribeClipRanges = this.timeline?.subscribeClipRanges(() => { if (this.visible) this.draw(false); });
+    this.unsubscribeTimeDisplay = onTimeDisplayChange(() => { const range = this.selectedRange; if (range) this.elements.querySelector('.clip-range')!.textContent = `${timeRangeLabel(range.start, range.end, formatSeconds)} · ${formatNumber(range.end - range.start)} s`; this.updateZoomControls(); if (this.visible) this.draw(false); });
     this.unsubscribeViewRange = this.timeline?.subscribeViewRange((_range, source) => { if (source !== this.timelineSource && this.shown.length) this.requestSeries(this.fullRange); });
     this.unsubscribeRange = this.timeline?.subscribeRange((range, source) => { if (source === this.timelineSource) return; if (!range) { this.latestRangeRequest = ++this.counter; this.rangePending = false; } this.selectedRange = range; this.updateRangeControls(); this.draw(false); });
     this.measured = new MeasuredSamples((requestId, query) => this.post({ type: 'measuredSignalsRequest', requestId, selectedIds: query.signalIds, timestamp: query.timestamp }), () => this.scheduleInteractionDraw());
@@ -292,7 +297,7 @@ export class TimeSeriesView {
     if (message.type === 'measuredSignals') {
       this.measured.receive(message.requestId, message.samples);
     } else if (message.type === 'externalCsvPreview') {
-      this.pendingImport = { ...message, timestampColumn: message.suggestedTimestampColumn ?? message.headers[0] ?? '', timestampUnit: message.suggestedTimestampUnit, selectedColumns: new Set(), units: new Map() };
+      this.pendingImport = { ...message, timestampColumn: message.suggestedTimestampColumn ?? message.headers[0] ?? '', timestampUnit: message.suggestedTimestampUnit, timeBase: message.logStartKnown || message.suggestedTimeBase === 'datetime' ? message.suggestedTimeBase : 'relative', timeBaseChosen: false, selectedColumns: new Set(), units: new Map() };
       this.renderImportWizard();
     } else if (message.type === 'signalCatalog' && message.requestId === this.latestCatalogRequest) {
       message.definitions.forEach((definition, index) => { if (!this.colors.has(definition.id)) this.colors.set(definition.id, SIGNAL_COLOR_PRESETS[index % SIGNAL_COLOR_PRESETS.length]); });
@@ -348,6 +353,8 @@ export class TimeSeriesView {
     if (this.pendingImport) this.post({ type: 'cancelExternalCsvImport', importId: this.pendingImport.importId });
     this.pendingImport = undefined; this.renderImportWizard(); this.post({ type: 'importExternalCsv' });
   }
+  /** The import choice that rebuilt the dialog, to keep keyboard focus on it. */
+  private importFocus?: 'timeBase' | 'unit';
   private renderImportWizard(): void {
     const host = this.elements.querySelector('.external-import-host')!; host.replaceChildren(); const pending = this.pendingImport;
     if (!pending) return;
@@ -357,15 +364,27 @@ export class TimeSeriesView {
     const timestamp = document.createElement('select'); timestamp.setAttribute('aria-label', t('CSV Timestamp column', 'CSVの時刻列'));
     for (const header of pending.headers) { const option = document.createElement('option'); option.value = header; option.textContent = header || t('(unnamed column)', '(名前なしの列)'); option.selected = header === pending.timestampColumn; timestamp.appendChild(option); }
     timestamp.addEventListener('change', () => { pending.timestampColumn = timestamp.value; pending.selectedColumns.delete(timestamp.value); this.renderImportWizard(); }); box.appendChild(timestamp);
-    box.appendChild(fieldLabel(t('Timestamp unit', '時刻単位')));
-    const timestampUnit = document.createElement('select'); timestampUnit.setAttribute('aria-label', t('CSV Timestamp unit', 'CSVの時刻単位'));
-    for (const [value, label] of [['seconds', 'seconds (s)'], ['milliseconds', 'milliseconds (ms)'], ['microseconds', 'microseconds (µs)']] as const) { const option = document.createElement('option'); option.value = value; option.textContent = label; option.selected = value === pending.timestampUnit; timestampUnit.appendChild(option); }
-    timestampUnit.addEventListener('change', () => { pending.timestampUnit = timestampUnit.value as typeof pending.timestampUnit; }); box.appendChild(timestampUnit); enhanceChoiceSelect(timestampUnit);
+    // One choice of how the CSV's times are written; a unit only where they are numbers. Proposed from the first row until chosen.
+    const firstTime = pending.firstRow?.[pending.headers.indexOf(pending.timestampColumn)];
+    if (!pending.timeBaseChosen) { const suggested = suggestCsvTimeBase(firstTime, pending.timestampUnit); pending.timeBase = pending.logStartKnown || suggested === 'datetime' ? suggested : 'relative'; }
+    box.appendChild(fieldLabel(t('Time format', '時刻の形式')));
+    const timeBase = document.createElement('select'); timeBase.setAttribute('aria-label', t('How the CSV times are written', 'CSVの時刻の書き方'));
+    // `log` (the log's own time) stays readable for CSVs added by older versions, but is not offered: it is the elapsed time of a log without a start, and of no use otherwise.
+    for (const [value, label] of [['datetime', t('Date and time', '日時')], ['relative', t('Elapsed from start', '開始からの経過時間')], ['unix', t('Unix time', 'Unix時刻')]] as const) { const option = document.createElement('option'); option.value = value; option.textContent = label; option.disabled = !pending.logStartKnown && value !== 'relative'; option.selected = value === pending.timeBase; timeBase.appendChild(option); }
+    timeBase.title = pending.logStartKnown ? (firstTime ? `${t('First time in the CSV', 'CSVの最初の時刻')}: ${firstTime}` : '') : t('This log does not record its start date and time, so CSV dates, times and Unix times cannot be placed on it.', 'このログには計測開始日時が記録されていないため、CSVの日時・Unix時刻は合わせられません。');
+    timeBase.addEventListener('change', () => { pending.timeBase = timeBase.value as ExternalCsvTimeBase; pending.timeBaseChosen = true; this.importFocus = 'timeBase'; this.renderImportWizard(); }); box.appendChild(timeBase); enhanceChoiceSelect(timeBase); if (this.importFocus === 'timeBase') focusChoiceSelect(timeBase);
+    if (pending.timeBase !== 'datetime') {
+      box.appendChild(fieldLabel(t('Unit', '単位')));
+      const timestampUnit = document.createElement('select'); timestampUnit.setAttribute('aria-label', t('CSV Timestamp unit', 'CSVの時刻単位'));
+      for (const [value, label] of [['seconds', 'seconds (s)'], ['milliseconds', 'milliseconds (ms)'], ['microseconds', 'microseconds (µs)']] as const) { const option = document.createElement('option'); option.value = value; option.textContent = label; option.selected = value === pending.timestampUnit; timestampUnit.appendChild(option); }
+      timestampUnit.addEventListener('change', () => { pending.timestampUnit = timestampUnit.value as typeof pending.timestampUnit; if (!pending.timeBaseChosen) { this.importFocus = 'unit'; this.renderImportWizard(); } }); box.appendChild(timestampUnit); enhanceChoiceSelect(timestampUnit); if (this.importFocus === 'unit') focusChoiceSelect(timestampUnit);
+    }
+    this.importFocus = undefined;
     const columnsLabel = fieldLabel(t('Value columns and units', '値の列と単位')); columnsLabel.classList.add('external-columns-label'); box.appendChild(columnsLabel);
     const columns = document.createElement('div'); columns.className = 'external-column-list'; box.appendChild(columns);
     const actions = document.createElement('div'); actions.className = 'external-import-actions';
     const add = document.createElement('button'); add.type = 'button'; add.className = 'primary'; add.textContent = t('Add to graph', 'グラフへ追加');
-    const updateAdd = () => { add.disabled = pending.selectedColumns.size === 0 || !pending.timestampColumn; }; updateAdd();
+    const updateAdd = () => { add.disabled = pending.selectedColumns.size === 0 || !pending.timestampColumn || (!pending.logStartKnown && (pending.timeBase === 'datetime' || pending.timeBase === 'unix')); }; updateAdd();
     for (const header of pending.headers) {
       if (header === pending.timestampColumn) continue;
       const row = document.createElement('div'); row.className = 'external-column-row'; const label = document.createElement('label');
@@ -376,7 +395,7 @@ export class TimeSeriesView {
       unit.addEventListener('input', () => pending.units.set(header, unit.value)); row.append(label, unit); columns.appendChild(row);
     }
     add.addEventListener('click', () => {
-      this.post({ type: 'commitExternalCsv', importId: pending.importId, timestampColumn: pending.timestampColumn, timestampUnit: pending.timestampUnit, valueColumns: [...pending.selectedColumns].map((column) => ({ column, name: column, unit: pending.units.get(column)?.trim() || undefined })) });
+      this.post({ type: 'commitExternalCsv', importId: pending.importId, timestampColumn: pending.timestampColumn, timestampUnit: pending.timestampUnit, timeBase: pending.timeBase, valueColumns: [...pending.selectedColumns].map((column) => ({ column, name: column, unit: pending.units.get(column)?.trim() || undefined })) });
       this.pendingImport = undefined; this.renderImportWizard();
     });
     const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = t('Cancel', 'キャンセル'); cancel.addEventListener('click', () => { this.post({ type: 'cancelExternalCsvImport', importId: pending.importId }); this.pendingImport = undefined; this.renderImportWizard(); });
@@ -458,7 +477,7 @@ export class TimeSeriesView {
     (this.elements.querySelector('.range-zoom') as HTMLButtonElement).disabled = !valid;
     (this.elements.querySelector('.clip-create') as HTMLButtonElement).disabled = !valid;
     this.elements.querySelectorAll<HTMLButtonElement>('.clip-start-prev,.clip-start-next,.clip-end-prev,.clip-end-next').forEach((button) => { button.disabled = !range || this.rangePending; });
-    if (range) this.elements.querySelector('.clip-range')!.textContent = `${formatNumber(range.start)}–${formatNumber(range.end)} s · ${formatNumber(range.end - range.start)} s`;
+    if (range) this.elements.querySelector('.clip-range')!.textContent = `${timeRangeLabel(range.start, range.end, formatSeconds)} · ${formatNumber(range.end - range.start)} s`;
   }
 
   // ---- Used by Visualize's top bar, which acts on every graph and on the range they share ----
@@ -519,7 +538,7 @@ export class TimeSeriesView {
     for (let graphIndex = 0; graphIndex < graphCount; graphIndex++) {
       const legendHeight = legendHeights[graphIndex] ?? 0; const blockTop = top + precedingHeight; const graphTop = blockTop + legendHeight; const laneTop = graphTop + 30; const laneHeight = (interactions ? this.plotHeight : GRAPH_HEIGHT) - 58; const pair = graphs[graphIndex] ?? []; const hoverValues: CanvasHoverValue[] = []; const markerValues = new Map<string, CanvasHoverValue[]>(); if (!interactions) this.paintGraphLegend(context, pair, width, blockTop); precedingHeight += legendHeight + (interactions ? this.plotHeight : GRAPH_HEIGHT) + (gutters[graphIndex] ?? 0);
       context.strokeStyle = css('--vscode-panel-border', '#777'); context.strokeRect(left, laneTop, plotW, laneHeight);
-      for (const timestamp of chartTicks(this.viewRange.start, this.viewRange.end, Math.max(1, Math.min(5, Math.floor(plotW / 100))))) { const px = x(timestamp); context.globalAlpha = .48; context.beginPath(); context.moveTo(px, laneTop); context.lineTo(px, laneTop + laneHeight); context.stroke(); context.globalAlpha = 1; const label = `${timestamp} s`; const labelWidth = context.measureText(label).width; context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.fillText(label, Math.max(left, Math.min(left + plotW - labelWidth, px - labelWidth / 2)), laneTop + laneHeight + 20); }
+      for (const { timestamp, label } of timeTicks(this.viewRange.start, this.viewRange.end, Math.max(1, Math.min(5, Math.floor(plotW / 100))))) { const px = x(timestamp); context.globalAlpha = .48; context.beginPath(); context.moveTo(px, laneTop); context.lineTo(px, laneTop + laneHeight); context.stroke(); context.globalAlpha = 1; const labelWidth = context.measureText(label).width; context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.fillText(label, Math.max(left, Math.min(left + plotW - labelWidth, px - labelWidth / 2)), laneTop + laneHeight + 20); }
       pair.forEach((group, axisIndex) => {
         const range = this.mode === 'normalized' ? { minimum: 0, maximum: 100 } : displaySeriesRange(group.items, this.axisRange, this.viewRange, group.displayUnit); let { minimum, maximum } = range; if (minimum === maximum) { const pad = Math.abs(minimum) * .05 || 1; minimum -= pad; maximum += pad; }
         const y = (value: number) => laneTop + (1 - (value - minimum) / (maximum - minimum)) * laneHeight; const rightAxis = axisIndex % 2 === 1; const axisX = rightAxis ? left + plotW + Math.floor(axisIndex / 2) * axisWidth : left - Math.floor(axisIndex / 2) * axisWidth;
@@ -585,24 +604,24 @@ export class TimeSeriesView {
       if (interactions && cursorTimestamp !== undefined && cursorTimestamp >= this.viewRange.start && cursorTimestamp <= this.viewRange.end && (this.hoverGraphIndex === undefined || this.hoverGraphIndex === graphIndex)) { context.strokeStyle = css('--vscode-editorCursor-foreground', '#fff'); context.beginPath(); const px = x(cursorTimestamp); context.moveTo(px, laneTop); context.lineTo(px, laneTop + laneHeight); context.stroke(); }
       const occupiedLabels: HoverLabelRect[] = [];
       const fixedTimestampMarkers = visibleMarkers.map((marker) => {
-        const timestampMarker = this.createTimestampMarker(context, x(marker.timestamp), `${formatNumber(marker.timestamp)} s`, left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop);
+        const timestampMarker = this.createTimestampMarker(context, x(marker.timestamp), timeLabel(marker.timestamp, formatSeconds), left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop);
         occupiedLabels.push(timestampMarker.rect); return timestampMarker;
       });
       const rangeTimestampMarkers: CanvasTimestampMarker[] = [];
       if (this.selectedRange && rangeGraphIndex === graphIndex) {
         for (const edge of ['start', 'end'] as const) {
           const timestamp = this.selectedRange[edge]; if (timestamp < this.viewRange.start || timestamp > this.viewRange.end) continue;
-          const marker = this.createTimestampMarker(context, x(timestamp), `${edge === 'start' ? t('Start', '開始') : t('End', '終了')} ${formatNumber(timestamp)} s`, left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop, this.activeRangeEdge === edge);
+          const marker = this.createTimestampMarker(context, x(timestamp), `${edge === 'start' ? t('Start', '開始') : t('End', '終了')} ${timeLabel(timestamp, formatSeconds)}`, left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop, this.activeRangeEdge === edge);
           occupiedLabels.push(marker.rect); rangeTimestampMarkers.push(marker);
         }
       }
       const traceTimestampMarker = traceVisible
-        ? { ...this.createTimestampMarker(context, x(traceTime), `${formatNumber(traceTime)} s`, left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop), color: traceColor }
+        ? { ...this.createTimestampMarker(context, x(traceTime), timeLabel(traceTime, formatSeconds), left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop), color: traceColor }
         : undefined;
       if (traceTimestampMarker) occupiedLabels.push(traceTimestampMarker.rect);
       const cursorMatchesRangeEdge = this.selectedRange && this.activeRangeEdge && cursorTimestamp === this.selectedRange[this.activeRangeEdge] && rangeGraphIndex === graphIndex;
       const timestampMarker = interactions && cursorTimestamp !== undefined && this.hoverGraphIndex === graphIndex && !cursorMatchesRangeEdge
-        ? this.createTimestampMarker(context, x(cursorTimestamp), `${formatNumber(cursorTimestamp)} s`, left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop)
+        ? this.createTimestampMarker(context, x(cursorTimestamp), timeLabel(cursorTimestamp, formatSeconds), left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop)
         : undefined;
       if (timestampMarker) occupiedLabels.push(timestampMarker.rect);
       for (const marker of visibleMarkers) this.paintHoverValues(context, x(marker.timestamp), markerValues.get(marker.id) ?? [], left, left + plotW, laneTop, laneTop + laneHeight, occupiedLabels);
@@ -677,7 +696,7 @@ export class TimeSeriesView {
     const x = (time: number) => left + (time - range.start) / (range.end - range.start || 1) * plotWidth;
     return graphs.map((_, index) => {
       const labels: { x: number; text: string }[] = [];
-      const add = (time: number | undefined, prefix = '') => { if (time !== undefined && time >= range.start && time <= range.end) labels.push({ x: x(time), text: `${prefix}${formatNumber(time)} s` }); };
+      const add = (time: number | undefined, prefix = '') => { if (time !== undefined && time >= range.start && time <= range.end) labels.push({ x: x(time), text: `${prefix}${timeLabel(time, formatSeconds)}` }); };
       for (const marker of this.markers.values()) if (findGraphIndexBySignals(ids, marker.signalIds) === index) add(this.measured.referenceTimestamp(`marker:${marker.id}`));
       if (this.selectedRange && rangeIndex === index) { add(this.selectedRange.start, t('Start ', '開始 ')); add(this.selectedRange.end, t('End ', '終了 ')); }
       add(this.timeline?.position);
@@ -720,14 +739,14 @@ export class TimeSeriesView {
   private updateZoomControls(): void {
     const full = this.fullRange; const view = this.viewRange; const reset = this.elements.querySelector<HTMLButtonElement>('.zoom-reset')!; const out = this.elements.querySelector<HTMLButtonElement>('.zoom-out')!; const input = this.elements.querySelector<HTMLButtonElement>('.zoom-in')!; const label = this.elements.querySelector('.view-range')!;
     const zoomed = Boolean(full && view && (Math.abs(view.start - full.start) > 1e-9 || Math.abs(view.end - full.end) > 1e-9)); reset.disabled = !zoomed; out.disabled = !zoomed; input.disabled = !full || !view || (view.end - view.start) <= (full.end - full.start) * .005 + 1e-12;
-    label.textContent = view ? `${formatNumber(view.start)}–${formatNumber(view.end)} s · ${formatNumber(view.end - view.start)} s` : '';
+    label.textContent = view ? `${timeRangeLabel(view.start, view.end, formatSeconds)} · ${formatNumber(view.end - view.start)} s` : '';
   }
   private updateExportAction(): void { this.saveImageButton.disabled = !this.series.length || !this.viewRange || this.seriesPending || this.measured.pendingMarkers(); this.saveImageButton.title = t('Save image', '画像を保存'); }
   private saveImage(): void { const image = this.renderImage(); if (image) this.post({ type: 'saveTimeSeriesImage', ...withBrandMark(image, css('--vscode-foreground', '#ddd')) }); }
   /** This graph as an export image; `heading` is the title written on it (the graph name on a combined sheet). */
   renderImage(heading = 'SigMixa · Time Series', width = 1600): SheetImage | undefined {
     if (!this.series.length || !this.viewRange || this.saveImageButton.disabled) return undefined; const graphs = timeSeriesGraphs(this.series, this.mode, this.groupLayout); const graphCount = Math.max(1, graphs.length); const canvas = document.createElement('canvas'); canvas.width = width; let context = canvas.getContext('2d'); if (!context) return undefined; const legendHeights = Array.from({ length: graphCount }, (_, index) => this.measureGraphLegendHeight(context!, graphs[index] ?? [], width)); const gutters = this.measureAxisGutters(width, false); const contentHeight = gutters.reduce((a, b) => a + b, 0) + graphCount * GRAPH_HEIGHT + legendHeights.reduce((sum, value) => sum + value, 0); const height = Math.max(width >= 1600 ? 900 : 0, 110 + contentHeight); canvas.height = height; context = canvas.getContext('2d'); if (!context) return undefined;
-    context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height); context.fillStyle = css('--vscode-foreground', '#ddd'); context.font = '600 22px sans-serif'; context.fillText(heading, 24, 34); context.font = '12px sans-serif'; const range = `${formatNumber(this.viewRange.start)}–${formatNumber(this.viewRange.end)} s`; context.fillStyle = css('--vscode-descriptionForeground', '#999'); context.fillText(range, width - context.measureText(range).width - 24, 32);
+    context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height); context.fillStyle = css('--vscode-foreground', '#ddd'); context.font = '600 22px sans-serif'; context.fillText(heading, 24, 34); context.font = '12px sans-serif'; const range = timeRangeLabel(this.viewRange.start, this.viewRange.end, formatSeconds); context.fillStyle = css('--vscode-descriptionForeground', '#999'); context.fillText(range, width - context.measureText(range).width - 24, 32);
     const chartTop = 58; this.paintChart(context, width, height, chartTop, height - chartTop - contentHeight, false, legendHeights, gutters);
     const vector = createSvgCanvas(width, height); const svgContext = vector.context; svgContext.fillStyle = css('--vscode-editor-background', '#1e1e1e'); svgContext.fillRect(0, 0, width, height); svgContext.fillStyle = css('--vscode-foreground', '#ddd'); svgContext.font = '600 22px sans-serif'; svgContext.fillText(heading, 24, 34); svgContext.font = '12px sans-serif'; svgContext.fillStyle = css('--vscode-descriptionForeground', '#999'); svgContext.fillText(range, width - svgContext.measureText(range).width - 24, 32); this.paintChart(svgContext, width, height, chartTop, height - chartTop - contentHeight, false, legendHeights, gutters);
     return { canvas, pngDataUrl: canvas.toDataURL('image/png'), svg: vector.toSvg(), width, height };
@@ -774,6 +793,8 @@ function displayValueLabel(item: SignalSeriesDto, value: number, mode: 'raw' | '
 function signalLegendLabel(definition: SignalDefinition, mode: 'raw' | 'normalized', displayUnit?: string): string { const sourceUnit = definition.unit?.trim(); const unit = mode === 'raw' && displayUnit && sourceUnit && displayUnit !== sourceUnit ? `${sourceUnit} → ${displayUnit}` : sourceUnit; return `${definition.name}${unit ? ` (${unit})` : ''}`; }
 function ellipsize(context: CanvasRenderingContext2D, text: string, maxWidth: number): string { if (context.measureText(text).width <= maxWidth) return text; let low = 0; let high = text.length; while (low < high) { const middle = Math.ceil((low + high) / 2); if (context.measureText(`${text.slice(0, middle)}…`).width <= maxWidth) low = middle; else high = middle - 1; } return `${text.slice(0, low)}…`; }
 function css(name: string, fallback: string): string { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }
+/** Times in seconds: seven significant digits, but never rounding the whole seconds of a large (Unix) time. */
+function formatSeconds(value: number): string { return Number.isFinite(value) && Math.abs(value) >= 1e5 ? Number(value.toFixed(6)).toString() : formatNumber(value); }
 function formatNumber(value: number): string { if (!Number.isFinite(value)) return '—'; if (Number.isInteger(value)) return String(value); return Number(value.toPrecision(7)).toString(); }
 function initialAxisRange(initial: LogViewState | undefined): ChartAxisRangeSetting {
   if (initial?.chartAxisRange) return { mode: initial.chartAxisRange.mode === 'global' ? 'global' : 'visible', includeZero: initial.chartAxisRange.includeZero === true };

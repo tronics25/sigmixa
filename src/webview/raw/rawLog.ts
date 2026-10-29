@@ -19,6 +19,8 @@ import { bindDecodedInspection, hideDecodedInspection } from './decodedInspectio
 import { addSelectionRange, removeSelectionIndex, selectionContains, selectionCount, type SelectionRange } from './selectionRanges';
 import { bindFindShortcut } from '../shared/findShortcut';
 import { BREADCRUMB_STYLES, crumbLink } from '../shared/breadcrumb';
+import { chosenTimeMode, onTimeDisplayChange, setTimeDisplayMode, setTimeReference, timeCellText, timeColumnHeading, timeColumnTitle, timeCopyText, timeLabel, timeMode, timeRangeLabel, timeReference, timestampFromShownSeconds, typedSecondsLabel, typedSecondsOf, timeFormatActions, isShownTimeMode } from '../shared/timeDisplay';
+import { timestampFromDisplay } from '../../core/time/timeFormat';
 
 declare function acquireVsCodeApi(): { postMessage(message: ToExtensionMessage): void; getState(): unknown; setState(value: unknown): void };
 
@@ -36,7 +38,7 @@ function contentSizingValue(row: RawRowDto): string {
   return `${contentValue(row)}${'  '.repeat(tagCount)}`;
 }
 const columns: readonly SizingColumn<RawRowDto>[] = [
-  { id: 'time', label: 'TIME(S)', minWidth: 92, maxWidth: 180, value: (row) => row.time.toFixed(6) },
+  { id: 'time', get label() { return timeColumnHeading(); }, minWidth: 92, maxWidth: 180, value: (row) => timeCellText(row.time) },
   { id: 'direction', label: FRAME_TABLE_LABELS.direction, minWidth: 62, maxWidth: 90, value: (row) => row.direction },
   { id: 'canId', label: FRAME_TABLE_LABELS.canId, minWidth: 82, maxWidth: 150, value: (row) => row.canId },
   { id: 'name', label: FRAME_TABLE_LABELS.name, minWidth: 90, maxWidth: 2000, flex: 1, value: (row) => row.name },
@@ -58,6 +60,14 @@ let latestPageRequestId = 0;
 let lastRequested = '';
 let parsing = true;
 let filter: FrameFilter = {};
+/** The Clip this screen shows, kept to write its range again in another time format. */
+let openedClip: { readonly fileName: string; readonly name: string; readonly startTimestamp?: number; readonly endTimestamp?: number } | undefined;
+function renderClipScope(): void {
+  const clipScope = document.getElementById('clip-scope')!; clipScope.hidden = !openedClip; if (!openedClip) return;
+  const clip = openedClip; const line = document.createElement('span');
+  line.append(crumbLink(clip.fileName, () => vscode.postMessage({ type: 'openWholeLog' })), ` › ${clip.name} · ${clip.startTimestamp === undefined || clip.endTimestamp === undefined ? t('Whole file', 'ファイル全体') : timeRangeLabel(clip.startTimestamp, clip.endTimestamp)}`);
+  clipScope.replaceChildren(line);
+}
 let sourceDiagnosticGroups: readonly DiagnosticGroup[] = [];
 /** Decode findings for the whole log, collected by the extension in the background. */
 let analysisDiagnosticGroups: readonly DiagnosticGroup[] = [];
@@ -213,7 +223,7 @@ function applyStickyOffsets(): void {
 function buildHeader(): void {
   header.replaceChildren();
   columns.forEach((column, columnIndex) => {
-    const cell = document.createElement('div'); cell.className = `head${columnIndex < 4 ? ' sticky-col' : ''}${columnIndex === 3 ? ' sticky-edge' : ''}`; cell.dataset.columnIndex = String(columnIndex); cell.classList.toggle('table-number', ['time', 'dlc', 'length'].includes(columns[columnIndex].id)); cell.classList.toggle('table-name', columns[columnIndex].id === 'name'); cell.classList.toggle('table-center', ['channel', 'direction'].includes(columns[columnIndex].id)); cell.title = column.label; cell.textContent = column.label; cell.setAttribute('role', 'columnheader');
+    const cell = document.createElement('div'); cell.className = `head${columnIndex < 4 ? ' sticky-col' : ''}${columnIndex === 3 ? ' sticky-edge' : ''}`; cell.dataset.columnIndex = String(columnIndex); cell.classList.toggle('table-number', ['time', 'dlc', 'length'].includes(columns[columnIndex].id)); cell.classList.toggle('table-name', columns[columnIndex].id === 'name'); cell.classList.toggle('table-center', ['channel', 'direction'].includes(columns[columnIndex].id)); cell.title = column.id === 'time' ? `${timeColumnTitle()}\n${t('Right-click to change the time format', '右クリックで時刻の表示形式を変更')}` : column.label; cell.textContent = column.label; if (column.id === 'time') cell.addEventListener('contextmenu', (event) => chooseTimeFormat(event, cell)); cell.setAttribute('role', 'columnheader');
     const handle = document.createElement('span'); handle.className = 'resize'; handle.setAttribute('aria-hidden', 'true');
     handle.addEventListener('mousedown', (event) => {
       event.preventDefault(); const start = event.clientX; const initial = widths[column.id];
@@ -229,7 +239,7 @@ function buildHeader(): void {
 }
 
 function displayValues(row: RawRowDto): readonly string[] {
-  return [row.time.toFixed(6), row.direction, row.canId, row.name || '—', String(row.channel), String(row.dlc), String(row.length), contentValue(row)];
+  return [timeCellText(row.time), row.direction, row.canId, row.name || '—', String(row.channel), String(row.dlc), String(row.length), contentValue(row)];
 }
 
 function appendContent(cell: HTMLElement, row: RawRowDto): void {
@@ -331,10 +341,10 @@ function selectedInOrder(): readonly RawRowDto[] | undefined {
   return result;
 }
 function tsvCell(value: string | number): string { return String(value).replace(/[\t\r\n]+/g, ' '); }
-const copyHeaders = ['TIME(S)', 'TX/RX', 'CAN ID', 'NAME', 'CH', 'DLC', 'LENGTH', 'CONTENT'] as const;
-function rowValues(row: RawRowDto): readonly (string | number)[] { return [row.time.toFixed(6), row.direction, row.canId, row.name, row.channel, row.dlc, row.length, contentValue(row)]; }
+const copyHeaders = () => [timeColumnHeading(), 'TX/RX', 'CAN ID', 'NAME', 'CH', 'DLC', 'LENGTH', 'CONTENT'];
+function rowValues(row: RawRowDto): readonly (string | number)[] { return [timeCopyText(row.time), row.direction, row.canId, row.name, row.channel, row.dlc, row.length, contentValue(row)]; }
 function selectedRowsAsText(selected: readonly RawRowDto[], includeHeader: boolean): string {
-  const lines: string[] = includeHeader ? [copyHeaders.join('\t')] : [];
+  const lines: string[] = includeHeader ? [copyHeaders().join('\t')] : [];
   for (const row of selected) lines.push(rowValues(row).map(tsvCell).join('\t'));
   return `${lines.join('\r\n')}\r\n`;
 }
@@ -343,7 +353,7 @@ function selectedRowsAsHtml(selected: readonly RawRowDto[]): string {
   for (const row of selected) { const tr = document.createElement('tr'); for (const value of rowValues(row)) { const td = document.createElement('td'); td.textContent = String(value); tr.appendChild(td); } body.appendChild(tr); }
   return table.outerHTML;
 }
-function requestSelectedRows(action: 'copy' | 'open'): void { if (selectionRanges.length) vscode.postMessage({ type: 'selectedRowsRequest', action, ranges: selectionRanges, filter, contentMode }); }
+function requestSelectedRows(action: 'copy' | 'open'): void { if (selectionRanges.length) vscode.postMessage({ type: 'selectedRowsRequest', action, ranges: selectionRanges, filter, contentMode, timeDisplay: chosenTimeMode() }); }
 function copySelectedRows(): void { if (selectionRanges.length && !document.execCommand('copy')) requestSelectedRows('copy'); }
 function openSelectedRows(): void { requestSelectedRows('open'); }
 
@@ -453,8 +463,11 @@ function updateFilter(): void {
     const startText = (document.getElementById('time-start') as HTMLInputElement).value;
     const endText = (document.getElementById('time-end') as HTMLInputElement).value;
     const channel = channelText ? Number(channelText) : undefined;
-    const timeStart = startText ? Number(startText) : undefined;
-    const timeEnd = endText ? Number(endText) : undefined;
+    // Typed in the shown base (seconds from the start, or Unix seconds); the filter takes the log's own timestamps.
+    const typedStart = startText ? Number(startText) : undefined;
+    const typedEnd = endText ? Number(endText) : undefined;
+    const timeStart = typedStart === undefined ? undefined : timestampFromShownSeconds(typedStart);
+    const timeEnd = typedEnd === undefined ? undefined : timestampFromShownSeconds(typedEnd);
     let invalidRegex = false; if (search && regexEnabled) try { void new RegExp(search, 'i'); } catch { invalidRegex = true; }
     const invalidRange = timeStart !== undefined && timeEnd !== undefined && timeStart > timeEnd;
     filterValid = !invalidRegex && !invalidRange; searchInput.setAttribute('aria-invalid', String(invalidRegex)); document.getElementById('search-box')!.classList.toggle('invalid', invalidRegex);
@@ -467,8 +480,8 @@ function updateFilter(): void {
     if (direction) activeFilters.push({ label: direction === 'Rx' ? t('Rx only', 'Rxのみ') : t('Tx only', 'Txのみ'), clearIds: ['direction'] });
     if (decodedText) activeFilters.push({ label: decodedText === 'true' ? t('With decoded results', 'デコード結果あり') : t('Without decoded results', 'デコード結果なし'), clearIds: ['decoded'] });
     if (Number.isFinite(channel)) activeFilters.push({ label: `CH ${channel}`, clearIds: ['channel'] });
-    if (Number.isFinite(timeStart)) activeFilters.push({ label: `${t('From', '開始')} ${timeStart} s`, clearIds: ['time-start'] });
-    if (Number.isFinite(timeEnd)) activeFilters.push({ label: `${t('To', '終了')} ${timeEnd} s`, clearIds: ['time-end'] });
+    if (Number.isFinite(timeStart)) activeFilters.push({ label: `${t('From', '開始')} ${timeLabel(timeStart!)}`, clearIds: ['time-start'] });
+    if (Number.isFinite(timeEnd)) activeFilters.push({ label: `${t('To', '終了')} ${timeLabel(timeEnd!)}`, clearIds: ['time-end'] });
     renderActiveFilters(activeFilters);
     if (!filterValid) { latestPageRequestId = ++requestId; selectionRanges = []; selectionAnchor = undefined; focusedIndex = undefined; pagePending = false; rows.clear(); total = 0; lastRequested = ''; updateSelectionStatus(); updateResultStatus(); updateEmptyState(); draw(); return; }
     filter = {
@@ -506,7 +519,7 @@ function diagnosticSpan(group: DiagnosticGroup): string {
   const { firstPosition: first, lastPosition: last } = group;
   if (first === undefined || last === undefined) return '';
   if (group.positionKind === 'line') return first === last ? `line ${first}` : `line ${first}–${last}`;
-  return first === last ? `${first.toFixed(6)} s` : `${first.toFixed(6)}–${last.toFixed(6)} s`;
+  return first === last ? timeLabel(first) : timeRangeLabel(first, last);
 }
 /** One grouped line is one diagnostic, so the count always matches the list. */
 function diagnosticTotal(): number { return sourceDiagnosticGroups.length + analysisDiagnosticGroups.length; }
@@ -577,7 +590,7 @@ function activateView(id: string): void {
 window.addEventListener('message', (event: MessageEvent<ToWebviewMessage>) => {
   const message = event.data;
   tableView?.handle(message); visualizeView?.handle(message);
-  if (message.type === 'init') { const scope = document.getElementById('view-settings-scope') as HTMLSelectElement; scope.parentElement!.hidden = !message.groupName; scope.value = message.viewSettingsScope ?? 'file'; syncChoiceSelect(scope); document.getElementById('source-breadcrumb')!.textContent = [message.place, message.fileName, message.clip?.name].filter(Boolean).join(' › '); initializeSignalViews(message.viewState); updateChannelOptions(message.channels); sourceFrameCount = message.frames; parsing = message.parsing; pagePending = true; cancelButton.hidden = !parsing; const clipScope = document.getElementById('clip-scope')!; clipScope.hidden = !message.clip; if (message.clip) { const line = document.createElement('span'); line.append(crumbLink(message.fileName, () => vscode.postMessage({ type: 'openWholeLog' })), ` › ${message.clip.name} · ${message.clip.startTimestamp === undefined || message.clip.endTimestamp === undefined ? t('Whole file', 'ファイル全体') : `${message.clip.startTimestamp.toFixed(6)}–${message.clip.endTimestamp.toFixed(6)} s`}`); clipScope.replaceChildren(line); } parseCancelled = false; if (parsing) statusEl.textContent = `${message.fileName} · ${t('parsing', '解析中')}`; else showDiagnosticStatus(); updateResultStatus(); updateEmptyState(); requestRange(0, PAGE_SIZE, true); if (!message.parsing) requestAutomaticWidths(message.frames); }
+  if (message.type === 'init') { const scope = document.getElementById('view-settings-scope') as HTMLSelectElement; scope.parentElement!.hidden = !message.groupName; scope.value = message.viewSettingsScope ?? 'file'; syncChoiceSelect(scope); document.getElementById('source-breadcrumb')!.textContent = [message.place, message.fileName, message.clip?.name].filter(Boolean).join(' › '); setTimeReference(message.timeReference); setTimeDisplayMode(isShownTimeMode(message.viewState?.timeDisplay) ? message.viewState.timeDisplay : undefined); syncTimeFilterTitles(); initializeSignalViews(message.viewState); updateChannelOptions(message.channels); sourceFrameCount = message.frames; parsing = message.parsing; pagePending = true; cancelButton.hidden = !parsing; openedClip = message.clip ? { fileName: message.fileName, ...message.clip } : undefined; renderClipScope(); parseCancelled = false; if (parsing) statusEl.textContent = `${message.fileName} · ${t('parsing', '解析中')}`; else showDiagnosticStatus(); updateResultStatus(); updateEmptyState(); requestRange(0, PAGE_SIZE, true); if (!message.parsing) requestAutomaticWidths(message.frames); }
   else if (message.type === 'page') {
     if (message.requestId !== latestPageRequestId) return;
     total = message.total; pagePending = false; if (!activeFilterCount) unfilteredFrameCount = message.total;
@@ -609,6 +622,7 @@ window.addEventListener('message', (event: MessageEvent<ToWebviewMessage>) => {
     applyWidths(); persist();
   }
   else if (message.type === 'rowsCopied') showCopyFeedback(message.count);
+  else if (message.type === 'timeReference') setTimeReference(message.reference);
   else if (message.type === 'definitionsChanged') { selectionRanges = []; selectionAnchor = undefined; focusedIndex = undefined; rows.clear(); pagePending = true; updateSelectionStatus(); updateResultStatus(); updateEmptyState(); showDiagnostics(); lastRequested = ''; requestRange(Math.floor(grid.scrollTop / ROW_HEIGHT), Math.floor(grid.scrollTop / ROW_HEIGHT) + PAGE_SIZE, true); }
 });
 
@@ -656,6 +670,27 @@ document.addEventListener('keydown', (event) => {
   else if (event.key === 'Escape' && !editing) { if (selectionRanges.length) { selectionRanges = []; selectionAnchor = undefined; refreshSelectionStyles(); } blurTableFocus('#grid, #grid .row'); }
 });
 document.querySelectorAll<HTMLElement>('.tab').forEach((tab) => tab.addEventListener('click', () => activateView(tab.dataset.view ?? 'raw-view')));
+
+/** Typed filter seconds are explained on the inputs: seconds from the start, or (without a start) the log's seconds. */
+function syncTimeFilterTitles(): void { for (const id of ['time-start', 'time-end']) (document.getElementById(id) as HTMLInputElement).title = typedSecondsLabel(); }
+function chooseTimeFormat(event: MouseEvent, cell: HTMLElement): void {
+  event.preventDefault();
+  showActionMenu(timeFormatActions((mode) => saveLogViewState({ timeDisplay: mode })), t('Time format', '時刻の表示形式'), event.clientX, event.clientY, cell, { scroller: grid });
+}
+// The time filter keeps the same moments: its typed numbers (also ones not yet applied) are rewritten in the new base.
+let typedBase = { mode: timeMode(), reference: timeReference() };
+onTimeDisplayChange(() => {
+  syncTimeFilterTitles(); buildHeader(); scheduleDraw(); renderClipScope();
+  const previous = typedBase; typedBase = { mode: timeMode(), reference: timeReference() };
+  let rewritten = false;
+  for (const id of ['time-start', 'time-end']) {
+    const input = document.getElementById(id) as HTMLInputElement; const typed = input.value ? Number(input.value) : Number.NaN;
+    if (!Number.isFinite(typed)) continue;
+    const timestamp = timestampFromDisplay(typed, previous.mode === 'datetime' ? 'relative' : previous.mode, previous.reference);
+    input.value = String(Number(typedSecondsOf(timestamp).toFixed(6))); rewritten = true;
+  }
+  if (rewritten) updateFilter();
+});
 
 updateContentModeButtons(); buildHeader(); draw(); bindFindShortcut(); vscode.postMessage({ type: 'ready' });
 

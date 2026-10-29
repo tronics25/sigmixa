@@ -5,6 +5,7 @@ import { autoFitColumns } from '../shared/columnSizing';
 import type { LastFrameDto, ToExtensionMessage, TraceColumn, TraceDisplaySettings, TraceSort } from '../../extension/editors/rawLogProtocol';
 import type { ViewContextAction } from '../shared/viewContextAction';
 import { traceMilliseconds } from './traceNumbers';
+import { onTimeDisplayChange, timeCellText, timeCopyText, timeLabel, timeMode } from '../shared/timeDisplay';
 import { compareTraceRows, traceCanIdKey } from './traceSort';
 
 // Trace rows cover Rx and Tx alike, so labels avoid direction-specific wording.
@@ -14,7 +15,9 @@ const NO_DATA = '—';
 const NOT_COMPUTABLE = t('N/A', '算出不可');
 const NOT_SET = t('NOT SET', '未設定');
 const UNREADABLE = t('UNKNOWN', '取得不可');
-const columns: readonly [TraceColumn, string][] = [['channel', 'CH'], ['direction', FRAME_TABLE_LABELS.direction], ['receivedAt', t('TIME (s)', '最終時刻 (s)')], ['age', t('AGE (ms)', '経過 (ms)')], ['count', t('COUNT', '回数')], ['interval', t('INTERVAL (ms)', '間隔 (ms)')], ['minInterval', t('MIN INTERVAL (ms)', '最小間隔 (ms)')], ['maxInterval', t('MAX INTERVAL (ms)', '最大間隔 (ms)')], ['lastChange', t('LAST CHANGE (s)', '最終変化時刻 (s)')], ['expected', t('EXPECTED (ms)', '期待周期 (ms)')], ['deviation', t('DEVIATION (ms)', '周期偏差 (ms)')]];
+const columnLabels: readonly [TraceColumn, string][] = [['channel', 'CH'], ['direction', FRAME_TABLE_LABELS.direction], ['receivedAt', t('TIME (s)', '最終時刻 (s)')], ['age', t('AGE (ms)', '経過 (ms)')], ['count', t('COUNT', '回数')], ['interval', t('INTERVAL (ms)', '間隔 (ms)')], ['minInterval', t('MIN INTERVAL (ms)', '最小間隔 (ms)')], ['maxInterval', t('MAX INTERVAL (ms)', '最大間隔 (ms)')], ['lastChange', t('LAST CHANGE (s)', '最終変化時刻 (s)')], ['expected', t('EXPECTED (ms)', '期待周期 (ms)')], ['deviation', t('DEVIATION (ms)', '周期偏差 (ms)')]];
+/** Time columns show seconds only in the seconds modes; the date and time mode shows times of day. */
+const columns = (): readonly [TraceColumn, string][] => timeMode() === 'datetime' ? columnLabels.map(([id, label]) => [id, id === 'receivedAt' || id === 'lastChange' ? label.replace(/\s*\(s\)$/, '') : label]) : columnLabels;
 const defaults: readonly TraceColumn[] = ['channel', 'direction', 'receivedAt', 'age', 'count', 'interval', 'deviation'];
 /** A frame is marked as stopped once it has been silent for this many expected periods. */
 const STALE_PERIODS = 3;
@@ -49,6 +52,7 @@ export class TraceTableView {
     // Discard the former ID/Signal filters: older saved settings must not hide data.
     this.settings = structuredClone({ widths: initial?.widths, pinnedIds: initial?.pinnedIds, defaultMode: initial?.defaultMode, columns: initial?.columns, sort: initial?.sort, descending: initial?.descending });
     host.tabIndex = 0;
+    onTimeDisplayChange(() => this.render());
     host.setAttribute('aria-label', t('Trace. Pin rows with the checkboxes, click a heading to sort, right-click to choose columns and the display format.', 'トレース。チェックボックスでピン留め、見出しをクリックして並び替え、右クリックで表示列と全体の表示形式を変更'));
     // Live trace updates must not replace a checkbox/header between press and release.
     host.addEventListener('pointerdown', (event) => { if ((event.target as Element).closest('input, th')) this.pointerActive = true; });
@@ -158,7 +162,7 @@ export class TraceTableView {
     if (!rows.length) return '';
     const ids = ['canId', 'name', ...this.shownColumns.map(([id]) => id), ...(rows.some((item) => item.multiplexer) ? ['multiplexer'] : []), 'content'] as TraceSort[];
     const labels = new Map<string, string>([['canId', FRAME_TABLE_LABELS.canId], ['name', FRAME_TABLE_LABELS.name], ['multiplexer', FRAME_TABLE_LABELS.multiplexer], ['content', FRAME_TABLE_LABELS.content], ...this.shownColumns]);
-    return [ids.map((id) => labels.get(id) ?? id).join('\t'), ...rows.map((item) => ids.map((id) => this.columnText(item, id)).join('\t'))].join('\n');
+    return [ids.map((id) => labels.get(id) ?? id).join('\t'), ...rows.map((item) => ids.map((id) => this.copyText(item, id)).join('\t'))].join('\n');
   }
   /** Same actions and wording as the RAW Log row menu. */
   private showRowMenu(x: number, y: number): void {
@@ -188,8 +192,8 @@ export class TraceTableView {
   }
   private showMenu(x: number, y: number): void {
     const actions: (ViewContextAction | null)[] = [];
-    for (const [id, label] of columns) actions.push({ label, icon: 'blank', checked: (this.settings.columns ?? defaults).includes(id), run: () => {
-      const active = new Set(this.settings.columns ?? defaults); if (active.has(id)) active.delete(id); else active.add(id); this.update({ columns: columns.map(([key]) => key).filter((key) => active.has(key)) });
+    for (const [id, label] of columns()) actions.push({ label, icon: 'blank', checked: (this.settings.columns ?? defaults).includes(id), run: () => {
+      const active = new Set(this.settings.columns ?? defaults); if (active.has(id)) active.delete(id); else active.add(id); this.update({ columns: columns().map(([key]) => key).filter((key) => active.has(key)) });
     } });
     actions.push(null);
     for (const [value, label, icon] of [['raw', 'RAW', 'code'], ['decoded', t('decoded', 'デコード済み'), 'symbol-numeric']] as const) actions.push({
@@ -231,6 +235,12 @@ export class TraceTableView {
     if (id === 'content') return this.contentText(item);
     return this.statCells(item)[id];
   }
+  /** Copies hold the full date and time, like every other copy. */
+  private copyText(item: LastFrameDto, id: TraceSort): string {
+    if (id === 'receivedAt' && item.count) return timeCopyText(item.row.time);
+    if (id === 'lastChange' && item.lastChangeAt !== undefined) return timeCopyText(item.lastChangeAt);
+    return this.columnText(item, id);
+  }
   private contentText(item: LastFrameDto): string {
     return this.modeFor(item) === 'raw' ? item.count ? item.row.rawContent : NO_DATA : item.signals.map((signal) => this.signalText(signal)).join('  ');
   }
@@ -238,7 +248,7 @@ export class TraceTableView {
     return `${signal.name}: ${signal.value === undefined ? NO_DATA : `${Number(signal.value.toPrecision(10))}${signal.unit ? ` ${signal.unit}` : ''}${signal.valueLabel ? ` (${signal.valueLabel})` : ''}`}`;
   }
   private statCells(item: LastFrameDto): Record<TraceColumn | 'multiplexer', string> {
-    const cells: Record<TraceColumn | 'multiplexer', string> = { multiplexer: item.multiplexer ? item.multiplexer.value === undefined ? item.count ? UNREADABLE : NO_DATA : String(item.multiplexer.value) : '—', channel: item.row.channel < 0 ? '—' : String(item.row.channel), direction: item.row.channel < 0 ? '—' : item.row.direction, receivedAt: item.count ? item.row.time.toFixed(6) : NO_DATA, age: traceMilliseconds(item.age === undefined ? undefined : item.age * 1000), count: String(item.count), interval: item.intervalMs === undefined ? item.count ? NOT_COMPUTABLE : NO_DATA : traceMilliseconds(item.intervalMs), minInterval: item.minIntervalMs === undefined ? item.count ? NOT_COMPUTABLE : NO_DATA : traceMilliseconds(item.minIntervalMs), maxInterval: item.maxIntervalMs === undefined ? item.count ? NOT_COMPUTABLE : NO_DATA : traceMilliseconds(item.maxIntervalMs), lastChange: item.lastChangeAt === undefined ? NO_DATA : item.lastChangeAt.toFixed(6), expected: item.multiplexer ? '—' : item.expectedPeriodMs === undefined ? NOT_SET : traceMilliseconds(item.expectedPeriodMs), deviation: item.multiplexer || !item.count ? NO_DATA : item.expectedPeriodMs === undefined ? NOT_SET : item.deviationMs === undefined ? NOT_COMPUTABLE : traceMilliseconds(item.deviationMs, true) };
+    const cells: Record<TraceColumn | 'multiplexer', string> = { multiplexer: item.multiplexer ? item.multiplexer.value === undefined ? item.count ? UNREADABLE : NO_DATA : String(item.multiplexer.value) : '—', channel: item.row.channel < 0 ? '—' : String(item.row.channel), direction: item.row.channel < 0 ? '—' : item.row.direction, receivedAt: item.count ? timeCellText(item.row.time) : NO_DATA, age: traceMilliseconds(item.age === undefined ? undefined : item.age * 1000), count: String(item.count), interval: item.intervalMs === undefined ? item.count ? NOT_COMPUTABLE : NO_DATA : traceMilliseconds(item.intervalMs), minInterval: item.minIntervalMs === undefined ? item.count ? NOT_COMPUTABLE : NO_DATA : traceMilliseconds(item.minIntervalMs), maxInterval: item.maxIntervalMs === undefined ? item.count ? NOT_COMPUTABLE : NO_DATA : traceMilliseconds(item.maxIntervalMs), lastChange: item.lastChangeAt === undefined ? NO_DATA : timeCellText(item.lastChangeAt), expected: item.multiplexer ? '—' : item.expectedPeriodMs === undefined ? NOT_SET : traceMilliseconds(item.expectedPeriodMs), deviation: item.multiplexer || !item.count ? NO_DATA : item.expectedPeriodMs === undefined ? NOT_SET : item.deviationMs === undefined ? NOT_COMPUTABLE : traceMilliseconds(item.deviationMs, true) };
     return cells;
   }
   private render(): void {
@@ -252,7 +262,7 @@ export class TraceTableView {
     this.host.replaceChildren();
     const visibleRows = this.displayRows();
     const hasMultiplexer = visibleRows.some((item) => item.multiplexer);
-    const shownColumns = columns.filter(([id]) => (this.settings.columns ?? defaults).includes(id)); this.shownColumns = shownColumns;
+    const shownColumns = columns().filter(([id]) => (this.settings.columns ?? defaults).includes(id)); this.shownColumns = shownColumns;
     type ColumnId = TraceSort | 'pin';
     // Trace rows identify an ID/channel/direction/MUX branch. Reception times are measurements, not identity.
     const columnOrder: readonly [ColumnId, string][] = [
@@ -308,7 +318,7 @@ export class TraceTableView {
         const signals = document.createElement('div'); signals.className = 'trace-signals';
         for (const signal of item.signals) {
           const value = document.createElement('span'); value.className = 'trace-signal'; appendTableValue(value, signal.name, this.signalText(signal).slice(signal.name.length + 2));
-          value.title = signal.timestamp === undefined ? `${signal.name}: ${NO_DATA}` : `${value.textContent}\n${t('Last update', '最終更新')} ${signal.timestamp.toFixed(6)} s${signal.carried ? `\n${t('Carried from before the Clip', 'クリップ開始前から引き継いだ値')}` : ''}`; value.classList.toggle('carried', signal.carried === true); signals.appendChild(value);
+          value.title = signal.timestamp === undefined ? `${signal.name}: ${NO_DATA}` : `${value.textContent}\n${t('Last update', '最終更新')} ${timeLabel(signal.timestamp)}${signal.carried ? `\n${t('Carried from before the Clip', 'クリップ開始前から引き継いだ値')}` : ''}`; value.classList.toggle('carried', signal.carried === true); signals.appendChild(value);
         }
         if (!item.signals.length) signals.textContent = t('No decoded values', 'デコード値なし');
         content.appendChild(signals);

@@ -26,6 +26,7 @@ import { PluginHost, type PluginRegistry } from '../../core/plugin/pluginHost';
 import { loadExternalCsv } from '../external/externalCsvLoader';
 import { formatCsvSignalValue, formatCsvTimestamp } from '../../core/export/csvNumber';
 import { manualAnalysisDelta, type ManualAnalysisDelta } from '../../core/project/analysisDelta';
+import { formatExportTime, timeColumnLabel, type TimeDisplayMode, type TimeReference } from '../../core/time/timeFormat';
 
 export type DocumentUpdate =
   | { readonly type: 'progress'; readonly frames: number; readonly bytesRead: number; readonly totalBytes: number }
@@ -33,6 +34,7 @@ export type DocumentUpdate =
   | { readonly type: 'analysisDiagnostics'; readonly groups: readonly DiagnosticGroup[]; readonly total: number }
   | { readonly type: 'analysisProgress'; readonly processed: number; readonly total: number }
   | { readonly type: 'analysisComplete'; readonly processed: number; readonly cancelled: boolean }
+  | { readonly type: 'timeReference'; readonly reference: TimeReference }
   | { readonly type: 'complete'; readonly summary: AscParseSummary | BlfParseSummary };
 
 const LAST_FRAME_REFRESH_MS = 1000;
@@ -72,6 +74,7 @@ export class RawLogDocument implements vscode.CustomDocument {
   private analysisRunning = false;
   private parseTask: Promise<AscParseSummary | BlfParseSummary>;
   private readErrorMessage?: string;
+  private reference?: TimeReference;
 
   /** `filePath`: the log file itself (`uri` names what is opened: the log from some place, or one of its Clips). */
   constructor(readonly uri: vscode.Uri, readonly filePath: string, project: SigMixaProject, revision: number, private readonly pluginRegistry: PluginRegistry, readonly scope?: { readonly start: number; readonly end: number }) {
@@ -99,6 +102,7 @@ export class RawLogDocument implements vscode.CustomDocument {
       onDiagnostics: (diagnostics) => {
         this.addSourceDiagnostics(diagnostics);
       },
+      onTimeReference: (reference) => { this.reference = reference; this.updates.fire({ type: 'timeReference', reference }); },
       onProgress: (progress) => this.updates.fire({
         type: 'progress', frames: progress.framesParsed, bytesRead: progress.bytesRead, totalBytes: progress.totalBytes,
       }),
@@ -139,6 +143,15 @@ export class RawLogDocument implements vscode.CustomDocument {
   get channelValues(): readonly number[] { return [...this.channels].sort((left, right) => left - right); }
   get isAnalyzing(): boolean { return this.analysisRunning; }
   whenReady(): Promise<AscParseSummary | BlfParseSummary> { return this.parseTask; }
+  /** Where the log's timestamps sit on its recording clock; undefined while unknown or when the file does not say. */
+  get timeReference(): TimeReference | undefined { return this.reference; }
+  private exportTime(timestamp: number, mode: TimeDisplayMode | undefined, seconds: (value: number) => string): string { return formatExportTime(timestamp, mode ?? 'datetime', this.reference, seconds); }
+  /**
+   * CSV seconds. Measured on a recording clock (around 1.7e9) they hold about 0.2 µs, so they are written to the µs,
+   * without the digits of binary rounding. Logs without a start keep every digit, as before.
+   */
+  private readonly csvSeconds = (value: number): string => this.reference ? trimmedMicroseconds(value) : formatCsvTimestamp(value);
+  private exportTimeLabel(mode: TimeDisplayMode | undefined): string { return timeColumnLabel(mode ?? 'datetime', this.reference); }
   /** Why the log could not be read, when reading failed (explained for the user). */
   get readError(): string | undefined { return this.readErrorMessage; }
 
@@ -336,10 +349,10 @@ export class RawLogDocument implements vscode.CustomDocument {
   adjacentFrameTimestamp(timestamp: number, direction: -1 | 1): number | undefined { return this.store.adjacentTimestamp(timestamp, direction, this.scope); }
   nearestFrameTimestamp(timestamp: number): number | undefined { return this.store.nearestTimestamp(timestamp, this.scope); }
 
-  selectedRowsText(ranges: readonly { readonly start: number; readonly end: number }[], filter: FrameFilter | undefined, project: SigMixaProject, revision: number, contentMode: 'raw' | 'decoded', includeHeader: boolean): { readonly text: string; readonly count: number } {
+  selectedRowsText(ranges: readonly { readonly start: number; readonly end: number }[], filter: FrameFilter | undefined, project: SigMixaProject, revision: number, contentMode: 'raw' | 'decoded', includeHeader: boolean, timeDisplay?: TimeDisplayMode): { readonly text: string; readonly count: number } {
     this.setProject(project, revision); const normalized = normalizeRanges(ranges); const selectedCount = normalized.reduce((sum, range) => sum + range.end - range.start + 1, 0);
     if (selectedCount > 100_000) throw new Error('Select at most 100,000 RAW Log rows at once.');
-    const lines: string[] = includeHeader ? ['TIME(S)\tTX/RX\tCAN ID\tNAME\tCH\tDLC\tLENGTH\tCONTENT'] : [];
+    const lines: string[] = includeHeader ? [`${this.exportTimeLabel(timeDisplay)}\tTX/RX\tCAN ID\tNAME\tCH\tDLC\tLENGTH\tCONTENT`] : [];
     const scoped = this.scopedFilter(filter); const context = this.queryContext(scoped); let count = 0; let length = lines[0]?.length ?? 0;
     for (const range of normalized) {
       let offset = range.start;
@@ -348,7 +361,7 @@ export class RawLogDocument implements vscode.CustomDocument {
         if (!page.rows.length) break;
         for (const frame of page.rows) {
           const row = this.toRow(frame); const content = contentMode === 'raw' ? row.rawContent : row.decodedContent || row.rawContent;
-          const line = [row.time.toFixed(6), row.direction, row.canId, row.name, row.channel, row.dlc, row.length, content].map(cleanTsvCell).join('\t');
+          const line = [this.exportTime(row.time, timeDisplay, (value) => value.toFixed(6)), row.direction, row.canId, row.name, row.channel, row.dlc, row.length, content].map(cleanTsvCell).join('\t');
           length += line.length + 2; if (length > 16_000_000) throw new Error('The selected RAW Log text is too large to copy or open at once.');
           lines.push(line); count++;
         }
@@ -358,12 +371,12 @@ export class RawLogDocument implements vscode.CustomDocument {
     return { text: `${lines.join('\r\n')}\r\n`, count };
   }
 
-  selectedSignalRowsText(ranges: readonly { readonly start: number; readonly end: number }[], selectedIds: readonly string[], includeHeader: boolean): { readonly text: string; readonly count: number } {
+  selectedSignalRowsText(ranges: readonly { readonly start: number; readonly end: number }[], selectedIds: readonly string[], includeHeader: boolean, timeDisplay?: TimeDisplayMode): { readonly text: string; readonly count: number } {
     const definitions = new Map(this.signalStore.catalog().map((definition) => [definition.id, definition]));
     const ids = [...new Set(selectedIds)].filter((id) => definitions.has(id));
     const normalized = normalizeRanges(ranges); const selectedCount = normalized.reduce((sum, range) => sum + range.end - range.start + 1, 0);
     if (selectedCount > 100_000) throw new Error('Select at most 100,000 Signal Table rows at once.');
-    const headers = ['TIME(S)', ...ids.map((id) => { const definition = definitions.get(id)!; return `${definition.name}${definition.unit ? ` (${definition.unit})` : ''}`; })];
+    const headers = [this.exportTimeLabel(timeDisplay), ...ids.map((id) => { const definition = definitions.get(id)!; return `${definition.name}${definition.unit ? ` (${definition.unit})` : ''}`; })];
     const lines: string[] = includeHeader ? [headers.map(cleanTsvCell).join('\t')] : [];
     let count = 0; let length = lines[0]?.length ?? 0;
     for (const range of normalized) {
@@ -372,7 +385,7 @@ export class RawLogDocument implements vscode.CustomDocument {
         const page = this.signalStore.tablePage(ids, offset, Math.min(2000, range.end - offset + 1), this.scope);
         if (!page.rows.length) break;
         for (const row of page.rows) {
-          const line = [formatCsvTimestamp(row.timestamp), ...ids.map((id) => { const value = row.values.get(id)?.value; return value === undefined ? '' : formatCsvSignalValue(value); })].map(cleanTsvCell).join('\t');
+          const line = [this.exportTime(row.timestamp, timeDisplay, this.csvSeconds), ...ids.map((id) => { const value = row.values.get(id)?.value; return value === undefined ? '' : formatCsvSignalValue(value); })].map(cleanTsvCell).join('\t');
           length += line.length + 2; if (length > 16_000_000) throw new Error('The selected Signal Table text is too large to copy or open at once.');
           lines.push(line); count++;
         }
@@ -382,18 +395,18 @@ export class RawLogDocument implements vscode.CustomDocument {
     return { text: `${lines.join('\r\n')}\r\n`, count };
   }
 
-  async exportSignalCsv(targetPath: string, selectedIds: readonly string[]): Promise<void> {
+  async exportSignalCsv(targetPath: string, selectedIds: readonly string[], timeDisplay?: TimeDisplayMode): Promise<void> {
     const definitions = new Map(this.signalStore.catalog().map((definition) => [definition.id, definition]));
     const ids = [...new Set(selectedIds)].filter((id) => definitions.has(id));
     const stream = createWriteStream(targetPath, { encoding: 'utf8' });
     const escape = (value: string) => /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
     const write = async (text: string) => { if (!stream.write(text)) await once(stream, 'drain'); };
-    await write(['TIME(S)', ...ids.map((id) => {
+    await write([this.exportTimeLabel(timeDisplay), ...ids.map((id) => {
       const definition = definitions.get(id)!;
       return escape(`${definition.name}${definition.unit ? ` (${definition.unit})` : ''}`);
     })].join(',') + '\n');
     for (const row of this.signalStore.eventRows(ids, this.scope)) {
-      await write([formatCsvTimestamp(row.timestamp), ...ids.map((id) => {
+      await write([this.exportTime(row.timestamp, timeDisplay, this.csvSeconds), ...ids.map((id) => {
         const value = row.values.get(id)?.value;
         return value === undefined ? '' : formatCsvSignalValue(value);
       })].join(',') + '\n');
@@ -531,7 +544,7 @@ export class RawLogDocument implements vscode.CustomDocument {
       ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
       ?? path.dirname(this.filePath);
     for (const source of project.externalCsvSources) {
-      const result = await loadExternalCsv(source, workspaceRoot);
+      const result = await loadExternalCsv(source, workspaceRoot, this.reference);
       for (const series of result.series) store.appendSeries(series.definition, series.samples);
       this.publishDiagnostics(result.diagnostics);
     }
@@ -585,3 +598,5 @@ function canKey(canId: number, extended: boolean): string { return `${extended ?
 function contextFor(contexts: Map<string, ReturnType<typeof createManualDecodeContext>>, definitionId: string): ReturnType<typeof createManualDecodeContext> {
   let context = contexts.get(definitionId); if (!context) { context = createManualDecodeContext(); contexts.set(definitionId, context); } return context;
 }
+
+function trimmedMicroseconds(value: number): string { const text = value.toFixed(6).replace(/\.?0+$/, ''); return text === '-0' ? '0' : text; }

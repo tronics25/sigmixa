@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import * as zlib from 'zlib';
 import type { Diagnostic } from '../../core/diagnostics/diagnostic';
 import type { CanFrame } from '../../core/frame/canFrame';
+import type { TimeReference } from '../../core/time/timeFormat';
 
 const LOG_CONTAINER = 10;
 const CAN_MESSAGE = 1;
@@ -38,6 +39,8 @@ export interface BlfParseSummary {
   readonly framesParsed: number;
   readonly diagnostics: number;
   readonly cancelled: boolean;
+  /** Undefined when the file header has no valid start time: its timestamps are then shown as seconds only. */
+  readonly timeReference?: TimeReference;
 }
 
 export interface BlfParseOptions {
@@ -46,6 +49,8 @@ export interface BlfParseOptions {
   onFrames(frame: readonly CanFrame[]): void;
   onDiagnostics(diagnostics: readonly Diagnostic[]): void;
   onProgress?(progress: BlfParseProgress): void;
+  /** Called once, before any frames, when the file header gives the measurement start. */
+  onTimeReference?(reference: TimeReference): void;
 }
 
 /** Vector BLF reader for Classic CAN and CAN FD objects. */
@@ -56,6 +61,9 @@ export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfPar
   let bytesRead = 0;
   let containerTail: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   const startTimestamp = fileStartTimestamp(buffer);
+  // BLF timestamps already include the header's start time, so they are clock seconds as they are.
+  const timeReference: TimeReference | undefined = startTimestamp ? { start: startTimestamp, offset: 0 } : undefined;
+  if (timeReference) options.onTimeReference?.(timeReference);
   const pendingFrames: CanFrame[] = [];
   const flushFrames = () => { if (pendingFrames.length) options.onFrames(pendingFrames.splice(0)); };
   const report = (code: string, severity: Diagnostic['severity'], message: string, offset?: number, details?: Diagnostic['details']) => {
@@ -133,7 +141,7 @@ export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfPar
     report('BLF_TRAILING_BYTES', 'warning', 'Non-padding bytes remain after the last complete BLF object.', offset);
   }
   flushFrames();
-  return summary(buffer.length, bytesRead, framesParsed, diagnosticCount, options.signal?.aborted === true);
+  return summary(buffer.length, bytesRead, framesParsed, diagnosticCount, options.signal?.aborted === true, timeReference);
 }
 
 export async function parseBlfFile(filePath: string, options: BlfParseOptions): Promise<BlfParseSummary> {
@@ -267,6 +275,6 @@ function fileStartTimestamp(buffer: Buffer): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-function summary(totalBytes: number, bytesRead: number, framesParsed: number, diagnostics: number, cancelled: boolean): BlfParseSummary {
-  return { totalBytes, bytesRead, linesRead: 0, framesParsed, diagnostics, cancelled };
+function summary(totalBytes: number, bytesRead: number, framesParsed: number, diagnostics: number, cancelled: boolean, timeReference?: TimeReference): BlfParseSummary {
+  return { totalBytes, bytesRead, linesRead: 0, framesParsed, diagnostics, cancelled, ...(timeReference ? { timeReference } : {}) };
 }

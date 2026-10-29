@@ -10,10 +10,13 @@ import { SEEK_STEPS, seekTimestamp, TimelineController } from '../shared/timelin
 import { t } from '../shared/i18n';
 import { closeActionMenu, showActionMenu } from '../shared/contextMenu';
 import { composeImageSheet } from '../shared/imageSheet';
+import { onTimeDisplayChange, timeCopyText, timeLabel, timeRangeLabel } from '../shared/timeDisplay';
 
 interface Entry { definition: VisualizeViewDefinition; view: TimeSeriesView | TrajectoryView; element: HTMLElement; options: HTMLElement; title: HTMLInputElement; }
 
 /** Owns each view's settings and routes responses using unique request IDs. */
+const trimSeconds = (value: number) => value.toFixed(6).replace(/\.?0+$/, '');
+
 export class VisualizeView {
   private readonly timeline = new TimelineController();
   private readonly entries: Entry[] = [];
@@ -59,7 +62,7 @@ export class VisualizeView {
     const closeOptions = iconButton(host.querySelector<HTMLButtonElement>('.close-view-options')!, 'close', t('Close graph settings', 'グラフ設定を閉じる'));
     closeOptions.addEventListener('click', () => { this.optionsCollapsed = true; this.updateOptionsVisibility(); this.persist(); this.entries.find((entry) => entry.definition.id === this.selectedId)?.element.querySelector<HTMLElement>('.visualize-card-header')?.focus({ preventScroll: true }); });
     this.updateOptionsVisibility();
-    this.timeline.subscribe((timestamp) => { host.querySelector('.reference-time')!.textContent = timestamp === undefined ? '' : `${timestamp.toFixed(6)} s`; });
+    this.timeline.subscribe((timestamp) => { host.querySelector('.reference-time')!.textContent = timestamp === undefined ? '' : timeLabel(timestamp); });
     this.timeline.subscribePosition((timestamp) => {
       this.updateTracePlayback();
       if (timestamp === undefined) { window.clearTimeout(this.lastRequestTimer); this.lastRequestTimer = undefined; this.lastRequest = ++this.nextRequest; this.lastValues = []; this.renderLastValues(); return; }
@@ -119,9 +122,10 @@ export class VisualizeView {
       host.querySelector<HTMLElement>('.visualize-range')!.hidden = !range || !any;
       // With a range selected, the only zoom offered is zooming to it, so there is one zoom button, not two kinds.
       for (const selector of ['.zoom-all-in', '.zoom-all-out']) host.querySelector<HTMLElement>(selector)!.hidden = !!range;
-      if (range) host.querySelector('.visualize-range .clip-range')!.textContent = `${range.start.toFixed(6).replace(/\.?0+$/, '')}–${range.end.toFixed(6).replace(/\.?0+$/, '')} s · ${(range.end - range.start).toFixed(6).replace(/\.?0+$/, '')} s`;
+      if (range) host.querySelector('.visualize-range .clip-range')!.textContent = `${timeRangeLabel(range.start, range.end, trimSeconds)} · ${trimSeconds(range.end - range.start)} s`;
     };
     this.timeline.subscribeRange(() => this.updateTimeControls());
+    onTimeDisplayChange(() => { this.updateTimeControls(); this.updateTracePlayback(); const position = this.timeline.position; host.querySelector('.reference-time')!.textContent = position === undefined ? '' : timeLabel(position); });
     const addView = host.querySelector<HTMLButtonElement>('.add-view')!;
     addView.addEventListener('click', () => {
       if (addView.getAttribute('aria-expanded') === 'true') { closeActionMenu(); return; }
@@ -172,11 +176,11 @@ export class VisualizeView {
     if (!this.seeking) seek.value = String(!range || timestamp === undefined || range.start === range.end ? 0 : timestamp === range.end ? SEEK_STEPS : (timestamp - range.start) / (range.end - range.start) * SEEK_STEPS);
     // The painted track spans the thumb center's travel, with no text-input padding.
     seek.style.setProperty('--trace-progress', `${seek.valueAsNumber / SEEK_STEPS * 100}%`);
-    seek.setAttribute('aria-valuetext', timestamp === undefined ? '—' : `${timestamp.toFixed(6)} s`);
-    this.host.querySelector('.trace-time')!.textContent = timestamp === undefined ? '—' : `${timestamp.toFixed(6)} s`;
-    seek.title = range ? `${t('Time range', '時刻範囲')}: ${range.start.toFixed(6)} – ${range.end.toFixed(6)} s` : '';
-    this.host.querySelector<HTMLOutputElement>('.trace-time')!.title = timestamp === undefined ? '' : `${timestamp.toFixed(6)} s`;
-    this.host.querySelector('.trace-range-end')!.textContent = range ? `${range.end.toFixed(6)} s` : '—';
+    seek.setAttribute('aria-valuetext', timestamp === undefined ? '—' : timeLabel(timestamp));
+    this.host.querySelector('.trace-time')!.textContent = timestamp === undefined ? '—' : timeLabel(timestamp);
+    seek.title = range ? `${t('Time range', '時刻範囲')}: ${timeRangeLabel(range.start, range.end)}` : '';
+    this.host.querySelector<HTMLOutputElement>('.trace-time')!.title = timestamp === undefined ? '' : timeCopyText(timestamp);
+    this.host.querySelector('.trace-range-end')!.textContent = range ? timeLabel(range.end) : '—';
     for (const [selector, icon, label] of [['.trace-start', 'debug-step-back', t('Go to start', '始点へ移動')], ['.trace-play', this.playing ? 'debug-pause' : 'play', this.playing ? t('Pause', '一時停止') : t('Play', '再生')], ['.trace-end', 'debug-step-over', t('Go to end', '終点へ移動')]] as const) {
       const button = iconButton(this.host.querySelector<HTMLButtonElement>(selector)!, icon, label); button.disabled = !range || (selector === '.trace-play' && range.start === range.end);
     }

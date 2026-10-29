@@ -1,6 +1,7 @@
 import type { Diagnostic } from '../diagnostics/diagnostic';
 import type { ExternalCsvSourceDefinition } from '../project/schema';
 import type { SignalDefinition, SignalSample } from '../signal/signal';
+import { parseClockDateTime, timestampFromClockText, timestampFromDisplay, type TimeReference } from '../time/timeFormat';
 
 export type TimestampUnit = 'seconds' | 'milliseconds' | 'microseconds';
 
@@ -69,7 +70,14 @@ export class ExternalCsvCollector {
   private readonly definitions = new Map<string, SignalDefinition>();
   private indexes: { timestamp: number; values: Array<{ index: number; id: string; column: string }> } | undefined;
 
-  constructor(private readonly source: ExternalCsvSourceDefinition) {}
+  private readonly timeBase: ExternalCsvSourceDefinition['timeBase'];
+
+  /** `reference`: the log's, which places relative, Unix and date-time CSV times on its axis. */
+  constructor(private readonly source: ExternalCsvSourceDefinition, private readonly reference?: TimeReference) {
+    this.timeBase = source.timeBase ?? 'log';
+    if (!reference && this.timeBase === 'datetime') this.add('CSV_TIME_BASE_UNAVAILABLE', 'The log does not record its start date and time, so CSV dates and times cannot be placed on it.', 'error');
+    else if (!reference && this.timeBase === 'unix') this.add('CSV_TIME_BASE_UNAVAILABLE', 'The log does not record its start date and time, so CSV Unix times are placed as the log\'s own seconds.', 'warning');
+  }
 
   accept(rows: readonly { readonly values: readonly string[]; readonly line: number }[]): void {
     for (const row of rows) {
@@ -106,9 +114,10 @@ export class ExternalCsvCollector {
 
   private acceptData(row: readonly string[], line: number): void {
     if (!this.indexes) return;
-    const original = Number(row[this.indexes.timestamp]);
-    if (!Number.isFinite(original)) { this.add('CSV_TIMESTAMP_INVALID', 'CSV row has an invalid Timestamp.', 'warning', line); return; }
-    const timestamp = normalizeTimestamp(original, this.source.timestampUnit);
+    const text = row[this.indexes.timestamp] ?? '';
+    const placed = this.placeTimestamp(text);
+    if (!placed) { if (!(this.timeBase === 'datetime' && !this.reference)) this.add('CSV_TIMESTAMP_INVALID', 'CSV row has an invalid Timestamp.', 'warning', line); return; }
+    const { timestamp, original } = placed;
     for (const value of this.indexes.values) {
       const parsed = Number(row[value.index]);
       if (!Number.isFinite(parsed)) { this.add('CSV_VALUE_INVALID', `Column “${value.column}” has a non-numeric value.`, 'warning', line); continue; }
@@ -116,10 +125,34 @@ export class ExternalCsvCollector {
     }
   }
 
+  /** The row's time on the log's axis, and the number it was written as (seconds of the clock for a date and time). */
+  private placeTimestamp(text: string): { timestamp: number; original: number } | undefined {
+    if (this.timeBase === 'datetime') {
+      if (!this.reference) return undefined;
+      const timestamp = timestampFromClockText(text, this.reference); const written = parseClockDateTime(text);
+      return timestamp === undefined || !written ? undefined : { timestamp, original: written.seconds };
+    }
+    const original = Number(text);
+    if (!Number.isFinite(original)) return undefined;
+    const seconds = normalizeTimestamp(original, this.source.timestampUnit);
+    const timestamp = this.timeBase === 'relative' ? timestampFromDisplay(seconds, 'relative', this.reference) : this.timeBase === 'unix' ? timestampFromDisplay(seconds, 'unix', this.reference) : seconds;
+    return { timestamp, original };
+  }
+
   private add(code: string, message: string, severity: Diagnostic['severity'], line?: number): void {
     if (this.diagnostics.length >= 2000) return;
     this.diagnostics.push({ id: `csv:${this.source.id}:${code}:${line ?? 'global'}`, source: 'csv', code, severity, message, location: { sourceId: this.source.id, line }, details: { externalSourceId: this.source.id } });
   }
+}
+
+/**
+ * How a CSV's times are most likely written, from its first time: dates and times, Unix seconds (from about 1973 on) or
+ * seconds from the measurement start. The import dialog proposes it; the user can change it.
+ */
+export function suggestCsvTimeBase(text: string | undefined, unit: TimestampUnit): 'datetime' | 'unix' | 'relative' {
+  if (text !== undefined && parseClockDateTime(text)) return 'datetime';
+  const value = Number(text);
+  return text !== undefined && text.trim() && Number.isFinite(value) && Math.abs(normalizeTimestamp(value, unit)) >= 1e8 ? 'unix' : 'relative';
 }
 
 export function normalizeTimestamp(value: number, unit: TimestampUnit): number {
@@ -131,7 +164,7 @@ export function externalSignalId(sourceId: string, column: string): string {
   return `external:${encodeURIComponent(sourceId)}:${encodeURIComponent(column)}`;
 }
 
-export function importExternalCsvText(text: string, source: ExternalCsvSourceDefinition): ExternalCsvImportResult {
-  const parser = new CsvRowParser(); const collector = new ExternalCsvCollector(source);
+export function importExternalCsvText(text: string, source: ExternalCsvSourceDefinition, reference?: TimeReference): ExternalCsvImportResult {
+  const parser = new CsvRowParser(); const collector = new ExternalCsvCollector(source, reference);
   collector.accept(parser.push(text, true)); return collector.finish();
 }

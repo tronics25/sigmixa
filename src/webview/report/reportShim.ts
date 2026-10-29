@@ -3,6 +3,8 @@ import type { SignalSample } from '../../core/signal/signal';
 import type { ComparisonSeriesDto, ComparisonToExtension, ComparisonToWebview } from '../../extension/comparison/comparisonProtocol';
 import type { ReportData } from '../../extension/report/reportData';
 import { unpackReportData } from '../../extension/report/reportPacking';
+import { setTimeDisplayMode, setTimeReference } from '../shared/timeDisplay';
+import { isTimeDisplayMode } from '../../core/time/timeFormat';
 
 /**
  * Stands in for the extension inside a standalone report: the comparison page talks to it exactly as it
@@ -10,6 +12,8 @@ import { unpackReportData } from '../../extension/report/reportPacking';
  */
 // The file holds the data packed without loss; it is rebuilt here, before anything is shown.
 export const reportData: ReportData = unpackReportData(JSON.parse(document.getElementById('report-data')!.textContent!));
+// The log report's table shows times the way the log screen did when the report was made.
+setTimeReference(reportData.time?.reference); setTimeDisplayMode(isTimeDisplayMode(reportData.time?.mode) ? reportData.time.mode : undefined);
 
 let comparison: ComparisonDefinition = reportData.comparison;
 const seriesByTarget = new Map(reportData.series.map((entry) => [entry.targetId, new Map(entry.items.map((item) => [item.signalId, item]))]));

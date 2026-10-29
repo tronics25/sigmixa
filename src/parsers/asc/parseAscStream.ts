@@ -2,6 +2,7 @@ import { createReadStream, promises as fs } from 'fs';
 import { createInterface } from 'readline';
 import type { CanFrame } from '../../core/frame/canFrame';
 import type { Diagnostic } from '../../core/diagnostics/diagnostic';
+import type { TimeReference } from '../../core/time/timeFormat';
 import { parseAscLine, type AscNumericBase } from './ascLineParser';
 
 export interface AscParseProgress {
@@ -18,11 +19,15 @@ export interface AscStreamOptions {
   readonly onFrames: (frames: readonly CanFrame[]) => void | Promise<void>;
   readonly onDiagnostics?: (diagnostics: readonly Diagnostic[]) => void | Promise<void>;
   readonly onProgress?: (progress: AscParseProgress) => void;
+  /** Called once, before the first frames, when the header's `date` line gives the measurement start. */
+  readonly onTimeReference?: (reference: TimeReference) => void;
 }
 
 export interface AscParseSummary extends AscParseProgress {
   readonly diagnostics: number;
   readonly cancelled: boolean;
+  /** Undefined when the log has no readable `date` line: its timestamps are then shown as seconds only. */
+  readonly timeReference?: TimeReference;
 }
 
 export async function parseAscFile(filePath: string, options: AscStreamOptions): Promise<AscParseSummary> {
@@ -31,6 +36,7 @@ export async function parseAscFile(filePath: string, options: AscStreamOptions):
   const input = createReadStream(filePath, { encoding: 'utf8' });
   const lines = createInterface({ input, crlfDelay: Infinity });
   let base: AscNumericBase = 'hex';
+  let timeReference: TimeReference | undefined;
   let lineNumber = 0;
   let sequence = 0;
   let bytesRead = 0;
@@ -67,6 +73,9 @@ export async function parseAscFile(filePath: string, options: AscStreamOptions):
       bytesRead = Math.min(totalBytes, bytesRead + Buffer.byteLength(line, 'utf8') + 1);
       const result = parseAscLine(line, { sourceId: options.sourceId, line: lineNumber, sequence, base });
       if (result.type === 'base') base = result.base;
+      // ASC timestamps count from the measurement start, so the start is also their offset on the clock. Only a date
+      // before the first frame describes them.
+      else if (result.type === 'date') { if (!timeReference && !sequence) { timeReference = { start: result.start, offset: result.start }; options.onTimeReference?.(timeReference); } }
       else if (result.type === 'frame') { frames.push(result.frame); sequence++; }
       else if (result.type === 'diagnostic') { diagnostics.push(result.diagnostic); diagnosticCount++; }
       if (frames.length + diagnostics.length >= batchSize) await flush();
@@ -84,5 +93,6 @@ export async function parseAscFile(filePath: string, options: AscStreamOptions):
     framesParsed: sequence,
     diagnostics: diagnosticCount,
     cancelled,
+    ...(timeReference ? { timeReference } : {}),
   };
 }

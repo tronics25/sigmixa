@@ -2,6 +2,7 @@ import type { ComparisonDefinition } from '../../core/project/comparison';
 import type { SignalDefinition } from '../../core/signal/signal';
 import type { ComparisonSeriesDto, ComparisonTargetStateDto } from '../comparison/comparisonProtocol';
 import type { SignalGroupDto } from '../editors/rawLogProtocol';
+import type { TimeDisplayMode, TimeReference } from '../../core/time/timeFormat';
 
 export const REPORT_FORMAT_VERSION = 1;
 
@@ -43,4 +44,6 @@ export interface ReportData {
   readonly table?: ReportTable;
   /** The Clips of the log a log report shows (none when the report is of a Clip), in the log's own time. */
   readonly clipSpans?: readonly { readonly id: string; readonly name: string; readonly start: number; readonly end: number }[];
+  /** How the log report's table shows times: the log's start and the chosen mode. Absent in older reports (seconds). */
+  readonly time?: { readonly reference?: TimeReference; readonly mode?: TimeDisplayMode };
 }

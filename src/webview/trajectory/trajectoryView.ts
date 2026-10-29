@@ -1,3 +1,4 @@
+import { onTimeDisplayChange, timeLabel } from '../shared/timeDisplay';
 import { attachNumberStepper } from '../shared/numberStepper';
 import { createLegendEntry } from '../shared/signalLegend';
 import { emphasizeSignal } from '../shared/signalEmphasis';
@@ -31,10 +32,11 @@ export class TrajectoryView {
   private unsubscribeTimeline?: () => void;
   private unsubscribePosition?: () => void;
   private unsubscribeVisibility?: () => void;
+  private unsubscribeTimeDisplay?: () => void;
   private unsubscribeRange?: () => void;
   private readonly timelineSource = crypto.randomUUID();
   get isConfigured(): boolean { return this.tracks.some((track) => Boolean(track.xId && track.yId)); }
-  dispose(): void { this.hide(); this.lifetime.abort(); this.resizeObserver?.disconnect(); this.unsubscribeTimeline?.(); this.unsubscribePosition?.(); this.unsubscribeVisibility?.(); this.unsubscribeRange?.(); }
+  dispose(): void { this.hide(); this.lifetime.abort(); this.resizeObserver?.disconnect(); this.unsubscribeTimeline?.(); this.unsubscribePosition?.(); this.unsubscribeVisibility?.(); this.unsubscribeRange?.(); this.unsubscribeTimeDisplay?.(); }
   private listenWindow<K extends keyof WindowEventMap>(type: K, listener: (event: WindowEventMap[K]) => void): void { window.addEventListener(type, listener, { signal: this.lifetime.signal }); }
   private definitions = new Map<string, SignalDefinition>(); private groups: readonly SignalGroupDto[] = []; private groupBySignal = new Map<string, string>();
   private xId?: string; private yId?: string; private zId?: string; private invert: { x: boolean; y: boolean; z: boolean }; private equalAspect: boolean;
@@ -74,6 +76,7 @@ export class TrajectoryView {
     this.unsubscribePosition = this.timeline.subscribePosition((timestamp) => { this.current = timestamp; this.draw(); });
     this.unsubscribeRange = this.timeline.subscribeRange(() => this.draw());
     this.unsubscribeVisibility = this.timeline.subscribePositionVisibility(() => this.draw());
+    this.unsubscribeTimeDisplay = onTimeDisplayChange(() => this.draw());
     (this.resizeObserver = new ResizeObserver(() => this.draw())).observe(this.elements.querySelector('.trajectory-canvas-wrap')!);
     if (optionsHost) {
       const pane = this.elements.querySelector<HTMLElement>('.trajectory-pane')!;
@@ -356,7 +359,7 @@ export class TrajectoryView {
     const saveButton = this.elements.querySelector<HTMLButtonElement>('.save-trajectory-image')!; saveButton.disabled = !this.points.length || this.current === undefined;
     if (!this.points.length || this.current === undefined) { this.projectedPoints = []; this.hoverTimestamp = undefined; this.timeline.set(undefined, this.timelineSource); this.canvas.classList.remove('point-hover'); context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.fillText(this.xId && this.yId ? t('Selected Signals have no exact shared timestamps.', '選択したシグナルに一致する時刻がありません。') : t('Choose synchronized X and Y Signals.', '時刻が同期したXとYのシグナルを選択してください。'), 20, 30); return; }
     const trail = this.timeline.range ? this.analysisPoints : trailAt(this.points, this.current, this.trail === 'last-seconds' ? { type: 'last-seconds', seconds: this.trailSeconds } : { type: this.trail }); this.is3d() ? this.draw3d(context, trail, width, height) : this.draw2d(context, trail, width, height); const point = nearest(this.points, this.current);
-    this.elements.querySelector('.trajectory-status')!.textContent = point ? `${fmt(point.timestamp)} s · ${this.coordinateStatus('x', point.x)} · ${this.coordinateStatus('y', point.y)}${point.z === undefined ? '' : ` · ${this.coordinateStatus('z', point.z)}`}` : t('No current point', '現在位置なし');
+    this.elements.querySelector('.trajectory-status')!.textContent = point ? `${timeLabel(point.timestamp, fmtSeconds)} · ${this.coordinateStatus('x', point.x)} · ${this.coordinateStatus('y', point.y)}${point.z === undefined ? '' : ` · ${this.coordinateStatus('z', point.z)}`}` : t('No current point', '現在位置なし');
   }
   private draw2d(context: CanvasRenderingContext2D, points: readonly TrajectoryPoint[], width: number, height: number): void {
     const pad = { left: 72, right: 32, top: 32, bottom: 56 }; const xScale = trajectoryAxisScale(this.points.map((point) => point.x)); const yScale = trajectoryAxisScale(this.points.map((point) => point.y)); const spanX = xScale.maximum - xScale.minimum; const spanY = yScale.maximum - yScale.minimum; const plotW = Math.max(1, width - pad.left - pad.right); const plotH = Math.max(1, height - pad.top - pad.bottom); const sx = plotW / spanX; const sy = plotH / spanY; const scale = this.equalAspect ? Math.min(sx, sy) : 1; const usedW = this.equalAspect ? spanX * scale : plotW; const usedH = this.equalAspect ? spanY * scale : plotH; const left = pad.left + (plotW - usedW) / 2; const top = pad.top + (plotH - usedH) / 2; const px = (value: number) => left + (value - xScale.minimum) * (this.equalAspect ? scale : sx); const py = (value: number) => top + usedH - (value - yScale.minimum) * (this.equalAspect ? scale : sy);
@@ -429,7 +432,7 @@ export class TrajectoryView {
   private measurementPointText(name: 'A' | 'B', timestamp: number): string {
     const point = this.analysisPoints.find((item) => item.seriesId === this.tracks[this.activeTrack].id && item.timestamp === timestamp);
     const coordinates = point ? [this.coordinateStatus('x', point.x), this.coordinateStatus('y', point.y), ...(point.z === undefined ? [] : [this.coordinateStatus('z', point.z)])].join(', ') : '';
-    return `${name} ${fmt(timestamp)} s${coordinates ? ` (${coordinates})` : ''}`;
+    return `${name} ${timeLabel(timestamp, fmtSeconds)}${coordinates ? ` (${coordinates})` : ''}`;
   }
   private measurementSummary(): string | undefined { if (this.measurementTimestamps.length !== 2) return undefined; const measurement = measureTrajectory(this.analysisPoints.filter((point) => point.seriesId === this.tracks[this.activeTrack].id), this.measurementTimestamps[0], this.measurementTimestamps[1]); if (!measurement) return undefined; const parts = [this.measurementPointText('A', measurement.first.timestamp), this.measurementPointText('B', measurement.second.timestamp), `Δt ${fmt(measurement.deltaTime)} s`, `ΔX ${fmt(trajectoryAxisDisplayValue(measurement.deltaX, this.invert.x))}${this.axisUnit('x') ? ` ${this.axisUnit('x')}` : ''}`, `ΔY ${fmt(trajectoryAxisDisplayValue(measurement.deltaY, this.invert.y))}${this.axisUnit('y') ? ` ${this.axisUnit('y')}` : ''}`]; if (measurement.deltaZ !== undefined) parts.push(`ΔZ ${fmt(trajectoryAxisDisplayValue(measurement.deltaZ, this.invert.z))}${this.axisUnit('z') ? ` ${this.axisUnit('z')}` : ''}`); if (this.coordinateDisplayUnit) { const unit = this.coordinateDisplayUnit.unit; const start = Math.min(measurement.first.timestamp, measurement.second.timestamp); const end = Math.max(measurement.first.timestamp, measurement.second.timestamp); const incomplete = !this.connectGaps && this.series.some((item) => crossesSeriesGap(item.gaps, start, end)); parts.push(`${t('Straight', '直線距離')} ${fmt(measurement.straightDistance)} ${unit}`); parts.push(incomplete ? `${t('Path', '軌跡長')} — (${t('contains gaps', '欠損あり')})` : `${t('Path', '軌跡長')} ${fmt(measurement.pathLength)} ${unit}`); if (!incomplete && measurement.averageSpeed !== undefined) parts.push(`${t('Average speed', '平均速度')} ${fmt(measurement.averageSpeed)} ${unit}/s`); } return parts.join(' · '); }
   /**
@@ -449,7 +452,7 @@ export class TrajectoryView {
     const gap = 12; const rowHeight = 17; const swatch = 10; const showNames = true;
     const nameWidth = showNames ? Math.max(...rows.map((row) => context.measureText(row.name).width)) + swatch + 6 + gap : 0;
     const columnWidths = [0, 1, 2].map((column) => Math.max(0, ...rows.map((row) => row.cells[column] ? context.measureText(row.cells[column].text).width : 0)));
-    const heading = `${fmt(this.current ?? rows[0].time)} s`;
+    const heading = `${timeLabel(this.current ?? rows[0].time, fmtSeconds)}`;
     const contentWidth = Math.max(context.measureText(heading).width, nameWidth + columnWidths.filter((value) => value > 0).reduce((sum, value) => sum + value + gap, -gap));
     const boxWidth = contentWidth + 16; const boxHeight = (rows.length + 1) * rowHeight + 10; const boxX = width - boxWidth - 8; const boxY = height - boxHeight - 8;
     // No box: it hid the path and axis labels behind it. Each text gets a thin outline in the background colour instead, so it stays readable over lines.
@@ -466,7 +469,7 @@ export class TrajectoryView {
   private paintHover(context: CanvasRenderingContext2D, width: number, height: number): void {
     const projected = this.hoverTimestamp === undefined ? undefined : this.projectedPoints.find((item) => item.t === this.hoverTimestamp);
     if (!projected) return; const lines = [
-    { text: `${fmt(projected.t)} s`, color: css('--vscode-foreground', '#ddd') },
+    { text: `${timeLabel(projected.t, fmtSeconds)}`, color: css('--vscode-foreground', '#ddd') },
     { text: this.coordinateStatus('x', projected.point.x), color: axisColor('x') },
     { text: this.coordinateStatus('y', projected.point.y), color: axisColor('y') },
     ...(projected.point.z === undefined ? [] : [{ text: this.coordinateStatus('z', projected.point.z), color: axisColor('z') }]),
@@ -479,7 +482,7 @@ export class TrajectoryView {
     const context = canvas.getContext('2d'); if (!context) return undefined;
     const legendHeight = this.paintExportLegend(context, width); const sceneTop = 60 + legendHeight; const height = Math.max(Math.round(width * .625), sceneTop + 400); const sceneHeight = height - sceneTop;
     canvas.height = height;
-    const current = nearest(this.points, this.current); const summary = `${this.is3d() ? '3D' : '2D'}${current ? ` · ${fmt(current.timestamp)} s` : ''}`;
+    const current = nearest(this.points, this.current); const summary = `${this.is3d() ? '3D' : '2D'}${current ? ` · ${timeLabel(current.timestamp, fmtSeconds)}` : ''}`;
     this.paintExportHeader(context, width, height, summary, heading); this.paintExportLegend(context, width);
     const trail = this.timeline.range ? this.analysisPoints : trailAt(this.points, this.current, this.trail === 'last-seconds' ? { type: 'last-seconds', seconds: this.trailSeconds } : { type: this.trail });
     const savedHover = this.hoverTimestamp; const savedHighlight = this.highlightedTrackId; this.hoverTimestamp = undefined; this.highlightedTrackId = undefined; this.exporting = true;
@@ -516,6 +519,8 @@ function paintDataPoints(context: CanvasRenderingContext2D, points: readonly { r
 }
 function clamp(value: number, min: number, max: number): number { return Math.max(min, Math.min(max, value)); }
 function fmt(value: number): string { return Number(value.toPrecision(7)).toString(); }
+/** Times in seconds: like `fmt`, but never rounding the whole seconds of a large (Unix) time. */
+function fmtSeconds(value: number): string { return Math.abs(value) >= 1e5 ? Number(value.toFixed(6)).toString() : fmt(value); }
 function css(name: string, fallback: string): string { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }
 
 function trackColor(index: number): string { return `hsl(${210 + index * 83 % 360} 75% 60%)`; }

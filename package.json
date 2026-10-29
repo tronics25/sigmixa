@@ -2,7 +2,7 @@
   "name": "sigmixa",
   "displayName": "SigMixa — CAN Log Analyzer",
   "description": "%sigmixa.description%",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "publisher": "tronics25",
   "license": "MIT",
   "private": true,

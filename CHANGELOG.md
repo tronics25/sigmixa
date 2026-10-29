@@ -1,5 +1,10 @@
 # Change Log
 
+## 2.2.1 - 2026-10-30
+
+- Times can be shown as the recorded date and time ([#1](https://github.com/tronics25/sigmixa/issues/1)). BLF logs showed raw Unix epoch seconds such as 1735654183.491113, and ASC logs seconds from the start. Both now show the time of day in the RAW Log, Table, Trace and graphs, and copies and Signal CSV exports hold the full date and time (2024-12-31 14:09:43.491113). Right-click the TIME heading of the RAW Log or Table to switch to seconds from the start. The start is read from the BLF file header and the ASC `date` line; a log that does not record it is shown in seconds as before. No time zone is converted: BLF and ASC record none.
+- External CSV import asks how the CSV's times are written: date and time, elapsed from the start, or Unix time (with a unit for numbers), so they line up with the log. CSV files added by earlier versions are read as before.
+
 ## 2.2.0 - 2026-10-25
 
 - Analysis Groups pane: the + and Open CAN Log buttons at the top act where the selection is, as in the Explorer: inside a selected group or folder; for a selected log or Clip, inside the group or folder its row is shown in (for a log added to a group, that group); and on the top level of the workspace when nothing is selected, for example after clicking empty space in the pane. In 2.1.0 they always acted on the top level.

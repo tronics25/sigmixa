@@ -2,6 +2,7 @@ import type { SignalDefinition } from '../../core/signal/signal';
 import type { ReportTable } from '../../extension/report/reportData';
 import { reportCellLabel } from '../../extension/report/reportTableCells';
 import { t } from '../shared/i18n';
+import { timeCellText, timeColumnTitle, timeMode } from '../shared/timeDisplay';
 
 const ROW = 28;
 const format = (value: number) => Number(value.toPrecision(10)).toString();
@@ -44,7 +45,7 @@ export function renderReportTable(host: HTMLElement, table: ReportTable, definit
   };
   const renderHead = () => {
     const row = document.createElement('tr');
-    const time = document.createElement('th'); time.textContent = 'TIME'; time.appendChild(Object.assign(document.createElement('small'), { textContent: 's' }));
+    const time = document.createElement('th'); time.textContent = 'TIME'; if (timeMode() !== 'datetime') time.appendChild(Object.assign(document.createElement('small'), { textContent: timeMode() === 'unix' ? 'Unix s' : 's' })); time.title = timeColumnTitle();
     time.setAttribute('aria-sort', sortColumn === -1 ? (descending ? 'descending' : 'ascending') : 'none'); time.addEventListener('click', () => { descending = sortColumn === -1 ? !descending : false; sortColumn = -1; sort(); renderHead(); renderBody(); });
     row.appendChild(time);
     for (const { id, index } of columns()) {
@@ -64,7 +65,7 @@ export function renderReportTable(host: HTMLElement, table: ReportTable, definit
     const rows: HTMLElement[] = [spacer(first * ROW)];
     for (let position = first; position < last; position++) {
       const index = order[position]; const row = document.createElement('tr');
-      const time = document.createElement('td'); time.textContent = table.timestamps[index].toFixed(6); row.appendChild(time);
+      const time = document.createElement('td'); time.textContent = timeCellText(table.timestamps[index]); row.appendChild(time);
       for (const column of visible) { const td = document.createElement('td'); const text = cell(column.index, index); td.textContent = text; if (text === '—') td.className = 'empty'; row.appendChild(td); }
       rows.push(row);
     }

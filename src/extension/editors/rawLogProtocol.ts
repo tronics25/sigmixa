@@ -3,6 +3,8 @@ import type { FrameFilter } from '../../core/frame/frameStore';
 import type { DiagnosticGroup } from '../../core/diagnostics/diagnosticTally';
 import type { SignalDefinition, SignalEvent, SignalSample } from '../../core/signal/signal';
 import type { SignalCellChange } from '../../core/signal/tableChanges';
+import type { TimeDisplayMode, TimeReference } from '../../core/time/timeFormat';
+import type { ExternalCsvTimeBase } from '../../core/project/schema';
 
 export interface VisualizeViewDefinition {
   readonly id: string;
@@ -15,6 +17,8 @@ export interface VisualizeViewDefinition {
 export interface TrajectorySeriesDefinition { readonly id: string; readonly name: string; readonly xId?: string; readonly yId?: string; readonly zId?: string; }
 
 export interface LogViewState {
+  /** How times are shown, copied and exported; the date and time when undefined (and the log's start is known). */
+  readonly timeDisplay?: TimeDisplayMode;
   /** RAW Log column widths, kept with the view settings. */
   readonly rawWidths?: Readonly<Record<string, number>>;
   readonly traceSettings?: TraceDisplaySettings;
@@ -103,6 +107,11 @@ export interface ExternalCsvPreviewDto {
   readonly headers: readonly string[];
   readonly suggestedTimestampColumn?: string;
   readonly suggestedTimestampUnit: 'seconds' | 'milliseconds' | 'microseconds';
+  readonly suggestedTimeBase: ExternalCsvTimeBase;
+  /** Whether the open log records its start, which relative, Unix and date-time CSV times need. */
+  readonly logStartKnown: boolean;
+  /** The CSV's first data row, to propose (and show) how the chosen column's times are written. */
+  readonly firstRow?: readonly string[];
 }
 
 export interface RawRowDto {
@@ -149,11 +158,11 @@ export type ToExtensionMessage =
   | { readonly type: 'autoFitSampleRequest'; readonly requestId: number; readonly filter?: FrameFilter }
   | { readonly type: 'openFrameDefinition'; readonly definitionId: string }
   | { readonly type: 'registerFrame'; readonly canId: number; readonly extended: boolean; readonly frameLength: number }
-  | { readonly type: 'selectedRowsRequest'; readonly action: 'copy' | 'open'; readonly ranges: readonly { readonly start: number; readonly end: number }[]; readonly filter?: FrameFilter; readonly contentMode: 'raw' | 'decoded' }
+  | { readonly type: 'selectedRowsRequest'; readonly action: 'copy' | 'open'; readonly ranges: readonly { readonly start: number; readonly end: number }[]; readonly filter?: FrameFilter; readonly contentMode: 'raw' | 'decoded'; readonly timeDisplay?: TimeDisplayMode }
   | { readonly type: 'signalCatalogRequest'; readonly requestId: number; readonly view: 'table' | 'timeSeries' | 'trajectory' }
   | { readonly type: 'signalTablePageRequest'; readonly requestId: number; readonly selectedIds: readonly string[]; readonly offset: number; readonly limit: number }
   | { readonly type: 'signalTableSampleRequest'; readonly requestId: number; readonly selectedIds: readonly string[] }
-  | { readonly type: 'signalTableRowsRequest'; readonly action: 'copy' | 'open'; readonly ranges: readonly { readonly start: number; readonly end: number }[]; readonly selectedIds: readonly string[] }
+  | { readonly type: 'signalTableRowsRequest'; readonly action: 'copy' | 'open'; readonly ranges: readonly { readonly start: number; readonly end: number }[]; readonly selectedIds: readonly string[]; readonly timeDisplay?: TimeDisplayMode }
   /** `joined`: the axes of a trajectory, put together by their times, so they are thinned together. */
   | { readonly type: 'signalSeriesRequest'; readonly requestId: number; readonly selectedIds: readonly string[]; readonly joined?: boolean; readonly range?: { readonly start: number; readonly end: number }; readonly maxPoints: number }
   | { readonly type: 'timelineRangeRequest'; readonly requestId: number }
@@ -166,10 +175,10 @@ export type ToExtensionMessage =
   /** A Clip's start or end was dragged on a graph. */
   | { readonly type: 'updateClipRange'; readonly clipId: string; readonly startTimestamp: number; readonly endTimestamp: number }
   | { readonly type: 'importExternalCsv' }
-  | { readonly type: 'commitExternalCsv'; readonly importId: string; readonly timestampColumn: string; readonly timestampUnit: 'seconds' | 'milliseconds' | 'microseconds'; readonly valueColumns: readonly { readonly column: string; readonly name: string; readonly unit?: string }[] }
+  | { readonly type: 'commitExternalCsv'; readonly importId: string; readonly timestampColumn: string; readonly timestampUnit: 'seconds' | 'milliseconds' | 'microseconds'; readonly timeBase?: ExternalCsvTimeBase; readonly valueColumns: readonly { readonly column: string; readonly name: string; readonly unit?: string }[] }
   | { readonly type: 'cancelExternalCsvImport'; readonly importId: string }
   | { readonly type: 'removeExternalCsvSignal'; readonly sourceId: string; readonly column: string }
-  | { readonly type: 'exportSignalCsv'; readonly selectedIds: readonly string[] }
+  | { readonly type: 'exportSignalCsv'; readonly selectedIds: readonly string[]; readonly timeDisplay?: TimeDisplayMode }
   | { readonly type: 'saveTimeSeriesImage'; readonly pngDataUrl: string; readonly svg: string }
   | { readonly type: 'saveTrajectoryImage'; readonly pngDataUrl: string; readonly svg: string }
   | { readonly type: 'exportVisualize'; readonly trajectoryCurrentTime?: number; readonly pngDataUrl?: string; readonly svg?: string }
@@ -183,7 +192,9 @@ export type ToWebviewMessage =
   | { readonly type: 'timelineRange'; readonly requestId: number; readonly range?: { readonly start: number; readonly end: number } }
   | { readonly type: 'lastFrames'; readonly requestId: number; readonly timestamp: number; readonly values: readonly LastFrameDto[] }
   | { readonly type: 'measuredSignals'; readonly requestId: number; readonly samples: readonly MeasuredSignalDto[] }
-  | { readonly type: 'init'; readonly place?: string; readonly groupName?: string; readonly viewSettingsScope?: 'file' | 'group'; readonly fileName: string; readonly parsing: boolean; readonly frames: number; readonly diagnostics: number; readonly channels: readonly number[]; readonly viewState?: LogViewState; readonly clip?: { readonly name: string; readonly startTimestamp?: number; readonly endTimestamp?: number } }
+  | { readonly type: 'init'; readonly place?: string; readonly groupName?: string; readonly viewSettingsScope?: 'file' | 'group'; readonly fileName: string; readonly parsing: boolean; readonly frames: number; readonly diagnostics: number; readonly channels: readonly number[]; readonly viewState?: LogViewState; readonly clip?: { readonly name: string; readonly startTimestamp?: number; readonly endTimestamp?: number }; readonly timeReference?: TimeReference }
+  /** The log's start became known while it was being read. */
+  | { readonly type: 'timeReference'; readonly reference: TimeReference }
   | { readonly type: 'page'; readonly requestId: number; readonly offset: number; readonly total: number; readonly generation: number; readonly rows: readonly RawRowDto[] }
   | { readonly type: 'progress'; readonly frames: number; readonly bytesRead: number; readonly totalBytes: number; readonly channels: readonly number[] }
   | { readonly type: 'parseComplete'; readonly cancelled: boolean; readonly frames: number; readonly diagnostics: number; readonly channels: readonly number[] }
