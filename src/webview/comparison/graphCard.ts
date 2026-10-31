@@ -24,6 +24,7 @@ import { createSvgCanvas } from '../shared/svgCanvas';
 import type { SheetImage } from '../shared/imageSheet';
 import { withBrandMark } from '../shared/brandMark';
 import { buttonContextAction, type ViewContextAction } from '../shared/viewContextAction';
+import { createLaneToggle, laneIndexAt, laneRuns, lanesHeight, paintChartLanes, placeLaneToggle, type ChartLane } from '../shared/chartLanes';
 
 export const DASH_PATTERNS: readonly number[][] = [[], [8, 4], [2, 3], [10, 3, 2, 3]];
 export const dashFor = (index: number): number[] => DASH_PATTERNS[index % DASH_PATTERNS.length];
@@ -107,6 +108,7 @@ export class GraphCard implements ComparisonCard {
   private readonly canvas: HTMLCanvasElement;
   private readonly legend: HTMLElement;
   private readonly notice: HTMLElement;
+  private readonly laneToggle: HTMLButtonElement;
   private readonly selector: SignalSelector;
   private readonly selected: Set<string>;
   private readonly buttons: Record<'clear' | 'image' | 'settings' | 'up' | 'copy' | 'trash', HTMLButtonElement>;
@@ -152,6 +154,8 @@ export class GraphCard implements ComparisonCard {
     const wrap = document.createElement('div'); wrap.className = 'chart-canvas-wrap';
     this.canvas = document.createElement('canvas'); this.canvas.setAttribute('aria-label', t('Comparison graph. Click to add a marker.', '比較グラフ。クリックでマーカーを追加。'));
     wrap.appendChild(this.canvas);
+    this.laneToggle = createLaneToggle(() => { this.update({ lanes: !this.lanesOpen }); this.draw(); });
+    wrap.appendChild(this.laneToggle);
     this.element.append(this.header, this.notice, this.legend, wrap); list.appendChild(this.element);
 
     this.options = document.createElement('section'); this.options.className = 'view-specific-options'; this.options.hidden = true;
@@ -235,6 +239,7 @@ export class GraphCard implements ComparisonCard {
   private get normalized(): boolean { return this.effectiveMode() === 'normalized'; }
   private effectiveMode(): 'raw' | 'normalized' { return graphDisplayPolicy([...this.selected], this.host.definitions(), this.definitionValue.mode ?? 'raw').mode; }
   private get connectGaps(): boolean { return this.definitionValue.connectGaps !== false; }
+  private get lanesOpen(): boolean { return this.definitionValue.lanes === true; }
 
   private syncSettings(): void {
     const normalized = this.normalized; const requiresSplit = graphDisplayPolicy([...this.selected], this.host.definitions(), 'raw').requiresNormalization;
@@ -270,7 +275,7 @@ export class GraphCard implements ComparisonCard {
 
   contextActions(pointer?: { clientX: number; clientY: number }): (ViewContextAction | null)[] {
     const items: (ViewContextAction | null)[] = [];
-    const time = pointer ? this.timeAt(pointer.clientX, pointer.clientY) : undefined;
+    const time = pointer ? this.pointerTime(pointer.clientX, pointer.clientY) : undefined;
     if (!this.selection && time !== undefined) items.push({ label: t('Fix marker here', 'ここにマーカーを固定'), icon: 'pin', run: () => this.addMarker(time) });
     if (this.markers.size) items.push(buttonContextAction(this.buttons.clear));
     items.push(buttonContextAction(this.buttons.image));
@@ -280,10 +285,10 @@ export class GraphCard implements ComparisonCard {
   // ---- interaction ----------------------------------------------------------------------------
 
   private bindCanvas(): void {
-    this.canvas.addEventListener('mousemove', (event) => { const time = this.timeAt(event.clientX, event.clientY); this.host.setHoverTime(time); });
+    this.canvas.addEventListener('mousemove', (event) => { const time = this.pointerTime(event.clientX, event.clientY); this.host.setHoverTime(time); });
     this.canvas.addEventListener('mouseleave', () => this.host.setHoverTime(undefined));
     // Drag to select a range (like the time-series graph in Visualize); a click clears it, or adds a marker.
-    this.canvas.addEventListener('mousedown', (event) => { const time = event.button === 0 ? this.timeAt(event.clientX, event.clientY) : undefined; this.press = time === undefined ? undefined : { x: event.clientX, time }; });
+    this.canvas.addEventListener('mousedown', (event) => { const time = event.button === 0 ? this.pointerTime(event.clientX, event.clientY) : undefined; this.press = time === undefined ? undefined : { x: event.clientX, time }; });
     this.canvas.addEventListener('mousemove', (event) => {
       if (!this.press || Math.abs(event.clientX - this.press.x) <= 6) return;
       const time = this.clampedTime(event.clientX); this.host.setSelection({ start: Math.min(this.press.time, time), end: Math.max(this.press.time, time) }); this.suppressClick = true;
@@ -292,13 +297,13 @@ export class GraphCard implements ComparisonCard {
     this.canvas.addEventListener('click', (event) => {
       if (this.suppressClick) { this.suppressClick = false; return; }
       if (this.selection) { this.host.setSelection(undefined); return; }
-      const time = this.timeAt(event.clientX, event.clientY); if (time !== undefined) this.addMarker(time);
+      const time = this.pointerTime(event.clientX, event.clientY); if (time !== undefined) this.addMarker(time);
     });
     this.canvas.addEventListener('wheel', (event) => {
       if (!this.fullRange || !this.viewRange) return;
       const gesture = chartWheelGesture(event, this.canvas.clientWidth); if (gesture.kind === 'scroll' || !gesture.delta) return;
       event.preventDefault(); if (this.viewportTimer !== undefined) window.clearTimeout(this.viewportTimer);
-      const center = gesture.kind === 'zoom' ? this.timeAt(event.clientX, event.clientY) : undefined;
+      const center = gesture.kind === 'zoom' ? this.pointerTime(event.clientX, event.clientY) : undefined;
       this.viewportTimer = window.setTimeout(() => { this.viewportTimer = undefined; if (gesture.kind === 'zoom') this.zoom(gesture.delta < 0 ? 1 / 1.5 : 1.5, center); else this.pan(gesture.delta < 0 ? -1 : 1); }, 70);
     }, { passive: false });
   }
@@ -340,7 +345,17 @@ export class GraphCard implements ComparisonCard {
     });
   }
 
-  private isPlotTarget(event: MouseEvent): boolean { return event.target === this.canvas && this.timeAt(event.clientX, event.clientY) !== undefined; }
+  private isPlotTarget(event: MouseEvent): boolean { return event.target === this.canvas && this.pointerTime(event.clientX, event.clientY) !== undefined; }
+
+  /** The time under the pointer on the plot or on an open lane: the lanes take the same hover, clicks, drags and wheel as the plot. */
+  private pointerTime(clientX: number, clientY: number): number | undefined { return this.timeAt(clientX, clientY) ?? this.laneTimeAt(clientX, clientY); }
+
+  /** The time under the pointer when it is over an open lane. */
+  private laneTimeAt(clientX: number, clientY: number): number | undefined {
+    if (!this.viewRange || !this.lanesOpen) return undefined; const rect = this.canvas.getBoundingClientRect(); const x = clientX - rect.left;
+    if (x < this.plotLeft || x > this.plotLeft + this.plotWidth || laneIndexAt(clientY - rect.top - this.plotHeight, this.shown.length) === undefined) return undefined;
+    return this.viewRange.start + (x - this.plotLeft) / this.plotWidth * (this.viewRange.end - this.viewRange.start);
+  }
 
   private timeAt(clientX: number, clientY: number): number | undefined {
     if (!this.viewRange) return undefined; const rect = this.canvas.getBoundingClientRect();
@@ -443,15 +458,39 @@ export class GraphCard implements ComparisonCard {
     this.host.refreshMeasured();
     this.buttons.image.disabled = !full || !entries.length || this.host.measured.pendingMarkers();
     const width = Math.max(320, this.canvas.parentElement!.clientWidth); const groups = this.axisGroups(entries);
-    const ratio = devicePixelRatio || 1; this.canvas.width = width * ratio; this.canvas.height = this.plotHeight * ratio; this.canvas.style.width = `${width}px`; this.canvas.style.height = `${this.plotHeight}px`;
+    const lanes = full && this.viewRange && groups.length ? this.shown.length : 0; const height = this.plotHeight + (this.lanesOpen ? lanesHeight(lanes) : 0); placeLaneToggle(this.laneToggle, lanes, this.lanesOpen, this.plotHeight);
+    const ratio = devicePixelRatio || 1; this.canvas.width = width * ratio; this.canvas.height = height * ratio; this.canvas.style.width = `${width}px`; this.canvas.style.height = `${height}px`;
     const context = this.canvas.getContext('2d')!; context.scale(ratio, ratio);
-    context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, this.plotHeight);
+    context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height);
     if (!full || !this.viewRange || !groups.length) {
       context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.font = '12px sans-serif';
       context.fillText(this.pending || this.host.targets().some((target) => target.status === 'loading') ? t('Loading selected Signals…', '選択したシグナルを読み込んでいます…') : this.shown.length ? t('No comparable samples for the selected Signals.', '選択したシグナルに比較可能なサンプルがありません。') : t('Select Signals in Graph settings.', 'グラフ設定でシグナルを選択してください。'), 20, 30);
       return;
     }
     this.paint(context, width, 0, groups, this.viewRange, true);
+    if (this.lanesOpen) this.paintLanes(context, width, this.plotHeight, groups, this.viewRange, true);
+  }
+
+  /** One lane per shown Signal, with a line for each target; `interactive` adds the hover time, its values and the selection. */
+  private paintLanes(context: CanvasRenderingContext2D, width: number, top: number, groups: readonly AxisGroup[], range: TimeRange, interactive: boolean): void {
+    const normalized = groups.length === 1 && groups[0].key === 'normalized'; const entries = groups.flatMap((group) => group.entries.map((entry) => ({ entry, displayUnit: group.displayUnit })));
+    const definitions = new Map(this.host.definitions().map((definition) => [definition.id, definition]));
+    const hover = interactive ? this.host.hoverTime() : undefined; const highlighted = interactive ? this.host.highlighted() : undefined;
+    const markers = [...this.markers.values()].flatMap((marker) => { const time = this.markerTime(marker, entries.map(({ entry }) => entry)); return time === undefined ? [] : [{ id: marker.id, time }]; });
+    const lanes: ChartLane[] = this.shown.map((signalId) => {
+      const own = entries.filter(({ entry }) => entry.signalId === signalId);
+      // Each marker's value in each target, as the graph labels it.
+      const markerValues = markers.flatMap((marker) => own.flatMap(({ entry, displayUnit }) => {
+        const sample = this.host.measured.sample(`marker:${this.id}:${marker.id}:${entry.target.id}`, entry.signalId); if (!sample) return [];
+        const value = this.value(entry, sample.value, displayUnit, normalized); const time = sample.timestamp - entry.anchor; if (!Number.isFinite(value)) return [];
+        return [{ time: marker.time, sampleTime: time, value, dash: dashFor(entry.targetIndex), text: measuredValueLabel(`${this.valueLabel(entry, sample.value, displayUnit, normalized)}${sample.valueLabel ? ` (${sample.valueLabel})` : ''}`, time, marker.time) }];
+      }));
+      const values = hover === undefined ? [] : own.flatMap(({ entry, displayUnit }) => { const sample = interpolatedSeriesSample(entry.series, entry.anchor + hover, this.connectGaps); return sample ? [`${this.valueLabel(entry, sample.value, displayUnit, normalized)}${sample.valueLabel ? ` (${sample.valueLabel})` : ''}`] : []; });
+      return { name: definitions.get(signalId)?.name ?? signalId, color: this.host.color(signalId), emphasized: highlighted === signalId, markers: markerValues, value: values.length ? values.join('  ') : undefined,
+        lines: own.map(({ entry, displayUnit }) => ({ runs: laneRuns(entry.series, (value) => this.value(entry, value, displayUnit, normalized), this.connectGaps, entry.anchor), dash: dashFor(entry.targetIndex) })) };
+    });
+    const left = 72; const right = groups.length > 1 ? 72 : 24;
+    paintChartLanes(context, lanes, { left, width: Math.max(32, width - left - right), top }, { start: range.start, end: range.end === range.start ? range.start + 1 : range.end }, { cursor: hover, markers: markers.map((marker) => marker.time), selection: interactive ? this.selection : undefined });
   }
 
   private paint(context: CanvasRenderingContext2D, width: number, top: number, groups: readonly AxisGroup[], range: TimeRange, interactive: boolean): void {
@@ -551,7 +590,7 @@ export class GraphCard implements ComparisonCard {
   renderImage(heading = `SigMixa · ${this.definitionValue.name}`, width = 1600): SheetImage | undefined {
     const entries = this.entries(); const groups = this.axisGroups(entries); if (!this.viewRange || !groups.length) return undefined;
     const targets = this.host.targets().filter((target) => target.status === 'ready' && !this.host.hidden(target.id));
-    const legendRows = 1 + Math.ceil(targets.length / Math.max(1, Math.floor(width / 533))) + Math.ceil(this.shown.length / Math.max(1, Math.floor(width / 400))); const header = 60 + legendRows * 20; const height = header + this.plotHeight + 20;
+    const legendRows = 1 + Math.ceil(targets.length / Math.max(1, Math.floor(width / 533))) + Math.ceil(this.shown.length / Math.max(1, Math.floor(width / 400))); const header = 60 + legendRows * 20; const lanes = this.lanesOpen ? lanesHeight(this.shown.length) : 0; const height = header + this.plotHeight + lanes + 20;
     const paintAll = (context: CanvasRenderingContext2D) => {
       context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height);
       context.fillStyle = css('--vscode-foreground', '#ddd'); context.font = '600 20px sans-serif'; context.fillText(heading, 24, 34);
@@ -561,6 +600,7 @@ export class GraphCard implements ComparisonCard {
       y += 20; x = 24;
       for (const target of targets) { const label = `${target.name} (${target.rangeLabel})`; if (x > width - 420) { x = 24; y += 20; } context.save(); context.setLineDash(dashFor(this.host.targetIndex(target.id))); context.strokeStyle = css('--vscode-foreground', '#ddd'); context.lineWidth = 2; context.beginPath(); context.moveTo(x, y - 4); context.lineTo(x + 24, y - 4); context.stroke(); context.restore(); context.fillStyle = css('--vscode-foreground', '#ddd'); context.fillText(label, x + 30, y); x += 40 + context.measureText(label).width + 16; }
       this.paint(context, width, header, groups, this.viewRange!, false);
+      if (lanes) this.paintLanes(context, width, header + this.plotHeight, groups, this.viewRange!, false);
     };
     const png = document.createElement('canvas'); png.width = width; png.height = height; const context = png.getContext('2d'); if (!context) return undefined; paintAll(context);
     const vector = createSvgCanvas(width, height); paintAll(vector.context);

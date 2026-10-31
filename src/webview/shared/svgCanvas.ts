@@ -32,6 +32,7 @@ class SvgRecorder {
   private hasPoint = false;
   private readonly elements: string[] = [];
   private readonly definitions: string[] = [];
+  private readonly gradients: SvgGradient[] = [];
   private readonly states: SvgState[] = [];
   private readonly measurement = document.createElement('canvas').getContext('2d')!;
 
@@ -47,6 +48,10 @@ class SvgRecorder {
   scale(x: number, y: number): void { this.transform += ` scale(${n(x)} ${n(y)})`; }
   translate(x: number, y: number): void { this.transform += ` translate(${n(x)} ${n(y)})`; }
   clearRect(): void {}
+  /** A linear gradient in user space; it stands for itself as `url(#id)`, so it can be a fill or a stroke. */
+  createLinearGradient(x0: number, y0: number, x1: number, y1: number): CanvasGradient {
+    const gradient = new SvgGradient(`gradient-${this.gradients.length + 1}`, x0, y0, x1, y1); this.gradients.push(gradient); return gradient as unknown as CanvasGradient;
+  }
   beginPath(): void { this.path = ''; this.hasPoint = false; }
   closePath(): void { this.path += ' Z'; }
   moveTo(x: number, y: number): void { this.path += ` M${n(x)} ${n(y)}`; this.hasPoint = true; }
@@ -77,7 +82,7 @@ class SvgRecorder {
     this.push(`<text x="${n(x)}" y="${n(y)}" text-anchor="${anchor}" dominant-baseline="${baseline}" style="font:${escapeAttribute(this.font)}" fill="${escapeAttribute(String(this.fillStyle))}" opacity="${n(this.globalAlpha)}">${escapeText(text)}</text>`);
   }
   toSvg(): string {
-    const definitions = this.definitions.length ? `<defs>${this.definitions.join('')}</defs>` : '';
+    const all = [...this.gradients.map((gradient) => gradient.toDefinition()), ...this.definitions]; const definitions = all.length ? `<defs>${all.join('')}</defs>` : '';
     return `<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" width="${this.width}" height="${this.height}" viewBox="0 0 ${this.width} ${this.height}">${definitions}${this.elements.join('')}</svg>`;
   }
 
@@ -90,6 +95,22 @@ class SvgRecorder {
     const transformed = this.transform ? `<g transform="${escapeAttribute(this.transform.trim())}">${element}</g>` : element;
     this.elements.push(this.clips.reduceRight((content, id) => `<g clip-path="url(#${id})">${content}</g>`, transformed));
   }
+}
+
+class SvgGradient {
+  private readonly stops: { offset: number; color: string }[] = [];
+  constructor(private readonly id: string, private readonly x0: number, private readonly y0: number, private readonly x1: number, private readonly y1: number) {}
+  addColorStop(offset: number, color: string): void { this.stops.push({ offset, color }); }
+  toString(): string { return `url(#${this.id})`; }
+  toDefinition(): string {
+    return `<linearGradient id="${this.id}" gradientUnits="userSpaceOnUse" x1="${n(this.x0)}" y1="${n(this.y0)}" x2="${n(this.x1)}" y2="${n(this.y1)}">${this.stops.map((stop) => `<stop offset="${n(stop.offset)}" ${stopColor(stop.color)}/>`).join('')}</linearGradient>`;
+  }
+}
+
+/** rgba() is written as a color and an opacity, which every SVG reader understands. */
+function stopColor(color: string): string {
+  const rgba = /^rgba\(\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)$/.exec(color.trim());
+  return rgba ? `stop-color="rgb(${rgba[1].trim()}, ${rgba[2].trim()}, ${rgba[3].trim()})" stop-opacity="${escapeAttribute(rgba[4].trim())}"` : `stop-color="${escapeAttribute(color)}"`;
 }
 
 function n(value: number): string { return Number.isFinite(value) ? Number(value.toFixed(5)).toString() : '0'; }

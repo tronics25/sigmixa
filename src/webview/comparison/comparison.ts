@@ -12,6 +12,7 @@ import { SharedTimeAxis } from '../../core/timeline/sharedTimeAxis';
 import { MeasuredSamples } from '../shared/measuredSamples';
 import { bindPressRepeat } from '../shared/pressRepeat';
 import { SIGNAL_LEGEND_STYLES } from '../shared/signalLegend';
+import { CHART_LANES_STYLES } from '../shared/chartLanes';
 import { SIGNAL_COLOR_PRESETS } from '../shared/signalSelector';
 import type { ViewContextAction } from '../shared/viewContextAction';
 import { COMPARISON_STYLES } from './comparisonStyles';
@@ -43,7 +44,7 @@ let highlightedSignal: string | undefined;
 let requestCounter = 0;
 const pendingSeries = new Map<number, string>();
 
-app.innerHTML = `<style>${DESIGN_TOKENS}${COMPARISON_STYLES}${ICON_BUTTON_STYLES}${CHOICE_GROUP_STYLES}${SIGNAL_LEGEND_STYLES}${COMPONENT_STYLES}</style>
+app.innerHTML = `<style>${DESIGN_TOKENS}${COMPARISON_STYLES}${ICON_BUTTON_STYLES}${CHOICE_GROUP_STYLES}${SIGNAL_LEGEND_STYLES}${CHART_LANES_STYLES}${COMPONENT_STYLES}</style>
 <section class="targets" aria-label="${t('Compared files and Clips', '比較するファイル／クリップ')}"><div class="targets-head"><strong>${t('Compared files and Clips', '比較するファイル／クリップ')}</strong><span class="targets-count muted"></span></div><div class="target-rows"></div></section>
 <div class="visualize-workspace"><div class="visualize-content"><div class="view-toolbar"><button class="add-graph" type="button"><span class="codicon codicon-add" aria-hidden="true"></span> ${t('Add graph', 'グラフを追加')}</button><span class="spacer"></span><span class="muted line-hint">${t('Line style = file/Clip; in time series, color = Signal', '線種＝ファイル／クリップ、時系列の線の色＝シグナル')}</span><div class="range-controls comparison-range" role="group" aria-label="${t('Selected range', '選択範囲')}" hidden><span class="clip-range muted"></span><button class="range-zoom" type="button"></button><button class="range-clear" type="button"></button></div><button class="zoom-all-in" type="button"></button><button class="zoom-all-out" type="button"></button><button class="zoom-all-reset" type="button"></button><button class="save-sheet" type="button"></button></div><div class="visualize-list"></div></div>
 <aside class="visualize-options" aria-label="${t('Graph settings', 'グラフ設定')}" hidden><header><strong>${t('Graph settings', 'グラフ設定')}</strong><button class="close-view-options" type="button"></button></header><div class="options-view-name"></div><p class="options-empty muted">${t('Add a graph to configure it.', 'グラフを追加すると設定できます。')}</p><div class="view-options-panels"></div></aside></div>`;

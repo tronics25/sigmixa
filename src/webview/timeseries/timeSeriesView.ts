@@ -26,6 +26,7 @@ import { emphasizeSignal } from '../shared/signalEmphasis';
 import { arrangeSingleChartGroups, findGraphIndexBySignals, type ChartGroupLayout } from '../shared/chartLayout';
 import { layoutHoverLabelBoxes, layoutTimestampMarker, timestampGutter, paintTimestampConnector, type HoverLabelRect, paintValueBoxes, type ValueBox } from '../shared/chartHoverLabels';
 import { createSvgCanvas } from '../shared/svgCanvas';
+import { createLaneToggle, laneIndexAt, laneRuns, lanesHeight, paintChartLanes, placeLaneToggle, type ChartLane } from '../shared/chartLanes';
 import type { SheetImage } from '../shared/imageSheet';
 import { withBrandMark } from '../shared/brandMark';
 import { viewActionGroup, iconButton, secondaryToolbar, type ViewCardState } from '../shared/iconButton';
@@ -63,6 +64,10 @@ export class TimeSeriesView {
   private highlightedSignalId: string | undefined;
   private paneWidth: number;
   private paneCollapsed: boolean;
+  private lanesExpanded: boolean;
+  private readonly laneToggle: HTMLButtonElement;
+  /** Where the lanes start in the canvas (the graph's bottom), in CSS pixels; undefined while the graph has no lanes. */
+  private lanesTop: number | undefined;
   private readonly selector: SignalSelector;
   private readonly canvas: HTMLCanvasElement;
   private readonly pane: HTMLElement;
@@ -179,10 +184,12 @@ export class TimeSeriesView {
     this.measured = new MeasuredSamples((requestId, query) => this.post({ type: 'measuredSignalsRequest', requestId, selectedIds: query.signalIds, timestamp: query.timestamp }), () => this.scheduleInteractionDraw());
     this.selected = new Set(initial?.chartSelectedIds ?? []);
     this.colors = new Map(Object.entries(initial?.chartColors ?? {}));
-    this.mode = initial?.chartMode ?? 'raw'; this.connectGaps = initial?.chartConnectGaps !== false; this.axisRange = initialAxisRange(initial); this.groupLayout = normalizeChartGroupLayout(initial?.chartGroupLayout); this.paneWidth = initial?.chartPaneWidth ?? 250; this.paneCollapsed = initial?.chartPaneCollapsed ?? false;
+    this.mode = initial?.chartMode ?? 'raw'; this.connectGaps = initial?.chartConnectGaps !== false; this.axisRange = initialAxisRange(initial); this.groupLayout = normalizeChartGroupLayout(initial?.chartGroupLayout); this.paneWidth = initial?.chartPaneWidth ?? 250; this.paneCollapsed = initial?.chartPaneCollapsed ?? false; this.lanesExpanded = initial?.chartLanesExpanded === true;
     host.innerHTML = `<div class="chart-layout"><aside class="signal-pane chart-pane"><div class="chart-source-actions"><button class="import-external-csv">+ ${t('External CSV…', '外部CSV…')}</button></div><div class="external-import-host"></div><div class="chart-selector"></div></aside><div class="pane-separator"></div><section class="signal-main chart-main"><div class="view-toolbar"><button class="pane-toggle">${t('Signals', 'シグナル')}</button><div class="segmented choice-group" role="group" aria-label="${t('Display mode', '表示形式')}"><button class="mode-raw">${t('Actual (converted units)', '実値（単位換算）')}</button><button class="mode-normalized">${t('Normalized 0–100%', '正規化 0–100%')}</button></div><label class="chart-option"><input class="connect-gaps" type="checkbox">${t('Connect gaps', '欠損区間を接続')}</label><span class="chart-axis-global"><label class="chart-axis-mode">${t('Y axis', 'Y軸')}<select class="axis-range-mode" aria-label="${t('Y-axis range', 'Y軸範囲')}"><option value="visible">${t('Visible interval', '表示区間')}</option><option value="global">${t('All data', '全データ')}</option></select></label><label class="chart-option"><input class="axis-include-zero" type="checkbox">${t('Include 0', '0を含める')}</label></span><button class="save-chart-image">${t('Save Image…', '画像を保存…')}</button><span class="spacer"></span><span class="chart-status muted">${t('Select Signals', 'シグナルを選択')}</span><button class="analysis-cancel" hidden>${t('Cancel analysis', '解析を中止')}</button></div><div class="view-toolbar chart-navigation"><div class="segmented"><button class="zoom-out">−</button><button class="zoom-in">＋</button></div><button class="zoom-reset" disabled>${t('Reset Zoom', 'ズームをリセット')}</button><span class="view-range muted"></span><span class="spacer"></span><button class="chart-marker-clear" disabled>${t('Clear Markers', 'マーカーを全解除')}</button></div><div class="view-toolbar range-controls" hidden><strong>${t('Selected range', '選択範囲')}</strong><span class="clip-range muted"></span><span class="spacer"></span><span class="range-edge"><span class="clip-edge-label">${t('Start', '開始')}</span><span class="segmented"><button class="clip-start-prev" title="${t('Previous CAN Timestamp', '前のCANタイムスタンプ')}">◀</button><button class="clip-start-next" title="${t('Next CAN Timestamp', '次のCANタイムスタンプ')}">▶</button></span></span><span class="range-edge"><span class="clip-edge-label">${t('End', '終了')}</span><span class="segmented"><button class="clip-end-prev" title="${t('Previous CAN Timestamp', '前のCANタイムスタンプ')}">◀</button><button class="clip-end-next" title="${t('Next CAN Timestamp', '次のCANタイムスタンプ')}">▶</button></span></span><div class="range-actions segmented"><button class="range-zoom primary">${t('Zoom to Range', '選択範囲を拡大')}</button><button class="clip-create">${t('Create Clip', 'クリップ作成')}</button></div><button class="clip-clear" title="${t('Clear selected range', '選択範囲を解除')}" aria-label="${t('Clear selected range', '選択範囲を解除')}">×</button></div><div class="chart-canvas-wrap"><canvas aria-label="${t('Time-series graph. Click to add a marker; drag to select a range.', '時系列グラフ。クリックでマーカー追加、ドラッグで範囲選択。')}"></canvas><div class="chart-legend"></div><div class="chart-markers"></div></div></section></div>`;
     this.canvas = this.elements.querySelector('canvas')!; this.pane = this.elements.querySelector('.chart-pane')!; this.separator = this.elements.querySelector('.pane-separator')!; this.status = this.elements.querySelector('.chart-status')!; this.saveImageButton = this.elements.querySelector('.save-chart-image')!;
     const mainToolbar = this.elements.querySelector<HTMLElement>('.chart-main>.view-toolbar')!; const paneToggle = iconButton(this.elements.querySelector<HTMLButtonElement>('.pane-toggle')!, 'layout-sidebar-left', t('Toggle Signal selection', 'シグナル選択を表示／非表示')); iconButton(this.saveImageButton, 'export', t('Save image', '画像を保存')); const secondary = secondaryToolbar(paneToggle, this.saveImageButton); secondary.setAttribute('aria-label', t('Secondary actions', '補助操作')); mainToolbar.appendChild(secondary);
+    this.laneToggle = createLaneToggle(() => { this.lanesExpanded = !this.lanesExpanded; this.persist(); this.draw(false); });
+    this.elements.querySelector('.chart-canvas-wrap')!.appendChild(this.laneToggle);
     this.selector = new SignalSelector({
       host: this.elements.querySelector('.chart-selector')!, selected: this.selected, colors: this.colors,
       grouping: initial?.chartSignalGrouping, onGroupingChange: () => this.persist(),
@@ -266,6 +273,7 @@ export class TimeSeriesView {
   isPlotTarget(event: MouseEvent): boolean {
     if (this.clipMarkerAt(event)) return true;
     if (event.target !== this.canvas || !this.series.length || this.timestampAt(event) === undefined) return false;
+    if (this.inLanes(event)) return true;
     return graphIndexAtOffset(event.clientY - this.canvas.getBoundingClientRect().top, this.legendHeights, this.axisGutters, this.plotHeight) !== undefined;
   }
   /** Scrolls the graph settings to one Signal and focuses it. */
@@ -277,7 +285,7 @@ export class TimeSeriesView {
     if (this.selectedRange) items.push(action('.range-zoom'), action('.clip-create'), action('.clip-clear'), null);
     else if (pointer) {
       const timestamp = this.timestampAt(pointer); const rect = this.canvas.getBoundingClientRect();
-      const graphIndex = graphIndexAtOffset(pointer.clientY - rect.top, this.legendHeights, this.axisGutters, this.plotHeight);
+      const graphIndex = this.graphIndexAt(pointer.clientY);
       if (timestamp !== undefined && graphIndex !== undefined && this.series.length) items.push({ label: t('Fix marker here', 'ここにマーカーを固定'), icon: 'pin', run: () => this.addMarkerAt(timestamp, graphIndex) });
     }
     items.push(action('.zoom-in', t('Zoom in', '拡大')), action('.zoom-out', t('Zoom out', '縮小')), action('.zoom-reset'));
@@ -446,7 +454,7 @@ export class TimeSeriesView {
   }
   private beginRangeSelection(event: MouseEvent): void {
     if (event.button !== 0) return; const timestamp = this.timestampAt(event); if (timestamp === undefined) return;
-    const rect = this.canvas.getBoundingClientRect(); const graphIndex = graphIndexAtOffset(event.clientY - rect.top, this.legendHeights, this.axisGutters, this.plotHeight); if (graphIndex === undefined) return;
+    const graphIndex = this.graphIndexAt(event.clientY); if (graphIndex === undefined) return;
     const signalIds = timeSeriesGraphSignalIds(timeSeriesGraphs(this.series, this.mode, this.groupLayout))[graphIndex]; if (!signalIds?.length) return;
     // A press is only a possible drag. Do not create range labels or resize
     // the chart until the movement threshold is crossed.
@@ -511,9 +519,43 @@ export class TimeSeriesView {
 
   private draw(renderControls = true): void {
     this.updateMeasuredSamples();
-    if (!this.visible) return; const wrapper = this.canvas.parentElement!; const width = Math.max(1, wrapper.clientWidth); const graphCount = Math.max(1, timeSeriesGraphs(this.series, this.mode, this.groupLayout).length); if (renderControls || this.legendHeights.length !== graphCount) this.legendHeights = this.renderLegend(width); this.axisGutters = this.measureAxisGutters(width, true); let legendTop = 0; this.elements.querySelectorAll<HTMLElement>('.chart-legend-group').forEach((row, index) => { row.style.top = `${legendTop}px`; legendTop += (this.legendHeights[index] ?? 0) + this.plotHeight + (this.axisGutters[index] ?? 0); }); const contentHeight = this.axisGutters.reduce((a, b) => a + b, 0) + graphCount * this.plotHeight + this.legendHeights.reduce((sum, value) => sum + value, 0); const height = contentHeight; const ratio = window.devicePixelRatio || 1; this.canvas.width = width * ratio; this.canvas.height = height * ratio; this.canvas.style.width = `${width}px`; this.canvas.style.height = `${height}px`; const context = this.canvas.getContext('2d')!; context.scale(ratio, ratio); context.clearRect(0, 0, width, height); context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height); if (renderControls) this.updateZoomControls();
+    if (!this.visible) return; const wrapper = this.canvas.parentElement!; const width = Math.max(1, wrapper.clientWidth); const graphCount = Math.max(1, timeSeriesGraphs(this.series, this.mode, this.groupLayout).length); if (renderControls || this.legendHeights.length !== graphCount) this.legendHeights = this.renderLegend(width); this.axisGutters = this.measureAxisGutters(width, true); let legendTop = 0; this.elements.querySelectorAll<HTMLElement>('.chart-legend-group').forEach((row, index) => { row.style.top = `${legendTop}px`; legendTop += (this.legendHeights[index] ?? 0) + this.plotHeight + (this.axisGutters[index] ?? 0); }); const contentHeight = this.axisGutters.reduce((a, b) => a + b, 0) + graphCount * this.plotHeight + this.legendHeights.reduce((sum, value) => sum + value, 0); const lanes = this.series.length && this.viewRange ? this.laneItems() : []; this.lanesTop = lanes.length ? contentHeight : undefined; const height = contentHeight + (this.lanesExpanded ? lanesHeight(lanes.length) : 0); placeLaneToggle(this.laneToggle, lanes.length, this.lanesExpanded, contentHeight); const ratio = window.devicePixelRatio || 1; this.canvas.width = width * ratio; this.canvas.height = height * ratio; this.canvas.style.width = `${width}px`; this.canvas.style.height = `${height}px`; const context = this.canvas.getContext('2d')!; context.scale(ratio, ratio); context.clearRect(0, 0, width, height); context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height); if (renderControls) this.updateZoomControls();
     if (!this.series.length || !this.viewRange) { context.font = '12px sans-serif'; context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.fillText(this.seriesPending ? t('Loading selected Signals…', '選択したシグナルを読み込んでいます…') : this.shown.length ? t('No samples in this range.', 'この範囲にサンプルがありません。') : this.optionsHost ? t('Select Signals in Graph settings.', 'グラフ設定でシグナルを選択してください。') : t('Select Signals from the left pane.', '左側からシグナルを選択してください。'), 24, 34); this.updateExportAction(); return; }
-    this.paintChart(context, width, height, 0, 0, true, this.legendHeights); this.updateExportAction();
+    this.paintChart(context, width, height, 0, height - contentHeight, true, this.legendHeights); if (this.lanesExpanded) this.paintLanes(context, width, contentHeight, true); this.updateExportAction();
+  }
+
+  /** Every shown Signal in legend order, each with the display unit of its axis. */
+  private laneItems(): readonly { readonly item: SignalSeriesDto; readonly displayUnit?: string }[] {
+    return timeSeriesGraphs(this.series, this.mode, this.groupLayout).flatMap((graph) => graph.flatMap((group) => group.items.map((item) => ({ item, displayUnit: group.displayUnit }))));
+  }
+  /** The graph under the pointer. The lanes belong to the graph above them: a click there adds its marker, a drag selects its range. */
+  private graphIndexAt(clientY: number): number | undefined {
+    return graphIndexAtOffset(clientY - this.canvas.getBoundingClientRect().top, this.legendHeights, this.axisGutters, this.plotHeight) ?? (this.inLanes({ clientY }) ? 0 : undefined);
+  }
+  /** True when the pointer is over an open lane. */
+  private inLanes(event: Pick<MouseEvent, 'clientY'>): boolean {
+    if (this.lanesTop === undefined || !this.lanesExpanded) return false;
+    return laneIndexAt(event.clientY - this.canvas.getBoundingClientRect().top - this.lanesTop, this.laneItems().length) !== undefined;
+  }
+
+  /** The lanes under the graph from `top`; `interactions` adds the cursor, its values and the emphasized Signal (not in images). */
+  private paintLanes(context: CanvasRenderingContext2D, width: number, top: number, interactions: boolean): void {
+    const view = this.viewRange; if (!view) return;
+    const cursor = interactions ? this.cursorTimestamp : undefined;
+    const markerTimes = [...this.markers.values()].flatMap((marker) => { const timestamp = this.measured.referenceTimestamp(`marker:${marker.id}`); return timestamp === undefined ? [] : [{ id: marker.id, timestamp }]; });
+    const lanes: ChartLane[] = this.laneItems().map(({ item, displayUnit }) => {
+      const sample = cursor === undefined ? undefined : interpolatedSeriesSample(item, cursor, this.connectGaps);
+      // Each marker's value as the graph labels it: the measured sample nearest the marker.
+      const markers = markerTimes.flatMap(({ id, timestamp }) => { const measured = this.measured.sample(`marker:${id}`, item.definition.id); if (!measured) return []; const value = seriesDisplayValue(item, measured.value, this.mode, displayUnit); return Number.isFinite(value) ? [{ time: timestamp, sampleTime: measured.timestamp, value, text: measuredValueLabel(`${displayValueLabel(item, measured.value, this.mode, displayUnit)}${measured.valueLabel ? ` (${measured.valueLabel})` : ''}`, measured.timestamp, timestamp) }] : []; });
+      return { markers, name: item.definition.name, color: this.color(item.definition.id), emphasized: interactions && item.definition.id === this.highlightedSignalId,
+        lines: [{ runs: laneRuns(item, (value) => seriesDisplayValue(item, value, this.mode, displayUnit), this.connectGaps) }],
+        value: sample ? `${displayValueLabel(item, sample.value, this.mode, displayUnit)}${sample.valueLabel ? ` (${sample.valueLabel})` : ''}` : undefined };
+    });
+    // The Trace line follows the graph's rule: from the first real sample on, while it is shown.
+    const traceTime = this.timeline?.position; const firstMeasured = Math.min(...this.series.map((series) => series.samples.find((sample) => !sample.carried)?.timestamp ?? Infinity));
+    const trace = traceTime !== undefined && this.timeline?.positionVisible !== false && !this.timeline?.beforeFirstFrame && traceTime >= firstMeasured ? { time: traceTime, color: css('--sm-trace-color', '#d18616') } : undefined;
+    const { left, plotWidth } = this.axisGeometry(width);
+    paintChartLanes(context, lanes, { left, width: plotWidth, top }, view, { cursor, markers: markerTimes.map((marker) => marker.timestamp), trace, selection: this.selectedRange });
   }
 
   private updateMeasuredSamples(): void {
@@ -662,6 +704,8 @@ export class TimeSeriesView {
     const timestamp = this.timestampAt(event);
     if (timestamp === undefined) { this.cursorTimestamp = undefined; this.timeline?.set(undefined, this.timelineSource); this.hoverGraphIndex = undefined; this.scheduleInteractionDraw(); return; }
     const rect = this.canvas.getBoundingClientRect();
+    // Over the lanes the cursor follows the pointer on every lane and on the graph, without the graph's value labels.
+    if (this.inLanes(event)) { this.hoverGraphIndex = undefined; this.cursorTimestamp = timestamp; this.timeline?.set(timestamp, this.timelineSource); this.scheduleInteractionDraw(); return; }
     const nextGraphIndex = graphIndexAtOffset(event.clientY - rect.top, this.legendHeights, this.axisGutters, this.plotHeight); if (nextGraphIndex === undefined) { this.cursorTimestamp = undefined; this.timeline?.set(undefined, this.timelineSource); this.hoverGraphIndex = undefined; this.scheduleInteractionDraw(); return; } this.hoverGraphIndex = nextGraphIndex;
     this.cursorTimestamp = timestamp; this.timeline?.set(timestamp, this.timelineSource);
     this.scheduleInteractionDraw();
@@ -670,7 +714,7 @@ export class TimeSeriesView {
     if (this.suppressNextClick) { this.suppressNextClick = false; return; }
     if (this.selectedRange) { this.clearRangeSelection(); return; }
     const timestamp = this.timestampAt(event); if (timestamp === undefined || !this.shown.length) return;
-    const rect = this.canvas.getBoundingClientRect(); const graphIndex = graphIndexAtOffset(event.clientY - rect.top, this.legendHeights, this.axisGutters, this.plotHeight); if (graphIndex === undefined) return;
+    const graphIndex = this.graphIndexAt(event.clientY); if (graphIndex === undefined) return;
     this.addMarkerAt(timestamp, graphIndex);
   }
   private addMarkerAt(timestamp: number, graphIndex: number): void {
@@ -745,10 +789,10 @@ export class TimeSeriesView {
   private saveImage(): void { const image = this.renderImage(); if (image) this.post({ type: 'saveTimeSeriesImage', ...withBrandMark(image, css('--vscode-foreground', '#ddd')) }); }
   /** This graph as an export image; `heading` is the title written on it (the graph name on a combined sheet). */
   renderImage(heading = 'SigMixa · Time Series', width = 1600): SheetImage | undefined {
-    if (!this.series.length || !this.viewRange || this.saveImageButton.disabled) return undefined; const graphs = timeSeriesGraphs(this.series, this.mode, this.groupLayout); const graphCount = Math.max(1, graphs.length); const canvas = document.createElement('canvas'); canvas.width = width; let context = canvas.getContext('2d'); if (!context) return undefined; const legendHeights = Array.from({ length: graphCount }, (_, index) => this.measureGraphLegendHeight(context!, graphs[index] ?? [], width)); const gutters = this.measureAxisGutters(width, false); const contentHeight = gutters.reduce((a, b) => a + b, 0) + graphCount * GRAPH_HEIGHT + legendHeights.reduce((sum, value) => sum + value, 0); const height = Math.max(width >= 1600 ? 900 : 0, 110 + contentHeight); canvas.height = height; context = canvas.getContext('2d'); if (!context) return undefined;
+    if (!this.series.length || !this.viewRange || this.saveImageButton.disabled) return undefined; const graphs = timeSeriesGraphs(this.series, this.mode, this.groupLayout); const graphCount = Math.max(1, graphs.length); const canvas = document.createElement('canvas'); canvas.width = width; let context = canvas.getContext('2d'); if (!context) return undefined; const legendHeights = Array.from({ length: graphCount }, (_, index) => this.measureGraphLegendHeight(context!, graphs[index] ?? [], width)); const gutters = this.measureAxisGutters(width, false); const contentHeight = gutters.reduce((a, b) => a + b, 0) + graphCount * GRAPH_HEIGHT + legendHeights.reduce((sum, value) => sum + value, 0); const lanes = this.lanesExpanded ? lanesHeight(this.laneItems().length) : 0; const height = Math.max(width >= 1600 ? 900 : 0, 110 + contentHeight + lanes); canvas.height = height; context = canvas.getContext('2d'); if (!context) return undefined;
     context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height); context.fillStyle = css('--vscode-foreground', '#ddd'); context.font = '600 22px sans-serif'; context.fillText(heading, 24, 34); context.font = '12px sans-serif'; const range = timeRangeLabel(this.viewRange.start, this.viewRange.end, formatSeconds); context.fillStyle = css('--vscode-descriptionForeground', '#999'); context.fillText(range, width - context.measureText(range).width - 24, 32);
-    const chartTop = 58; this.paintChart(context, width, height, chartTop, height - chartTop - contentHeight, false, legendHeights, gutters);
-    const vector = createSvgCanvas(width, height); const svgContext = vector.context; svgContext.fillStyle = css('--vscode-editor-background', '#1e1e1e'); svgContext.fillRect(0, 0, width, height); svgContext.fillStyle = css('--vscode-foreground', '#ddd'); svgContext.font = '600 22px sans-serif'; svgContext.fillText(heading, 24, 34); svgContext.font = '12px sans-serif'; svgContext.fillStyle = css('--vscode-descriptionForeground', '#999'); svgContext.fillText(range, width - svgContext.measureText(range).width - 24, 32); this.paintChart(svgContext, width, height, chartTop, height - chartTop - contentHeight, false, legendHeights, gutters);
+    const chartTop = 58; this.paintChart(context, width, height, chartTop, height - chartTop - contentHeight, false, legendHeights, gutters); if (lanes) this.paintLanes(context, width, chartTop + contentHeight, false);
+    const vector = createSvgCanvas(width, height); const svgContext = vector.context; svgContext.fillStyle = css('--vscode-editor-background', '#1e1e1e'); svgContext.fillRect(0, 0, width, height); svgContext.fillStyle = css('--vscode-foreground', '#ddd'); svgContext.font = '600 22px sans-serif'; svgContext.fillText(heading, 24, 34); svgContext.font = '12px sans-serif'; svgContext.fillStyle = css('--vscode-descriptionForeground', '#999'); svgContext.fillText(range, width - svgContext.measureText(range).width - 24, 32); this.paintChart(svgContext, width, height, chartTop, height - chartTop - contentHeight, false, legendHeights, gutters); if (lanes) this.paintLanes(svgContext, width, chartTop + contentHeight, false);
     return { canvas, pngDataUrl: canvas.toDataURL('image/png'), svg: vector.toSvg(), width, height };
   }
   private paintGraphLegend(context: CanvasRenderingContext2D, groups: readonly TimeSeriesGroup[], width: number, top: number): void {
@@ -756,7 +800,7 @@ export class TimeSeriesView {
   }
   private measureGraphLegendHeight(context: CanvasRenderingContext2D, groups: readonly TimeSeriesGroup[], width: number): number { context.save(); context.font = '12px sans-serif'; let x = 24; let rows = 1; groups.forEach((group) => { for (const item of group.items) { const label = signalLegendLabel(item.definition, this.mode, group.displayUnit); const entryWidth = 26 + context.measureText(label).width; if (x + entryWidth > width - 24) { x = 24; rows++; } x += Math.min(entryWidth, width - x - 24) + 16; } }); context.restore(); return Math.max(34, 12 + rows * 20); }
   private color(id: string): string { return this.colors.get(id) ?? SIGNAL_COLOR_PRESETS[Math.abs(hash(id)) % SIGNAL_COLOR_PRESETS.length]; }
-  private snapshot(): Partial<LogViewState> { return { chartSignalGrouping: this.selector.groupingMode, chartSelectedIds: [...this.selected], chartColors: Object.fromEntries(this.colors), chartMode: this.mode, chartConnectGaps: this.connectGaps, chartAxisRange: this.axisRange, chartGroupLayout: this.groupLayout, chartPaneWidth: this.paneWidth, chartPaneCollapsed: this.paneCollapsed }; }
+  private snapshot(): Partial<LogViewState> { return { chartSignalGrouping: this.selector.groupingMode, chartSelectedIds: [...this.selected], chartColors: Object.fromEntries(this.colors), chartMode: this.mode, chartConnectGaps: this.connectGaps, chartAxisRange: this.axisRange, chartGroupLayout: this.groupLayout, chartPaneWidth: this.paneWidth, chartPaneCollapsed: this.paneCollapsed, chartLanesExpanded: this.lanesExpanded }; }
   private persist(): void { this.save(this.snapshot()); }
   private applyPane(): void { const toggle = this.elements.querySelector('.pane-toggle')!; const label = this.paneCollapsed ? t('Show Signal selection', 'シグナル選択を表示') : t('Hide Signal selection', 'シグナル選択を隠す'); toggle.setAttribute('aria-expanded', String(!this.paneCollapsed)); toggle.setAttribute('title', label); toggle.setAttribute('aria-label', label); const glyph = toggle.querySelector('.codicon'); if (glyph) glyph.className = `codicon codicon-${this.paneCollapsed ? 'layout-sidebar-left-off' : 'layout-sidebar-left'}`; this.pane.style.width = this.paneCollapsed ? '0' : `${this.paneWidth}px`; this.pane.style.display = this.paneCollapsed ? 'none' : 'block'; this.separator.style.display = this.paneCollapsed ? 'none' : 'block'; }
   private startPaneResize(event: MouseEvent): void { event.preventDefault(); const start = event.clientX; const initial = this.paneWidth; const move = (next: MouseEvent) => { this.paneWidth = Math.max(180, Math.min(440, initial + next.clientX - start)); this.applyPane(); }; const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); this.persist(); }; this.listenWindow('mousemove', move); this.listenWindow('mouseup', up); }

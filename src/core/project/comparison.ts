@@ -46,6 +46,8 @@ export interface ComparisonGraphDefinition {
   readonly connectGaps?: boolean;
   readonly axisRange?: ComparisonAxisRange;
   readonly height?: number;
+  /** The lanes under the graph (one per Signal, shape only) are open. */
+  readonly lanes?: boolean;
 }
 
 export interface ComparisonDefinition {

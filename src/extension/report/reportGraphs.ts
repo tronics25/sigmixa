@@ -7,7 +7,7 @@ export function reportGraphs(state: Partial<LogViewState>, trajectoryCurrentTime
   const views = state.visualizeViews ?? [{ id: 'graph', kind: 'graph' as const, name: defaultName, settings: state }];
   return views.flatMap((view): ComparisonGraphDefinition[] => {
     const settings = view.settings ?? {};
-    if (view.kind === 'graph') return [{ id: view.id, kind: 'graph', name: view.name, signalIds: [...(settings.chartSelectedIds ?? [])], mode: settings.chartMode, connectGaps: settings.chartConnectGaps, ...(settings.chartAxisRange ? { axisRange: { mode: settings.chartAxisRange.mode === 'global' ? 'global' : 'visible', includeZero: settings.chartAxisRange.includeZero } } : {}), ...(view.height ? { height: view.height } : {}) }];
+    if (view.kind === 'graph') return [{ id: view.id, kind: 'graph', name: view.name, signalIds: [...(settings.chartSelectedIds ?? [])], mode: settings.chartMode, connectGaps: settings.chartConnectGaps, ...(settings.chartAxisRange ? { axisRange: { mode: settings.chartAxisRange.mode === 'global' ? 'global' : 'visible', includeZero: settings.chartAxisRange.includeZero } } : {}), ...(view.height ? { height: view.height } : {}), ...(settings.chartLanesExpanded ? { lanes: true } : {}) }];
     const series = settings.trajectorySeries?.length ? settings.trajectorySeries : [{ id: 'series', name: '', xId: settings.trajectoryXId, yId: settings.trajectoryYId, zId: settings.trajectoryZId }];
     return series.filter((item) => item.xId && item.yId).map((item) => ({
       id: `${view.id}:${item.id}`, kind: 'trajectory', name: series.length > 1 ? `${view.name} · ${item.name}` : view.name,

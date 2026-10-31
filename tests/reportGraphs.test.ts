@@ -32,3 +32,11 @@ test('legacy trajectory axes use the same defaults as Visualize', () => {
 test('table-only reports do not require a Visualize graph', () => {
   assert.deepEqual(reportGraphs({ tableSelectedIds: ['speed'], visualizeViews: [] }), []);
 });
+
+test('a graph with its lanes open keeps them open in the report', () => {
+  const [open, closed] = reportGraphs({ visualizeViews: [
+    { id: 'a', kind: 'graph', name: 'A', settings: { chartSelectedIds: ['speed'], chartLanesExpanded: true } },
+    { id: 'b', kind: 'graph', name: 'B', settings: { chartSelectedIds: ['speed'] } },
+  ] });
+  assert.equal(open.lanes, true); assert.equal(closed.lanes, undefined);
+});

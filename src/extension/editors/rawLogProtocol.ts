@@ -49,6 +49,8 @@ export interface LogViewState {
   readonly chartAxisRanges?: Readonly<Record<string, ChartAxisRangeSetting>>;
   readonly chartPaneWidth?: number;
   readonly chartPaneCollapsed?: boolean;
+  /** The lanes under the graph (one per Signal, shape only) are open. */
+  readonly chartLanesExpanded?: boolean;
   readonly trajectoryXId?: string;
   readonly trajectoryYId?: string;
   readonly trajectoryZId?: string;

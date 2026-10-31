@@ -1,5 +1,11 @@
 # Change Log
 
+## 2.3.0 - 2026-10-31
+
+- Time-series graphs can now show lanes: a strip for each Signal below the graph, on the same time axis. Each lane shows only the shape of its Signal, scaled to the time span on screen, so a change stands out even when it looks flat on the graph. Read the values on the graph above.
+- Click the round button at the lower left of a graph to open or close its lanes. You can hover, click, drag and scroll on the lanes just as on the graph.
+- Lanes are also available on the comparison screen and in HTML reports, and open lanes appear in saved images.
+
 ## 2.2.1 - 2026-10-30
 
 - Times can be shown as the recorded date and time ([#1](https://github.com/tronics25/sigmixa/issues/1)). BLF logs showed raw Unix epoch seconds such as 1735654183.491113, and ASC logs seconds from the start. Both now show the time of day in the RAW Log, Table, Trace and graphs, and copies and Signal CSV exports hold the full date and time (2024-12-31 14:09:43.491113). Right-click the TIME heading of the RAW Log or Table to switch to seconds from the start. The start is read from the BLF file header and the ASC `date` line; a log that does not record it is shown in seconds as before. No time zone is converted: BLF and ASC record none.
