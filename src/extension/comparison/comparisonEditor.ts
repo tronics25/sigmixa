@@ -102,7 +102,7 @@ class ComparisonSession implements vscode.Disposable {
       case 'update': {
         this.comparison = { ...this.comparison, ...message.comparison }; return;
       }
-      case 'seriesRequest': return this.sendSeries(message.requestId, message.graphId, message.signalIds, message.maxPoints, message.joined === true);
+      case 'seriesRequest': return this.sendSeries(message.requestId, message.graphId, message.signalIds, message.maxPoints, message.joined === true, message.ranges);
       case 'measuredSignalsRequest': {
         const item = this.loaded.get(message.targetId); const document = item?.document;
         const pairs = this.mapSignals(message.targetId, message.signalIds);
@@ -248,13 +248,17 @@ class ComparisonSession implements vscode.Disposable {
     return signalIds.filter((id) => available.has(id)).map((id) => [id, id]);
   }
 
-  private sendSeries(requestId: number, graphId: string, signalIds: readonly string[], requestedPoints?: number, joined = false): void {
+  private sendSeries(requestId: number, graphId: string, signalIds: readonly string[], requestedPoints?: number, joined = false, ranges?: Readonly<Record<string, { readonly start: number; readonly end: number }>>): void {
     const ready = [...this.loaded.values()].filter((item) => item.document && item.range);
     // Trajectories ask for more points, and for their axes to be thinned together (`joined`), so no point loses an axis.
     const maxPoints = requestedPoints ?? Math.max(2, Math.min(4000, Math.floor(100_000 / Math.max(1, ready.length * signalIds.length))));
     const seriesByTarget = ready.map((item) => {
       const pairs = this.mapSignals(item.target.id, signalIds);
-      const series = item.document!.signalSeries([...new Set(pairs.map(([, id]) => id))], item.clip ? clipRange(item.clip) : undefined, maxPoints, joined).series;
+      // A zoomed graph asks for the part it shows, so the samples are thinned over that part only (as in Visualize).
+      const clip = item.clip ? clipRange(item.clip) : undefined; const wanted = ranges?.[item.target.id];
+      const range = wanted && clip ? { start: Math.max(wanted.start, clip.start), end: Math.min(wanted.end, clip.end) } : wanted ?? clip;
+      if (range && !(range.end >= range.start)) return { targetId: item.target.id, series: [] };
+      const series = item.document!.signalSeries([...new Set(pairs.map(([, id]) => id))], range, maxPoints, joined, clip).series;
       return { targetId: item.target.id, series: pairs.flatMap(([signalId, mapped]): ComparisonSeriesDto[] => { const match = series.find((entry) => entry.definition.id === mapped); return match ? [{ signalId, series: { ...match, events: match.events ?? [] } }] : []; }) };
     });
     this.post({ type: 'series', requestId, graphId, seriesByTarget });

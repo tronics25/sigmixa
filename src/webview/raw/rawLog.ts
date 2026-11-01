@@ -426,16 +426,18 @@ function clearAllFilters(): void {
   for (const id of ['search', 'direction', 'decoded', 'channel', 'time-start', 'time-end']) (document.getElementById(id) as HTMLInputElement | HTMLSelectElement).value = '';
   updateFilter();
 }
+/** The filter is still being applied to the rest of the log; the count shown so far grows. */
+let searching = false;
 function updateResultStatus(): void {
   const source = unfilteredFrameCount ?? sourceFrameCount;
   if (!filterValid) { resultStatusEl.textContent = `— ${t('frames', 'フレーム')}`; return; }
   resultStatusEl.textContent = activeFilterCount
-    ? `${pagePending ? '…' : total.toLocaleString()} / ${source.toLocaleString()} ${t('frames', 'フレーム')}`
+    ? `${pagePending ? '…' : `${total.toLocaleString()}${searching ? '…' : ''}`} / ${source.toLocaleString()} ${t('frames', 'フレーム')}`
     : `${(pagePending ? source : total).toLocaleString()} ${t('frames', 'フレーム')}`;
 }
 function updateEmptyState(): void {
   const empty = document.getElementById('raw-empty')!; const clear = document.getElementById('raw-empty-clear') as HTMLButtonElement;
-  const show = !pagePending && !parsing && filterValid && total === 0; empty.hidden = !show; if (!show) return;
+  const show = !pagePending && !parsing && !searching && filterValid && total === 0; empty.hidden = !show; if (!show) return;
   document.getElementById('raw-empty-text')!.textContent = activeFilterCount ? t('No frames match the active filters.', '有効なフィルターに一致するフレームがありません。') : t('No CAN frames were found in this file.', 'このファイルにCANフレームがありません。');
   clear.hidden = activeFilterCount === 0;
 }
@@ -507,8 +509,11 @@ function updateChannelOptions(channels: readonly number[]): void {
 function measure(text: string): number { return measureTableText(text); }
 
 const autoFitRequests = new Map<number, { readonly target?: string }>();
+/** The newest fit asked for each column ('' = all columns): a slower, older answer must not overwrite it. */
+const latestAutoFit = new Map<string, number>();
 function requestAutoFit(target?: string, sampleFilter: FrameFilter | null = filter): void {
   const fitRequestId = ++requestId; autoFitRequests.set(fitRequestId, { target });
+  if (target) latestAutoFit.set(target, fitRequestId); else { latestAutoFit.clear(); latestAutoFit.set('', fitRequestId); }
   vscode.postMessage({ type: 'autoFitSampleRequest', requestId: fitRequestId, filter: sampleFilter ?? undefined });
 }
 function requestAutomaticWidths(frames: number): void {
@@ -594,7 +599,7 @@ window.addEventListener('message', (event: MessageEvent<ToWebviewMessage>) => {
   if (message.type === 'init') { const scope = document.getElementById('view-settings-scope') as HTMLSelectElement; scope.parentElement!.hidden = !message.groupName; scope.value = message.viewSettingsScope ?? 'file'; syncChoiceSelect(scope); document.getElementById('source-breadcrumb')!.textContent = [message.place, message.fileName, message.clip?.name].filter(Boolean).join(' › '); setTimeReference(message.timeReference); setTimeDisplayMode(isShownTimeMode(message.viewState?.timeDisplay) ? message.viewState.timeDisplay : undefined); syncTimeFilterTitles(); initializeSignalViews(message.viewState); updateChannelOptions(message.channels); sourceFrameCount = message.frames; parsing = message.parsing; pagePending = true; cancelButton.hidden = !parsing; openedClip = message.clip ? { fileName: message.fileName, ...message.clip } : undefined; renderClipScope(); parseCancelled = false; if (parsing) statusEl.textContent = `${message.fileName} · ${t('parsing', '解析中')}`; else showDiagnosticStatus(); updateResultStatus(); updateEmptyState(); requestRange(0, PAGE_SIZE, true); if (!message.parsing) requestAutomaticWidths(message.frames); }
   else if (message.type === 'page') {
     if (message.requestId !== latestPageRequestId) return;
-    total = message.total; pagePending = false; if (!activeFilterCount) unfilteredFrameCount = message.total;
+    total = message.total; pagePending = false; searching = message.complete === false; if (!activeFilterCount) unfilteredFrameCount = message.total;
     for (let i = 0; i < message.rows.length; i++) {
       const row = message.rows[i]; rows.set(message.offset + i, row);
     }
@@ -606,6 +611,8 @@ window.addEventListener('message', (event: MessageEvent<ToWebviewMessage>) => {
     showDiagnostics();
     updateResultStatus(); updateEmptyState();
   }
+  // A filter over a large log is read in the background: ask for the shown rows again as matches come in.
+  else if (message.type === 'searchProgress') requestRange(Math.floor(grid.scrollTop / ROW_HEIGHT), Math.floor(grid.scrollTop / ROW_HEIGHT) + PAGE_SIZE, true);
   else if (message.type === 'progress') { updateChannelOptions(message.channels); sourceFrameCount = message.frames; parsing = true; cancelButton.hidden = false; const percent = message.totalBytes ? Math.floor(message.bytesRead / message.totalBytes * 100) : 0; statusEl.textContent = `${t('Parsing', '解析中')} ${percent}%`; updateResultStatus(); updateEmptyState(); requestRange(Math.floor(grid.scrollTop / ROW_HEIGHT), Math.floor(grid.scrollTop / ROW_HEIGHT) + PAGE_SIZE, true); }
   else if (message.type === 'parseComplete') { updateChannelOptions(message.channels); sourceFrameCount = message.frames; parsing = false; pagePending = true; cancelButton.hidden = true; parseCancelled = message.cancelled; showDiagnosticStatus(); showDiagnostics(); updateResultStatus(); updateEmptyState(); requestRange(0, PAGE_SIZE, true); requestAutomaticWidths(message.frames); }
   else if (message.type === 'analysisDiagnostics') {
@@ -619,7 +626,13 @@ window.addEventListener('message', (event: MessageEvent<ToWebviewMessage>) => {
   else if (message.type === 'autoFitSample') {
     const request = autoFitRequests.get(message.requestId); if (!request) return; autoFitRequests.delete(message.requestId);
     const fitted = autoFitColumns(columns, message.rows, measure);
-    widths = request.target ? { ...widths, [request.target]: fitted[request.target] } : { ...widths, ...fitted };
+    if (request.target) { if (latestAutoFit.get(request.target) !== message.requestId) return; widths = { ...widths, [request.target]: fitted[request.target] }; }
+    else {
+      if (latestAutoFit.get('') !== message.requestId) return;
+      // Columns fitted again on their own after this full fit keep their newer width.
+      const newer = new Set(Array.from(latestAutoFit.keys()).filter((id) => id && latestAutoFit.get(id)! > message.requestId));
+      widths = { ...widths, ...Object.fromEntries(Object.entries(fitted).filter(([id]) => !newer.has(id))) };
+    }
     applyWidths(); persist();
   }
   else if (message.type === 'rowsCopied') showCopyFeedback(message.count);

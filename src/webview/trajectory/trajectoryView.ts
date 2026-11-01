@@ -5,7 +5,7 @@ import { emphasizeSignal } from '../shared/signalEmphasis';
 import { enhanceChoiceSelect, syncChoiceSelect } from '../shared/choiceGroup';
 import { buttonContextAction, type ViewContextAction } from '../shared/viewContextAction';
 import { ViewElements } from '../shared/viewElements';
-import { TRAJECTORY_FIT_MARGIN, TRAJECTORY_ZOOM_LIMITS, buildTrajectoryPoints, trajectorySceneFrame, fitTrajectoryView, measureTrajectory, presetTrajectoryView, projectPoint3d, trajectoryViewFrom, trailAt, trajectoryAxisDisplayValue, trajectoryAxisEndpoints, trajectoryAxisScale, type TrajectoryPoint as CoreTrajectoryPoint, type TrajectoryCoordinateSystem, type TrajectoryViewTransform } from '../../core/trajectory/trajectory';
+import { TRAJECTORY_FIT_MARGIN, TRAJECTORY_ZOOM_LIMITS, buildTrajectoryPoints, clipTrajectoryEdges, trajectorySceneFrame, fitTrajectoryView, measureTrajectory, presetTrajectoryView, projectPoint3d, trajectoryViewFrom, trailAt, trajectoryAxisDisplayValue, trajectoryAxisEndpoints, trajectoryAxisScale, trajectorySeriesColor as trackColor, type TrajectoryPoint as CoreTrajectoryPoint, type TrajectoryCoordinateSystem, type TrajectoryViewTransform } from '../../core/trajectory/trajectory';
 import type { TrajectorySeriesDefinition, LogViewState, SignalGroupDto, SignalSeriesDto, ToExtensionMessage, ToWebviewMessage } from '../../extension/editors/rawLogProtocol';
 import type { SignalDefinition } from '../../core/signal/signal';
 import type { TimelineController } from '../shared/timelineController';
@@ -18,6 +18,7 @@ import { downsampleExtremes } from '../../core/timeline/timeline';
 import { createSvgCanvas } from '../shared/svgCanvas';
 import type { SheetImage } from '../shared/imageSheet';
 import { withBrandMark } from '../shared/brandMark';
+import { placeTickLabel, separateTitles, type LabelBox } from '../shared/trajectoryLabels';
 import { iconButton, secondaryToolbar, textIconButton, viewActionGroup, type ViewCardState } from '../shared/iconButton';
 
 type TrajectoryPoint = CoreTrajectoryPoint & { readonly seriesId?: string };
@@ -327,18 +328,7 @@ export class TrajectoryView {
    * A Clip's path starts and ends where the object was at the Clip's start and end times: on the line between the
    * nearest point outside the Clip and the first/last point in it. These two points are not measured data, so they stay marked `carried`.
    */
-  private clipEdges(points: readonly CoreTrajectoryPoint[]): readonly CoreTrajectoryPoint[] {
-    const bounds = this.timeline.bounds; const result = [...points];
-    const between = (outside: CoreTrajectoryPoint, inside: CoreTrajectoryPoint | undefined, time: number | undefined): CoreTrajectoryPoint | undefined => {
-      if (!inside || inside.carried || time === undefined || outside.timestamp === inside.timestamp || (time - outside.timestamp) * (time - inside.timestamp) > 0) return undefined;
-      const ratio = (time - outside.timestamp) / (inside.timestamp - outside.timestamp); const mix = (a: number, b: number) => a + (b - a) * ratio;
-      return { timestamp: time, x: mix(outside.x, inside.x), y: mix(outside.y, inside.y), ...(outside.z !== undefined && inside.z !== undefined ? { z: mix(outside.z, inside.z) } : {}), carried: true };
-    };
-    if (result.at(-1)?.carried && result.length > 1) { const edge = between(result.at(-1)!, result.at(-2), bounds?.end); result.pop(); if (edge) result.push(edge); }
-    else if (result.length === 1 && result[0].carried) return [];
-    if (result[0]?.carried) { const edge = between(result[0], result[1], bounds?.start); result.shift(); if (edge) result.unshift(edge); }
-    return result;
-  }
+  private clipEdges(points: readonly CoreTrajectoryPoint[]): readonly CoreTrajectoryPoint[] { return clipTrajectoryEdges(points, this.timeline.bounds); }
   private request(): void { if (!this.visible || !this.tracks.some((track) => track.xId && track.yId)) { this.seriesRequest = ++this.counter; this.series = []; this.analysisPoints = []; this.points = []; this.draw(); return; } this.elements.querySelector('.trajectory-status')!.textContent = t('Loading trajectory…', '軌跡を読み込み中…'); this.storeActiveTrack(); const selectedIds = [...new Set(this.tracks.flatMap((track) => [track.xId, track.yId, track.zId]).filter((id): id is string => !!id))]; this.seriesRequest = ++this.counter; this.post({ type: 'signalSeriesRequest', requestId: this.seriesRequest, selectedIds, maxPoints: 10_000, joined: true }); }
   private rebuildPoints(): void {
     const byId = new Map(this.series.map((item) => [item.definition.id, item.samples])); const axisIds = this.tracks.flatMap((track) => [track.xId, track.yId, track.zId]).filter((id): id is string => Boolean(id));
@@ -371,7 +361,7 @@ export class TrajectoryView {
       context.globalAlpha = .52; for (const tick of xScale.ticks) { const x = px(tick); context.beginPath(); context.moveTo(x, top); context.lineTo(x, top + height); context.stroke(); } for (const tick of yScale.ticks) { const y = py(tick); context.beginPath(); context.moveTo(left, y); context.lineTo(left + width, y); context.stroke(); } context.globalAlpha = 1;
       context.textAlign = 'center'; for (const tick of xScale.ticks) context.fillText(fmt(trajectoryAxisDisplayValue(tick, this.invert.x)), px(tick), top + height + 18); context.textAlign = 'right'; context.textBaseline = 'middle'; for (const tick of yScale.ticks) context.fillText(fmt(trajectoryAxisDisplayValue(tick, this.invert.y)), left - 8, py(tick));
     }
-    const xEndpoints = trajectoryAxisEndpoints(xScale.minimum, xScale.maximum, this.invert.x); const yEndpoints = trajectoryAxisEndpoints(yScale.minimum, yScale.maximum, this.invert.y); drawArrow(context, px(xEndpoints.start), py(0), px(xEndpoints.end), py(0), axisColor('x')); drawArrow(context, px(0), py(yEndpoints.start), px(0), py(yEndpoints.end), axisColor('y')); paintAxisLabel(context, px(xEndpoints.end), py(0), this.axisLabel('x'), axisColor('x'), 'x', width + left, height + top); paintAxisLabel(context, px(0), py(yEndpoints.end), this.axisLabel('y'), axisColor('y'), 'y', width + left, height + top); context.restore();
+    const xEndpoints = trajectoryAxisEndpoints(xScale.minimum, xScale.maximum, this.invert.x); const yEndpoints = trajectoryAxisEndpoints(yScale.minimum, yScale.maximum, this.invert.y); drawArrow(context, px(xEndpoints.start), py(0), px(xEndpoints.end), py(0), axisColor('x')); drawArrow(context, px(0), py(yEndpoints.start), px(0), py(yEndpoints.end), axisColor('y')); paintAxisLabel(context, axisLabelBox(context, px(xEndpoints.end), py(0), this.axisLabel('x'), 'x', width + left, height + top), this.axisLabel('x'), axisColor('x')); paintAxisLabel(context, axisLabelBox(context, px(0), py(yEndpoints.end), this.axisLabel('y'), 'y', width + left, height + top), this.axisLabel('y'), axisColor('y')); context.restore();
   }
   private draw3d(context: CanvasRenderingContext2D, points: readonly TrajectoryPoint[], width: number, height: number): void {
     const scales = { x: trajectoryAxisScale(this.points.map((point) => point.x)), y: trajectoryAxisScale(this.points.map((point) => point.y)), z: trajectoryAxisScale(this.points.map((point) => point.z ?? 0)) }; const centers = this.sceneCenters(); const scale = this.sceneScale(width, height);
@@ -390,7 +380,8 @@ export class TrajectoryView {
       { axis: 'y' as const, start: project(0, yEndpoints.start, 0), end: project(0, yEndpoints.end, 0), ticks: scales.y.ticks.map((value) => ({ value, point: project(0, value, 0) })) },
       { axis: 'z' as const, start: project(0, 0, zEndpoints.start), end: project(0, 0, zEndpoints.end), ticks: scales.z.ticks.map((value) => ({ value, point: project(0, 0, value) })) },
     ];
-    for (const axis of axes) { drawArrow(context, axis.start.x, axis.start.y, axis.end.x, axis.end.y, axisColor(axis.axis)); if (this.showGrid) { context.fillStyle = axisColor(axis.axis); context.textAlign = 'left'; for (const tick of axis.ticks) { if (tick.value === 0 && axis.axis !== 'x') continue; context.fillText(fmt(trajectoryAxisDisplayValue(tick.value, this.invert[axis.axis])), tick.point.x + 4, tick.point.y - 4); } } paintAxisLabel(context, axis.end.x, axis.end.y, this.axisLabel(axis.axis), axisColor(axis.axis), axis.axis, width, height); }
+    const titles = separateTitles(axes.map((axis) => axisLabelBox(context, axis.end.x, axis.end.y, this.axisLabel(axis.axis), axis.axis, width, height)), 4, height - 4); const occupied = [...titles];
+    for (const axis of axes) { drawArrow(context, axis.start.x, axis.start.y, axis.end.x, axis.end.y, axisColor(axis.axis)); if (this.showGrid) { context.fillStyle = axisColor(axis.axis); context.textAlign = 'left'; for (const tick of axis.ticks) { if (tick.value === 0 && axis.axis !== 'x') continue; const text = fmt(trajectoryAxisDisplayValue(tick.value, this.invert[axis.axis])); if (placeTickLabel(context, text, tick.point.x + 4, tick.point.y - 4, occupied)) context.fillText(text, tick.point.x + 4, tick.point.y - 4); } } paintAxisLabel(context, titles[axes.indexOf(axis)], this.axisLabel(axis.axis), axisColor(axis.axis)); }
     const origin = project(0, 0, 0); context.fillStyle = css('--vscode-foreground', '#ddd'); context.beginPath(); context.arc(origin.x, origin.y, 3, 0, Math.PI * 2); context.fill(); context.restore();
   }
   private axisUnit(axis: 'x' | 'y' | 'z'): string | undefined { return this.coordinateDisplayUnit?.unit ?? this.definitions.get(this.axisId(axis) ?? '')?.unit; }
@@ -511,8 +502,12 @@ function drawLine(context: CanvasRenderingContext2D, start: { readonly x: number
 function drawArrow(context: CanvasRenderingContext2D, startX: number, startY: number, endX: number, endY: number, color: string): void {
   const angle = Math.atan2(endY - startY, endX - startX); context.save(); context.strokeStyle = color; context.fillStyle = color; context.lineWidth = 1.7; context.beginPath(); context.moveTo(startX, startY); context.lineTo(endX, endY); context.stroke(); context.beginPath(); context.moveTo(endX, endY); context.lineTo(endX - Math.cos(angle - Math.PI / 6) * 8, endY - Math.sin(angle - Math.PI / 6) * 8); context.lineTo(endX - Math.cos(angle + Math.PI / 6) * 8, endY - Math.sin(angle + Math.PI / 6) * 8); context.closePath(); context.fill(); context.restore();
 }
-function paintAxisLabel(context: CanvasRenderingContext2D, x: number, y: number, text: string, color: string, axis: 'x' | 'y' | 'z', width: number, height: number): void {
-  context.save(); context.font = `600 11px ${css('--vscode-font-family', 'sans-serif')}`; const boxWidth = context.measureText(text).width + 10; const boxHeight = 18; const desiredX = x + 7; const desiredY = axis === 'y' ? y - boxHeight - 7 : y + 7; const boxX = clamp(desiredX, 4, Math.max(4, width - boxWidth - 4)); const boxY = clamp(desiredY, 4, Math.max(4, height - boxHeight - 4)); context.globalAlpha = .9; context.fillStyle = css('--vscode-editorHoverWidget-background', '#252526'); context.fillRect(boxX, boxY, boxWidth, boxHeight); context.globalAlpha = 1; context.strokeStyle = color; context.strokeRect(boxX, boxY, boxWidth, boxHeight); context.fillStyle = color; context.textAlign = 'left'; context.textBaseline = 'middle'; context.fillText(text, boxX + 5, boxY + boxHeight / 2); context.restore();
+function axisLabelBox(context: CanvasRenderingContext2D, x: number, y: number, text: string, axis: 'x' | 'y' | 'z', width: number, height: number) {
+  context.save(); context.font = `600 11px ${css('--vscode-font-family', 'sans-serif')}`; const boxWidth = context.measureText(text).width + 10; const boxHeight = 18; const desiredX = x + 7; const desiredY = axis === 'y' ? y - boxHeight - 7 : y + 7; context.restore();
+  return { x: clamp(desiredX, 4, Math.max(4, width - boxWidth - 4)), y: clamp(desiredY, 4, Math.max(4, height - boxHeight - 4)), width: boxWidth, height: boxHeight };
+}
+function paintAxisLabel(context: CanvasRenderingContext2D, { x: boxX, y: boxY, width: boxWidth, height: boxHeight }: LabelBox, text: string, color: string): void {
+  context.save(); context.font = `600 11px ${css('--vscode-font-family', 'sans-serif')}`; context.globalAlpha = .9; context.fillStyle = css('--vscode-editorHoverWidget-background', '#252526'); context.fillRect(boxX, boxY, boxWidth, boxHeight); context.globalAlpha = 1; context.strokeStyle = color; context.strokeRect(boxX, boxY, boxWidth, boxHeight); context.fillStyle = color; context.textAlign = 'left'; context.textBaseline = 'middle'; context.fillText(text, boxX + 5, boxY + boxHeight / 2); context.restore();
 }
 function paintDataPoints(context: CanvasRenderingContext2D, points: readonly { readonly x: number; readonly y: number }[]): void {
   if (!points.length) return; const step = Math.max(1, Math.ceil(points.length / 600)); context.save(); context.fillStyle = css('--vscode-charts-purple', '#b180d7'); context.globalAlpha = .62; context.beginPath(); for (let index = 0; index < points.length; index += step) { const point = points[index]; context.moveTo(point.x + 2, point.y); context.arc(point.x, point.y, 2, 0, Math.PI * 2); } context.fill(); context.restore();
@@ -522,5 +517,3 @@ function fmt(value: number): string { return Number(value.toPrecision(7)).toStri
 /** Times in seconds: like `fmt`, but never rounding the whole seconds of a large (Unix) time. */
 function fmtSeconds(value: number): string { return Math.abs(value) >= 1e5 ? Number(value.toFixed(6)).toString() : fmt(value); }
 function css(name: string, fallback: string): string { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }
-
-function trackColor(index: number): string { return `hsl(${210 + index * 83 % 360} 75% 60%)`; }

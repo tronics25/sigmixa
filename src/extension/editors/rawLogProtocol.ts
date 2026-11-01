@@ -197,7 +197,7 @@ export type ToWebviewMessage =
   | { readonly type: 'init'; readonly place?: string; readonly groupName?: string; readonly viewSettingsScope?: 'file' | 'group'; readonly fileName: string; readonly parsing: boolean; readonly frames: number; readonly diagnostics: number; readonly channels: readonly number[]; readonly viewState?: LogViewState; readonly clip?: { readonly name: string; readonly startTimestamp?: number; readonly endTimestamp?: number }; readonly timeReference?: TimeReference }
   /** The log's start became known while it was being read. */
   | { readonly type: 'timeReference'; readonly reference: TimeReference }
-  | { readonly type: 'page'; readonly requestId: number; readonly offset: number; readonly total: number; readonly generation: number; readonly rows: readonly RawRowDto[] }
+  | { readonly type: 'page'; readonly requestId: number; readonly offset: number; readonly total: number; readonly generation: number; readonly rows: readonly RawRowDto[]; readonly complete?: boolean }
   | { readonly type: 'progress'; readonly frames: number; readonly bytesRead: number; readonly totalBytes: number; readonly channels: readonly number[] }
   | { readonly type: 'parseComplete'; readonly cancelled: boolean; readonly frames: number; readonly diagnostics: number; readonly channels: readonly number[] }
   | { readonly type: 'sourceDiagnostics'; readonly groups: readonly DiagnosticGroup[]; readonly total: number }
@@ -205,6 +205,8 @@ export type ToWebviewMessage =
   | { readonly type: 'autoFitSample'; readonly requestId: number; readonly rows: readonly RawRowDto[] }
   | { readonly type: 'definitionsChanged' }
   | { readonly type: 'analysisProgress'; readonly processed: number; readonly total: number }
+  /** More frames were read for the RAW filter (`complete` once all were): pages are asked again. */
+  | { readonly type: 'searchProgress'; readonly complete: boolean }
   | { readonly type: 'analysisComplete'; readonly processed: number; readonly cancelled: boolean }
   | { readonly type: 'clipCreated'; readonly clipId: string }
   /** The Clips of the open log, so graphs can mark their time ranges. Empty when a Clip itself is open. */

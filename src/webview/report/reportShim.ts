@@ -1,5 +1,5 @@
 import { reorderComparisonTargets, sampleTimes, setComparisonTargetOffset, snapAnchor, stepAnchor, type ComparisonDefinition } from '../../core/project/comparison';
-import type { SignalSample } from '../../core/signal/signal';
+import { nearestMeasuredSample } from '../../core/timeline/timeline';
 import type { ComparisonSeriesDto, ComparisonToExtension, ComparisonToWebview } from '../../extension/comparison/comparisonProtocol';
 import type { ReportData } from '../../extension/report/reportData';
 import { unpackReportData } from '../../extension/report/reportPacking';
@@ -29,13 +29,6 @@ function times(targetId: string): number[] {
   return value;
 }
 
-function nearest(samples: readonly SignalSample[], timestamp: number): SignalSample | undefined {
-  let low = 0; let high = samples.length - 1; if (high < 0) return undefined;
-  while (low < high) { const middle = (low + high) >> 1; if (samples[middle].timestamp < timestamp) low = middle + 1; else high = middle; }
-  const after = samples[low]; const before = samples[low - 1];
-  return before && Math.abs(before.timestamp - timestamp) <= Math.abs(after.timestamp - timestamp) ? before : after;
-}
-
 function handle(message: ComparisonToExtension): void {
   switch (message.type) {
     case 'ready':
@@ -49,7 +42,10 @@ function handle(message: ComparisonToExtension): void {
     }
     case 'measuredSignalsRequest': {
       const series = seriesByTarget.get(message.targetId);
-      const samples = message.signalIds.flatMap((signalId) => { const sample = series?.get(signalId) ? nearest(series.get(signalId)!.series.samples, message.timestamp) : undefined; return sample ? [{ signalId, sample }] : []; });
+      // The same lookup as the comparison screen: a measured, valid value inside the Clip (or the file), never one outside it.
+      const target = reportData.targets.find((item) => item.id === message.targetId);
+      const range = target?.kind === 'clip' && target.start !== undefined && target.end !== undefined ? { start: target.start, end: target.end } : undefined;
+      const samples = message.signalIds.flatMap((signalId) => { const item = series?.get(signalId); const sample = item ? nearestMeasuredSample(item.series.samples, message.timestamp, range) : undefined; return sample ? [{ signalId, sample }] : []; });
       send({ type: 'measuredSignals', requestId: message.requestId, samples }); return;
     }
     case 'shiftOffset': case 'setOffset': case 'resetOffset': {

@@ -68,11 +68,17 @@ test('keyword payload matching follows the visible RAW or Decoded content mode',
   assert.deepEqual(store.query({ offset: 0, limit: 10, filter: { search: 'speed', searchContent: 'decoded' } }, decodedContext).rows.map((item) => item.canId), [0x123]);
 });
 
-test('representative width sample is bounded, spans time, and includes longest payload per CAN ID', () => {
-  const store = new ChunkedFrameStore(); store.append(Array.from({ length: 1000 }, (_, index) => frame(index, index % 3)));
-  const sample = store.representativeSample(undefined, 20);
-  assert.ok(sample.length <= 20); assert.ok(sample.some((item) => item.id === 's:999'));
-  for (const id of [0, 1, 2]) assert.equal(Math.max(...sample.filter((item) => item.canId === id).map((item) => item.dataLength)), 15);
+test('width candidates scan every frame: longest content per CAN ID, every name, first and last time', () => {
+  const store = new ChunkedFrameStore();
+  const frames = Array.from({ length: 5000 }, (_, index) => frame(index, index % 400));
+  store.append(frames);
+  // One long decoded text hidden in the middle of the log must be found.
+  const cells = (item: CanFrame) => [item.dataLength * 3 - 1, item.id === 's:2501' ? 999 : 10];
+  const chosen = store.widthCandidates(undefined, cells);
+  assert.ok(chosen.some((item) => item.id === 's:2501'));
+  assert.equal(new Set(chosen.map((item) => item.canId)).size, 400);
+  assert.ok(chosen.some((item) => item.id === 's:0')); assert.ok(chosen.some((item) => item.id === 's:4999'));
+  for (let id = 0; id < 400; id++) assert.equal(Math.max(...chosen.filter((item) => item.canId === id).map((item) => item.dataLength)), Math.max(...frames.filter((item) => item.canId === id).map((item) => item.dataLength)));
 });
 
 test('adjacent Timestamp navigation snaps within the Clip range', () => {
@@ -107,4 +113,9 @@ test('CAN-reference index pages sparse matches in original order', () => {
   const expected = store.query({ offset: 0, limit: 2000, filter: { canIdRefs: refs } }).rows;
   assert.equal(store.countByCanRefs(refs), expected.length);
   assert.deepEqual(store.queryByCanRefs(refs, 1, 3).map((item) => item.id), expected.slice(1, 4).map((item) => item.id));
+});
+
+test('width ranking counts East Asian characters and emoji as two cells', async () => {
+  const { textCells } = await import('../src/core/frame/widestText');
+  assert.equal(textCells('ab'), 2); assert.equal(textCells('停止'), 4); assert.equal(textCells('😀'), 2); assert.equal(textCells('🚀🚗'), 4);
 });

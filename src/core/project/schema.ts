@@ -289,7 +289,7 @@ function coerceSignal(value: unknown): ManualSignalDefinition {
     byteOffset: Number(signal.byteOffset ?? 0),
     bitOffset: Number(signal.bitOffset ?? 0),
     lengthBits: Number(signal.lengthBits ?? 8),
-    signedness: signal.signedness === 'signed' ? 'signed' : 'unsigned',
+    signedness: signal.signedness === 'signed' || signal.signedness === 'float' ? signal.signedness : 'unsigned',
     byteOrder: signal.byteOrder === 'big' ? 'big' : 'little',
     conversion,
     ...(signal.valueLabels === undefined ? {} : { valueLabels: Object.fromEntries(Object.entries(record(signal.valueLabels)).map(([key, label]) => [key, String(label)])) }),

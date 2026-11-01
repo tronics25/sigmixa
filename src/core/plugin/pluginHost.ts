@@ -176,11 +176,24 @@ function normalizeOutput(output: PluginSignalSampleOutput, pluginId: string, bin
   if (!output?.signalId?.trim() || !output.name?.trim() || !Number.isFinite(output.value)) {
     return { diagnostic: pluginDiagnostic(pluginId, binding.id, frame, 'PLUGIN_SAMPLE_INVALID', 'Plugin returned a Signal with an invalid ID, name, or value.') };
   }
-  const id = `plugin:${encodeURIComponent(pluginId)}:${encodeURIComponent(binding.id)}:${encodeURIComponent(output.signalId)}`;
-  const definition: SignalDefinition = { id, name: output.name.trim(), unit: output.unit?.trim() || undefined, group: output.group?.trim() || undefined, source: { type: 'plugin', pluginId, bindingId: binding.id }, frameRef: { canId: frame.canId, extended: frame.extended }, ...(output.valueLabel?.trim() ? { hasValueLabels: true } : {}) };
+  const definition = pluginDefinition(output, pluginId, binding, frame);
   const sample: SignalSample = { timestamp: frame.timestamp, value: output.value, quality: output.quality, ...(output.valueLabel?.trim() ? { valueLabel: output.valueLabel.trim() } : {}) };
   const signalEvents = (output.events ?? []).map((event) => ({ ...event, timestamp: frame.timestamp }));
   return { definition, sample, events: signalEvents };
+}
+
+/** The definitions a binding's outputs describe, made once per distinct output (a Plugin repeats them every frame). */
+const pluginDefinitions = new WeakMap<PluginBinding, Map<string, { readonly key: readonly unknown[]; readonly definition: SignalDefinition }>>();
+function pluginDefinition(output: PluginSignalSampleOutput, pluginId: string, binding: PluginBinding, frame: CanFrame): SignalDefinition {
+  const labelled = Boolean(output.valueLabel?.trim());
+  const key = [pluginId, output.name, output.unit, output.group, labelled, frame.canId, frame.extended];
+  let byOutput = pluginDefinitions.get(binding); if (!byOutput) { byOutput = new Map(); pluginDefinitions.set(binding, byOutput); }
+  const cached = byOutput.get(output.signalId);
+  if (cached && cached.key.every((value, index) => value === key[index])) return cached.definition;
+  const id = `plugin:${encodeURIComponent(pluginId)}:${encodeURIComponent(binding.id)}:${encodeURIComponent(output.signalId)}`;
+  const definition: SignalDefinition = { id, name: output.name.trim(), unit: output.unit?.trim() || undefined, group: output.group?.trim() || undefined, source: { type: 'plugin', pluginId, bindingId: binding.id }, frameRef: { canId: frame.canId, extended: frame.extended }, ...(labelled ? { hasValueLabels: true } : {}) };
+  byOutput.set(output.signalId, { key, definition });
+  return definition;
 }
 
 function normalizeDiagnostics(input: readonly Diagnostic[], binding: PluginBinding, frame: CanFrame): Diagnostic[] {

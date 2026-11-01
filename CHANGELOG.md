@@ -1,5 +1,29 @@
 # Change Log
 
+## 2.3.1 - 2026-11-02
+
+- Fixed HTML reports splitting a trajectory with several series into one graph per series, each with its own scale. It is now one graph with all its series on it, as in Visualize. Each series has its own legend entry, and its X, Y and Z are in the graph settings. Saved images list the series too.
+- Fixed legends running off saved images of trajectories on the comparison screen and in HTML reports. A legend that does not fit in one row continues on the next.
+- Fixed axis titles and tick values overlapping each other on 3D trajectories, in Visualize, on the comparison screen, in HTML reports and on saved images. Where a tick value would meet a title or another tick value, it is left out, for example where the axes start or when an axis is seen end-on. Two titles that would meet are moved apart.
+- Fixed axis titles being cut off on 3D trajectories on the comparison screen, in HTML reports and on their saved images, when an axis ends outside the view. The title now stays at the edge of the view, as in Visualize. The view itself is not changed.
+- Fixed time-series graphs on the comparison screen keeping the detail they were first drawn with when zoomed in. They now fetch the data again for the zoomed range, as in Visualize, so short peaks show up.
+- Fixed graphs with two units placing them on the left and right axes in a different order on the comparison screen and in HTML reports than in Visualize. The unit chosen first is now on the left everywhere, and reports follow the axis layout set in Visualize.
+- Fixed HTML reports drawing a Signal in the same color in every graph when it had different colors in different graphs. Each graph now keeps its own colors.
+- Fixed markers in HTML reports showing values after the end of the data, outside the Clip, or invalid values. They now show values the same way the comparison screen does.
+- Fixed trajectories on the comparison screen and in HTML reports missing the two-point measurement that Visualize has.
+- Fixed trajectories with a single series showing values without unit conversion on the comparison screen and in HTML reports.
+- Fixed trajectories and time axes of Clips on the comparison screen being drawn beyond the Clip's range.
+- Fixed lines disappearing from graphs and swimlanes after a Signal's 2,000th break (a gap in reception or an invalid value) when gaps are not connected. Every break is now kept.
+- Fixed automatic column widths in the RAW log and Table being measured on a sample of 300 rows, which could cut off long content. Widths now come from all rows, measured in the background.
+- Fixed Plugin values in the CONTENT column of the RAW log appearing only for the last 5,000 frames. They now appear for every frame.
+- Fixed BLF files silently dropping error frames, overload frames and other objects SigMixa does not read. They are now reported in the diagnostics. Remote frames are told apart from data frames, and objects outside containers are read too.
+- Fixed IEEE floating-point Signals (SIG_VALTYPE_ in DBC files) being read as integers, which gave wrong values. They are now imported from DBC files, can be set in frame definitions and are written back on DBC export.
+- Fixed SigMixa running out of memory and stopping partway through opening logs of a few million frames or more. Frames and Signal values are now kept in compact arrays. In testing, a log of 50 million frames opened using about 9 GB of memory. Saved projects and .mixa files are unchanged.
+- Fixed reading a log slowing down sharply, with screens pausing, while Visualize, the RAW log or Table was open. Screens now refresh less often when refreshing takes longer, and graphs keep growing while the log is read.
+- Fixed keyword searches in the RAW log freezing VS Code on large logs. Matches appear as they are found while the rest of the log is searched in the background.
+- Fixed the Trace freezing VS Code while it prepared a large log the first time. It is now prepared in the background.
+- Made reading ASC logs, decoding, drawing a whole large log in Visualize and automatic column widths faster. The results are the same as before.
+
 ## 2.3.0 - 2026-10-31
 
 - Time-series graphs can now show lanes: a strip for each Signal below the graph, on the same time axis. Each lane shows only the shape of its Signal, scaled to the time span on screen, so a change stands out even when it looks flat on the graph. Read the values on the graph above.

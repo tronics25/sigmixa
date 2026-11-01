@@ -127,7 +127,7 @@ const host: GraphHost = {
   refreshMeasured: () => measured.update(cards.flatMap((card) => card.markerQueries())),
   hoverTime: () => hoverTime,
   setHoverTime: (time) => { if (time === hoverTime) return; hoverTime = time; cards.forEach((card) => card.scheduleDraw()); },
-  requestSeries: (graphId, signalIds, maxPoints, joined) => { const requestId = ++requestCounter; pendingSeries.set(requestId, graphId); post({ type: 'seriesRequest', requestId, graphId, signalIds, maxPoints, joined }); return requestId; },
+  requestSeries: (graphId, signalIds, maxPoints, joined, ranges) => { const requestId = ++requestCounter; pendingSeries.set(requestId, graphId); post({ type: 'seriesRequest', requestId, graphId, signalIds, maxPoints, joined, ranges }); return requestId; },
   changed: (card) => { if (!comparison) return; comparison = { ...comparison, graphs: comparison.graphs.map((graph) => graph.id === card.id ? card.definition : graph) }; persist(); if (card.id === selectedGraphId) updateOptionsHeading(); },
   colorsChanged: () => { persist(); cards.forEach((card) => card.draw()); },
   select: (card, reveal) => selectGraph(card, reveal),

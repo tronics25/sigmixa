@@ -81,7 +81,7 @@ export interface GraphHost {
   refreshMeasured(): void;
   hoverTime(): number | undefined;
   setHoverTime(time: number | undefined): void;
-  requestSeries(graphId: string, signalIds: readonly string[], maxPoints?: number, joined?: boolean): number;
+  requestSeries(graphId: string, signalIds: readonly string[], maxPoints?: number, joined?: boolean, ranges?: Readonly<Record<string, TimeRange>>): number;
   changed(graph: ComparisonCard): void;
   colorsChanged(): void;
   select(graph: ComparisonCard, reveal: boolean): void;
@@ -111,6 +111,7 @@ export class GraphCard implements ComparisonCard {
   private readonly laneToggle: HTMLButtonElement;
   private readonly selector: SignalSelector;
   private readonly selected: Set<string>;
+  private readonly colors: Map<string, string>;
   private readonly buttons: Record<'clear' | 'image' | 'settings' | 'up' | 'copy' | 'trash', HTMLButtonElement>;
   /** The selected time range belongs to the whole comparison, like the time axis: every graph shows it. */
   private get selection(): TimeRange | undefined { return this.host.selection(); }
@@ -119,6 +120,12 @@ export class GraphCard implements ComparisonCard {
   private series = new Map<string, readonly ComparisonSeriesDto[]>();
   private latestRequest = 0;
   private pending = false;
+  /** While zoomed: the samples of the part shown, fetched again as the view moves (as Visualize does), and the range per target they cover. */
+  private detail?: { readonly series: Map<string, readonly ComparisonSeriesDto[]>; readonly ranges: Readonly<Record<string, TimeRange>> };
+  private detailRequest = 0;
+  private detailWanted?: string;
+  private detailTimer?: number;
+  private detailPending?: Readonly<Record<string, TimeRange>>;
   private viewRange?: TimeRange;
   private fullRange?: TimeRange;
   private readonly markers = new Map<string, Marker>();
@@ -129,6 +136,8 @@ export class GraphCard implements ComparisonCard {
 
   constructor(private definitionValue: ComparisonGraphDefinition, private readonly host: GraphHost, list: HTMLElement, optionsHost: HTMLElement) {
     this.selected = new Set(definitionValue.signalIds);
+    // A graph with colours of its own (a log report: each Visualize graph keeps its colours) does not share the comparison's.
+    this.colors = definitionValue.colors ? new Map([...host.colors, ...Object.entries(definitionValue.colors)]) : host.colors;
     this.element = document.createElement('section'); this.element.className = 'visualize-card'; this.element.dataset.kind = 'graph';
     this.header = document.createElement('header'); this.header.className = 'visualize-card-header'; this.header.tabIndex = 0;
     this.title = document.createElement('input'); this.title.className = 'visualize-card-title'; this.title.value = definitionValue.name;
@@ -163,8 +172,8 @@ export class GraphCard implements ComparisonCard {
     settings.appendChild(this.displaySettings());
     const selectorHost = document.createElement('div'); settings.appendChild(selectorHost);
     this.selector = new SignalSelector({
-      host: selectorHost, selected: this.selected, colors: host.colors,
-      onSelectionChange: () => this.selectionChanged(), onColorChange: () => this.host.colorsChanged(), onHighlightChange: (id) => this.host.highlight(id),
+      host: selectorHost, selected: this.selected, colors: this.colors,
+      onSelectionChange: () => this.selectionChanged(), onColorChange: () => this.colorChanged(), onHighlightChange: (id) => this.host.highlight(id),
     });
     optionsHost.appendChild(this.options);
 
@@ -195,27 +204,35 @@ export class GraphCard implements ComparisonCard {
   revealSignal(signalId: string): void { this.selector.reveal(signalId); }
   setEditing(editing: boolean): void { this.element.classList.toggle('options-editing', editing); this.options.hidden = !(this.host.selectedGraph() === this); }
   focusHeader(): void { this.header.focus({ preventScroll: true }); }
-  dispose(): void { this.host.time.report(this.id, undefined); this.element.remove(); this.options.remove(); }
+  dispose(): void { this.clearDetail(); this.host.time.report(this.id, undefined); this.element.remove(); this.options.remove(); }
 
   /** Asks the extension for this graph's samples in every target. */
   request(): void {
-    const shown = this.shown; this.series.clear(); this.pending = shown.length > 0;
+    const shown = this.shown; this.series.clear(); this.clearDetail(); this.pending = shown.length > 0;
     this.latestRequest = shown.length ? this.host.requestSeries(this.id, shown) : 0;
     this.draw();
   }
 
   receive(requestId: number, seriesByTarget: readonly { readonly targetId: string; readonly series: readonly ComparisonSeriesDto[] }[]): void {
+    if (requestId === this.detailRequest && this.detailPending) {
+      this.detail = { series: new Map(seriesByTarget.map((item) => [item.targetId, item.series])), ranges: this.detailPending }; this.detailPending = undefined; this.scheduleDraw(); return;
+    }
     if (requestId !== this.latestRequest) return;
     this.series = new Map(seriesByTarget.map((item) => [item.targetId, item.series])); this.pending = false;
     this.fullRange = undefined; this.draw();
   }
+
+  private color(signalId: string): string { return this.colors === this.host.colors ? this.host.color(signalId) : this.colors.get(signalId) ?? this.host.color(signalId); }
+  private colorChanged(): void { if (this.colors === this.host.colors) { this.host.colorsChanged(); return; } this.update({ colors: Object.fromEntries(this.colors) }); this.draw(); }
 
   private update(partial: Partial<ComparisonGraphDefinition>): void { this.definitionValue = { ...this.definitionValue, ...partial }; this.host.changed(this); }
 
   private selectionChanged(): void {
     const signalIds = [...this.selected];
     const policy = graphDisplayPolicy(signalIds, this.host.definitions(), this.definitionValue.mode ?? 'raw');
-    this.update({ signalIds, ...(policy.requiresNormalization ? { mode: 'normalized' as const } : {}) });
+    // As in Visualize: unit systems keep their place, and one added comes after them.
+    const prior = this.definitionValue.axisOrder ?? []; const axisOrder = [...new Set([...prior.filter((key) => policy.axisKeys.includes(key)), ...policy.axisKeys])];
+    this.update({ signalIds, axisOrder, ...(policy.requiresNormalization ? { mode: 'normalized' as const } : {}) });
     this.syncSettings(); this.request();
   }
 
@@ -376,11 +393,50 @@ export class GraphCard implements ComparisonCard {
 
   // ---- data -------------------------------------------------------------------------------------
 
-  private entries(): Entry[] {
+  private clearDetail(): void {
+    this.detail = undefined; this.detailWanted = undefined; this.detailPending = undefined; this.detailRequest = 0;
+    if (this.detailTimer !== undefined) { clearTimeout(this.detailTimer); this.detailTimer = undefined; }
+  }
+
+  /** The part of each target's own time the shown view covers. */
+  private viewRanges(): Record<string, TimeRange> | undefined {
+    const view = this.host.time.view; if (!view || !this.host.time.zoomed) return undefined;
+    const ranges: Record<string, TimeRange> = {};
+    for (const target of this.host.targets()) { const anchor = this.host.anchor(target.id); if (anchor !== undefined && this.series.has(target.id)) ranges[target.id] = { start: view.start + anchor, end: view.end + anchor }; }
+    return Object.keys(ranges).length ? ranges : undefined;
+  }
+
+  /** True when the fetched samples of the shown part cover the whole view in every target. */
+  private detailCovers(ranges = this.viewRanges()): boolean {
+    if (!this.detail || !ranges) return false;
+    return Object.entries(ranges).every(([id, range]) => { const have = this.detail!.ranges[id]; const slack = (range.end - range.start) * 1e-9; return !!have && have.start <= range.start + slack && have.end >= range.end - slack; });
+  }
+
+  /** While zoomed, fetch the samples of the shown part again once the view settles, so a zoomed graph keeps its detail (as in Visualize). */
+  private syncDetail(): void {
+    const ranges = this.viewRanges();
+    if (!ranges || !this.shown.length) { if (this.detail || this.detailPending || this.detailTimer !== undefined) this.clearDetail(); return; }
+    const key = JSON.stringify(ranges); if (key === this.detailWanted) return;
+    if (this.detailCovers(ranges)) {
+      // Panning inside what was fetched, or zooming out within it, needs nothing new unless the thinning would be too coarse.
+      const ratio = Math.max(...Object.entries(ranges).map(([id, range]) => { const have = this.detail!.ranges[id]; return (have.end - have.start) / Math.max(1e-12, range.end - range.start); }));
+      if (ratio <= 1.5) return;
+    }
+    if (this.detailTimer !== undefined) clearTimeout(this.detailTimer);
+    this.detailTimer = window.setTimeout(() => {
+      this.detailTimer = undefined; const current = this.viewRanges(); if (!current || !this.shown.length) return;
+      this.detailWanted = JSON.stringify(current); this.detailPending = current;
+      this.detailRequest = this.host.requestSeries(this.id, this.shown, undefined, undefined, current);
+    }, 150);
+  }
+
+  /** `overview`: the samples of the whole span (what the graph reports to the shared time axis); otherwise what is drawn. */
+  private entries(overview = false): Entry[] {
+    const source = !overview && this.detailCovers() ? this.detail!.series : this.series;
     return this.host.targets().flatMap((target) => {
       const anchor = this.host.anchor(target.id); if (anchor === undefined || this.host.hidden(target.id)) return [];
       const targetIndex = this.host.targetIndex(target.id);
-      return (this.series.get(target.id) ?? []).filter((item) => this.selected.has(item.signalId)).map((item) => ({ target, targetIndex, anchor, signalId: item.signalId, series: item.series }));
+      return (source.get(target.id) ?? []).filter((item) => this.selected.has(item.signalId)).map((item) => ({ target, targetIndex, anchor, signalId: item.signalId, series: item.series }));
     });
   }
 
@@ -392,7 +448,9 @@ export class GraphCard implements ComparisonCard {
       const key = conversion ? `family:${conversion.family}` : unit ? `unit:${unit.toLowerCase()}` : 'empty';
       const group = groups.get(key) ?? { key, order: conversion?.order ?? (unit ? 10_000 : 20_000), entries: [] }; group.entries.push(entry); groups.set(key, group);
     }
-    const result = [...groups.values()].map((group) => { const displayUnit = preferredDisplayUnit(group.entries.map((entry) => entry.series.definition.unit)); return { ...group, displayUnit, label: displayUnit ?? t('(no unit)', '(単位なし)') }; }).sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+    // The axis order is the graph's own, as in Visualize (first = left axis); unit systems it does not name follow, sorted.
+    const order = this.definitionValue.axisOrder ?? []; const place = (key: string) => { const index = order.indexOf(key); return index < 0 ? Infinity : index; };
+    const result = [...groups.values()].map((group) => { const displayUnit = preferredDisplayUnit(group.entries.map((entry) => entry.series.definition.unit)); return { ...group, displayUnit, label: displayUnit ?? t('(no unit)', '(単位なし)') }; }).sort((a, b) => (place(a.key) - place(b.key) || 0) || a.order - b.order || a.label.localeCompare(b.label));
     // A mapped Signal can bring a third unit system; overlay on one normalized axis rather than hide it.
     return result.length > 2 ? [{ key: 'normalized', label: '0–100%', entries }] : result;
   }
@@ -408,7 +466,8 @@ export class GraphCard implements ComparisonCard {
 
   private availableRange(entries: readonly Entry[]): TimeRange | undefined {
     let start = Infinity; let end = -Infinity;
-    for (const entry of entries) for (const sample of entry.series.samples) { if (!Number.isFinite(sample.value)) continue; const time = sample.timestamp - entry.anchor; start = Math.min(start, time); end = Math.max(end, time); }
+    // A Clip's carried edge samples only draw the lines to its edges; they are not data and do not widen the time axis (as in Visualize).
+    for (const entry of entries) for (const sample of entry.series.samples) { if (!Number.isFinite(sample.value) || sample.carried) continue; const time = sample.timestamp - entry.anchor; start = Math.min(start, time); end = Math.max(end, time); }
     if (!Number.isFinite(start)) return undefined; return { start, end: end === start ? start + 1 : end };
   }
 
@@ -447,10 +506,11 @@ export class GraphCard implements ComparisonCard {
   scheduleDraw(): void { if (this.drawScheduled) return; this.drawScheduled = true; requestAnimationFrame(() => { this.drawScheduled = false; this.draw(); }); }
 
   draw(): void {
-    const entries = this.entries(); const own = this.availableRange(entries);
+    const own = this.availableRange(this.entries(true));
     // Time belongs to the whole comparison: this graph says what its own data spans and shows the part every graph shows.
     this.host.time.report(this.id, own);
     const full = own ? this.host.time.full : undefined; this.viewRange = own ? this.host.time.view : undefined; this.fullRange = full;
+    this.syncDetail(); const entries = this.entries();
     this.element.classList.toggle('view-unconfigured', !this.isConfigured);
     this.header.removeAttribute('title');
     this.renderLegend();
@@ -486,7 +546,7 @@ export class GraphCard implements ComparisonCard {
         return [{ time: marker.time, sampleTime: time, value, dash: dashFor(entry.targetIndex), text: measuredValueLabel(`${this.valueLabel(entry, sample.value, displayUnit, normalized)}${sample.valueLabel ? ` (${sample.valueLabel})` : ''}`, time, marker.time) }];
       }));
       const values = hover === undefined ? [] : own.flatMap(({ entry, displayUnit }) => { const sample = interpolatedSeriesSample(entry.series, entry.anchor + hover, this.connectGaps); return sample ? [`${this.valueLabel(entry, sample.value, displayUnit, normalized)}${sample.valueLabel ? ` (${sample.valueLabel})` : ''}`] : []; });
-      return { name: definitions.get(signalId)?.name ?? signalId, color: this.host.color(signalId), emphasized: highlighted === signalId, markers: markerValues, value: values.length ? values.join('  ') : undefined,
+      return { name: definitions.get(signalId)?.name ?? signalId, color: this.color(signalId), emphasized: highlighted === signalId, markers: markerValues, value: values.length ? values.join('  ') : undefined,
         lines: own.map(({ entry, displayUnit }) => ({ runs: laneRuns(entry.series, (value) => this.value(entry, value, displayUnit, normalized), this.connectGaps, entry.anchor), dash: dashFor(entry.targetIndex) })) };
     });
     const left = 72; const right = groups.length > 1 ? 72 : 24;
@@ -525,7 +585,7 @@ export class GraphCard implements ComparisonCard {
         context.fillText(label, rightAxis ? left + plotW + 7 : Math.max(4, left - context.measureText(label).width - 7), Math.min(laneTop + laneHeight - 2, py + 4));
       }
       for (const entry of group.entries) {
-        const color = this.host.color(entry.signalId);
+        const color = this.color(entry.signalId);
         context.save(); context.beginPath(); context.rect(left, laneTop, plotW, laneHeight); context.clip(); context.setLineDash(dashFor(entry.targetIndex)); context.strokeStyle = color;
         context.lineWidth = highlighted === entry.signalId ? 3 : 1.5; context.beginPath(); let started = false; let previous: number | undefined;
         for (const sample of entry.series.samples) {
@@ -566,7 +626,7 @@ export class GraphCard implements ComparisonCard {
     const definitions = new Map(this.host.definitions().map((definition) => [definition.id, definition]));
     const readyTargets = this.host.targets().filter((target) => target.status === 'ready' && !this.host.hidden(target.id));
     for (const signalId of this.shown) {
-      const definition = definitions.get(signalId); const color = this.host.color(signalId);
+      const definition = definitions.get(signalId); const color = this.color(signalId);
       const entry = createLegendEntry(`${definition?.name ?? signalId}${definition?.unit ? ` (${definition.unit})` : ''}`, color, (active) => this.host.highlight(active ? signalId : undefined));
       entry.className = 'chart-legend-entry'; entry.dataset.signalId = signalId;
       const missing = this.pending ? [] : readyTargets.filter((target) => !(bySignal.get(signalId) ?? []).some((item) => item.target.id === target.id));
@@ -580,8 +640,8 @@ export class GraphCard implements ComparisonCard {
   }
 
   highlight(): void {
-    this.legend.querySelectorAll<HTMLElement>('.chart-legend-entry').forEach((element) => emphasizeSignal(element, element.dataset.signalId === this.host.highlighted(), this.host.color(element.dataset.signalId ?? '')));
-    this.options.querySelectorAll<HTMLElement>('.selector-signal').forEach((element) => emphasizeSignal(element, element.dataset.signalId === this.host.highlighted(), this.host.color(element.dataset.signalId ?? '')));
+    this.legend.querySelectorAll<HTMLElement>('.chart-legend-entry').forEach((element) => emphasizeSignal(element, element.dataset.signalId === this.host.highlighted(), this.color(element.dataset.signalId ?? '')));
+    this.options.querySelectorAll<HTMLElement>('.selector-signal').forEach((element) => emphasizeSignal(element, element.dataset.signalId === this.host.highlighted(), this.color(element.dataset.signalId ?? '')));
     this.scheduleDraw();
   }
 
@@ -596,7 +656,7 @@ export class GraphCard implements ComparisonCard {
       context.fillStyle = css('--vscode-foreground', '#ddd'); context.font = '600 20px sans-serif'; context.fillText(heading, 24, 34);
       context.font = '12px sans-serif'; context.fillStyle = css('--vscode-descriptionForeground', '#999'); const range = `${format(this.viewRange!.start)}–${format(this.viewRange!.end)} s`; context.fillText(range, width - context.measureText(range).width - 24, 32);
       let y = 60; let x = 24; const definitions = new Map(this.host.definitions().map((definition) => [definition.id, definition]));
-      for (const signalId of this.shown) { const label = definitions.get(signalId)?.name ?? signalId; if (x > width - 320) { x = 24; y += 20; } context.fillStyle = this.host.color(signalId); context.fillRect(x, y - 6, 16, 3); context.fillStyle = css('--vscode-foreground', '#ddd'); context.fillText(label, x + 22, y); x += 30 + context.measureText(label).width + 16; }
+      for (const signalId of this.shown) { const label = definitions.get(signalId)?.name ?? signalId; if (x > width - 320) { x = 24; y += 20; } context.fillStyle = this.color(signalId); context.fillRect(x, y - 6, 16, 3); context.fillStyle = css('--vscode-foreground', '#ddd'); context.fillText(label, x + 22, y); x += 30 + context.measureText(label).width + 16; }
       y += 20; x = 24;
       for (const target of targets) { const label = `${target.name} (${target.rangeLabel})`; if (x > width - 420) { x = 24; y += 20; } context.save(); context.setLineDash(dashFor(this.host.targetIndex(target.id))); context.strokeStyle = css('--vscode-foreground', '#ddd'); context.lineWidth = 2; context.beginPath(); context.moveTo(x, y - 4); context.lineTo(x + 24, y - 4); context.stroke(); context.restore(); context.fillStyle = css('--vscode-foreground', '#ddd'); context.fillText(label, x + 30, y); x += 40 + context.measureText(label).width + 16; }
       this.paint(context, width, header, groups, this.viewRange!, false);

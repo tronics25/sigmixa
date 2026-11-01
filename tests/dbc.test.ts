@@ -106,3 +106,24 @@ test('bundled basic DBC imports as valid standard and extended definitions', () 
     [0x18ff50e5, true, 12, 3],
   ]);
 });
+
+test('DBC Float (SIG_VALTYPE_ 1) and Double (2) Signals decode as IEEE 754 values and survive persistence and export', () => {
+  const imported = importDbc('BO_ 512 Floats: 16 ECU\n SG_ Speed : 0|32@1- (1,0) [0|0] "m/s" ECU\n SG_ Big : 39|64@0- (2,1) [0|0] "" ECU\n\nSIG_VALTYPE_ 512 Speed : 1;\nSIG_VALTYPE_ 512 Big : 2;\n');
+  assert.deepEqual(imported.diagnostics, []);
+  assert.deepEqual(imported.frames[0].signals.map((signal) => signal.signedness), ['float', 'float']);
+  const project = migrateProject({ schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION, frames: imported.frames });
+  const restored = parseProjectJson(JSON.stringify(serializeProject(project))).frames[0];
+  const data = new Uint8Array(16); const view = new DataView(data.buffer); view.setFloat32(0, 12.5, true); view.setFloat64(4, -3.25, false);
+  const result = decodeManualFrame({ id: 'f:1', sourceId: 'f', timestamp: 1, canId: 512, extended: false, direction: 'Rx', channel: 1, dlcCode: 10, dataLength: 16, data }, restored);
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.decoded.map((item) => [item.signal.name, item.sample.value, item.raw]), [['Speed', 12.5, 12.5], ['Big', -5.5, -3.25]]);
+  const exported = exportDbc([restored]); assert.deepEqual(exported.diagnostics, []);
+  assert.match(exported.text, /SIG_VALTYPE_ 512 Speed : 1;/); assert.match(exported.text, /SIG_VALTYPE_ 512 Big : 2;/);
+  assert.deepEqual(importDbc(exported.text).frames[0].signals.map((signal) => signal.signedness), ['float', 'float']);
+});
+
+test('a SIG_VALTYPE_ that does not match the Signal length is reported and the Signal is not read as a float', () => {
+  const imported = importDbc('BO_ 513 Wrong: 8 ECU\n SG_ Short : 0|16@1+ (1,0) [0|0] "" ECU\nSIG_VALTYPE_ 513 Short : 1;\n');
+  assert.deepEqual(imported.diagnostics.map((item) => item.code), ['DBC_VALUE_TYPE_INVALID']);
+  assert.equal(imported.frames[0].signals[0].signedness, 'unsigned');
+});

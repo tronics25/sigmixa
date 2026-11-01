@@ -5,7 +5,8 @@ import { parseResolution } from './resolution';
 import { compileExpression } from '../calculation/expression';
 
 export type ByteOrder = 'little' | 'big';
-export type SignalSignedness = 'unsigned' | 'signed';
+/** `float`: an IEEE 754 value of 32 or 64 bits (DBC SIG_VALTYPE_ 1 / 2). */
+export type SignalSignedness = 'unsigned' | 'signed' | 'float';
 
 export interface ManualConversion {
   readonly type: 'scale-offset';
@@ -66,7 +67,16 @@ export interface ValidationResult {
 
 export const VALID_FRAME_LENGTHS = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64]);
 
+const signalDefinitions = new WeakMap<ManualSignalDefinition | ManualDerivedSignalDefinition, { readonly frame: ManualFrameDefinition; readonly definition: SignalDefinition }>();
+
+/** Definitions are kept as they are once made (callers never change them), so decoding a frame does not build them again. */
 export function signalDefinitionFor(frame: ManualFrameDefinition, signal: ManualSignalDefinition | ManualDerivedSignalDefinition): SignalDefinition {
+  const cached = signalDefinitions.get(signal);
+  if (cached?.frame === frame) return cached.definition;
+  const definition = buildSignalDefinition(frame, signal); signalDefinitions.set(signal, { frame, definition }); return definition;
+}
+
+function buildSignalDefinition(frame: ManualFrameDefinition, signal: ManualSignalDefinition | ManualDerivedSignalDefinition): SignalDefinition {
   return {
     id: signal.id,
     name: signal.name,
@@ -231,6 +241,8 @@ export function validateFrameDefinition(frame: ManualFrameDefinition): Validatio
     if (!Number.isInteger(signal.byteOffset) || signal.byteOffset < 0) add('SIGNAL_BYTE_RANGE', `${signal.name || signal.id}: byte position must be a non-negative integer.`, detail);
     if (!Number.isInteger(signal.bitOffset) || signal.bitOffset < 0 || signal.bitOffset > 7) add('SIGNAL_BIT_RANGE', `${signal.name || signal.id}: bit position must be between 0 and 7.`, detail);
     if (!Number.isInteger(signal.lengthBits) || signal.lengthBits < 1 || signal.lengthBits > 64) add('SIGNAL_LENGTH_RANGE', `${signal.name || signal.id}: length must be between 1 and 64 bits.`, detail);
+    else if (signal.signedness === 'float' && signal.lengthBits !== 32 && signal.lengthBits !== 64) add('SIGNAL_FLOAT_LENGTH', `${signal.name || signal.id}: a Float Signal must be 32 or 64 bits.`, detail);
+    if (signal.signedness === 'float' && Object.keys(signal.valueLabels ?? {}).length) add('SIGNAL_FLOAT_VALUE_LABELS', `${signal.name || signal.id}: a Float Signal cannot have value labels.`, detail);
     const occupied = occupiedBits(signal);
     if (occupied.some((bit) => bit < 0 || bit >= frame.frameLength * 8)) add('SIGNAL_OUTSIDE_FRAME', `${signal.name || signal.id}: bit range exceeds the frame length.`, detail);
     if (signal.multiplexing?.type === 'multiplexer' && (signal.signedness !== 'unsigned' || signal.lengthBits > 32)) add('SIGNAL_MULTIPLEXER_FORMAT', `${signal.name || signal.id}: Multiplexer must be an unsigned Signal of 1 to 32 bits.`, detail);

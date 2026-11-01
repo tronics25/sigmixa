@@ -22,12 +22,22 @@ export interface ComparisonTarget {
 
 export interface ComparisonAxisRange { readonly mode: 'visible' | 'global'; readonly includeZero?: boolean }
 
+/** One of several paths overlaid on a trajectory graph, in its own colour. */
+export interface ComparisonTrajectorySeries {
+  readonly id: string;
+  readonly name: string;
+  readonly color: string;
+  readonly axes: { readonly x?: string; readonly y?: string; readonly z?: string };
+}
+
 export interface ComparisonGraphDefinition {
   readonly id: string;
   /** Time-series graph (default) or trajectory; a trajectory uses `axes` and draws one path per target. */
   readonly kind?: 'graph' | 'trajectory';
   readonly name: string;
   readonly axes?: { readonly x?: string; readonly y?: string; readonly z?: string };
+  /** Instead of `axes`: several paths on one plot, as in a Visualize trajectory. Colour tells the series apart, line style the target. */
+  readonly trajectorySeries?: readonly ComparisonTrajectorySeries[];
   readonly equalAspect?: boolean;
   readonly showPoints?: boolean;
   readonly showGrid?: boolean;
@@ -48,6 +58,10 @@ export interface ComparisonGraphDefinition {
   readonly height?: number;
   /** The lanes under the graph (one per Signal, shape only) are open. */
   readonly lanes?: boolean;
+  /** Unit-system axis keys, first = left axis, as in Visualize (`chartGroupLayout`); absent = sorted by unit system. */
+  readonly axisOrder?: readonly string[];
+  /** Colours of this graph only (a log report keeps each Visualize graph's colours); absent = the comparison's colours. */
+  readonly colors?: Readonly<Record<string, string>>;
 }
 
 export interface ComparisonDefinition {

@@ -9,6 +9,19 @@ const CAN_MESSAGE = 1;
 const CAN_MESSAGE_2 = 86;
 const CAN_FD_MESSAGE = 100;
 const CAN_FD_MESSAGE_64 = 101;
+/** Error and overload frames are bus events; they are not imported, but each one is reported (as an ASC ErrorFrame row is). */
+const CAN_ERROR = 2;
+const CAN_OVERLOAD = 3;
+const CAN_ERROR_EXT = 73;
+const CAN_FD_ERROR_64 = 104;
+/**
+ * Objects that only describe the measurement, not traffic on a bus: CAN_STATISTIC (4), APP_TRIGGER (5), ENV_* (6–9),
+ * REALTIMECLOCK (51), APP_TEXT (65), GLOBAL_MARKER (96), and RESTORE_POINT_CONTAINER (115, file structure written after
+ * the containers). Every other object that is not imported is reported.
+ */
+const DESCRIPTIVE_OBJECTS: ReadonlySet<number> = new Set([4, 5, 6, 7, 8, 9, 51, 65, 96, 115]);
+/** Classic CAN flags: the frame is a remote frame (no data bytes). */
+const REMOTE_FLAG = 0x80;
 const TEN_MICROSECONDS = 0x1;
 const NANOSECONDS = 0x2;
 const EXTENDED_ID = 0x80000000;
@@ -75,6 +88,13 @@ export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfPar
     }]);
   };
 
+  const appendFrame = (frame: Omit<CanFrame, 'id' | 'sourceId'>) => {
+    const normalized = { ...frame, id: `${options.sourceId}:blf:${sequence++}`, sourceId: options.sourceId };
+    pendingFrames.push(normalized);
+    if (pendingFrames.length >= 1000) flushFrames();
+    framesParsed++;
+  };
+
   if (buffer.length < 8 || buffer.toString('ascii', 0, 4) !== 'LOGG') {
     report('BLF_SIGNATURE', 'error', 'The file does not contain a Vector BLF LOGG signature.', 0);
     return summary(buffer.length, bytesRead, framesParsed, diagnosticCount, false);
@@ -116,16 +136,14 @@ export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfPar
             report('BLF_CONTAINER_SIZE', 'warning', 'The expanded LogContainer size differs from the declared size.', offset, { expectedSize, actualSize: contents.length });
           }
           const combined = containerTail.length ? Buffer.concat([containerTail, contents]) : contents;
-          containerTail = parseObjects(combined, startTimestamp, options, report, (frame) => {
-            const normalized = { ...frame, id: `${options.sourceId}:blf:${sequence++}`, sourceId: options.sourceId };
-            pendingFrames.push(normalized);
-            if (pendingFrames.length >= 1000) flushFrames();
-            framesParsed++;
-          });
+          containerTail = parseObjects(combined, startTimestamp, options, report, appendFrame);
         } catch (error) {
           report('BLF_CONTAINER_DECOMPRESSION', 'error', `LogContainer decompression failed: ${(error as Error).message}`, offset);
         }
       }
+    } else {
+      // An object outside any LogContainer (an uncompressed BLF) is read the same way as one inside, and reported when it is not imported.
+      parseObjects(buffer.subarray(offset, offset + header.objectSize), startTimestamp, options, report, appendFrame);
     }
     bytesRead = Math.min(buffer.length, offset + header.objectSize);
     options.onProgress?.({ framesParsed, bytesRead, totalBytes: buffer.length });
@@ -189,6 +207,9 @@ function parseObjects(
           : undefined;
     if (frame === null) report('BLF_MESSAGE_TRUNCATED', 'warning', `BLF CAN object ${header.objectType} is shorter than its public layout and was skipped.`, offset, { objectType: header.objectType });
     else if (frame) append(frame);
+    else if (header.objectType === CAN_ERROR || header.objectType === CAN_ERROR_EXT || header.objectType === CAN_FD_ERROR_64) report('BLF_ERROR_FRAME', 'warning', 'CAN error frame was not imported.', offset, { objectType: header.objectType });
+    else if (header.objectType === CAN_OVERLOAD) report('BLF_OVERLOAD_FRAME', 'warning', 'CAN overload frame was not imported.', offset, { objectType: header.objectType });
+    else if (!DESCRIPTIVE_OBJECTS.has(header.objectType)) report('BLF_OBJECT_UNSUPPORTED', 'warning', `BLF object type ${header.objectType} was not imported.`, offset, { objectType: header.objectType });
     offset += header.objectSize;
   }
   return buffer.subarray(offset);
@@ -199,7 +220,8 @@ function classicFrame(buffer: Buffer, header: ObjectHeader, startTimestamp: numb
   if (p + 16 > header.offset + header.objectSize) return null;
   const dlcCode = buffer.readUInt8(p + 3);
   const id = decodeCanId(buffer.readUInt32LE(p + 4));
-  const dataLength = Math.min(dlcCode, 8);
+  // A remote frame keeps its DLC but carries no data, as an ASC "r" row.
+  const dataLength = buffer.readUInt8(p + 2) & REMOTE_FLAG ? 0 : Math.min(dlcCode, 8);
   return frame(header, startTimestamp, id, buffer.readUInt16LE(p), buffer.readUInt8(p + 2) & TX_FLAG ? 'Tx' : 'Rx', dlcCode, buffer.subarray(p + 8, p + 8 + dataLength));
 }
 

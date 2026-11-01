@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { InMemorySignalStore } from '../src/core/signal/signalStore';
 import type { ManualDecodedSignal } from '../src/core/manual/manualDecoder';
 import type { SignalDefinition } from '../src/core/signal/signal';
+import { crossesSeriesGap } from '../src/webview/shared/chartSeries';
 import { downsampleEven, nearestSample, normalizeValue, samplesInRange, samplesInRangeWithContext } from '../src/core/timeline/timeline';
 
 const speed: SignalDefinition = { id: 'frame-a:speed', name: 'Value', unit: 'km/h', source: { type: 'manual-can', frameDefinitionId: 'frame-a' } };
@@ -158,4 +159,52 @@ test('measuredSignalIds lists only the Signals that have samples', () => {
   const store = new InMemorySignalStore(); store.registerDefinitions([speed, temperature]);
   store.appendFrame('a:0', 0, [decoded(speed, 0, 10)]); store.finalize();
   assert.deepEqual(store.measuredSignalIds(), [speed.id]); assert.equal(store.catalog().length, 2, 'the catalog still has every definition');
+});
+
+test('more than 2000 breaks are all kept: the line after the 2000th break is still drawn', () => {
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed]);
+  const samples: { timestamp: number; value: number; quality: 'valid' }[] = [];
+  // 3000 short runs of three samples 10 ms apart, each followed by a 1 s pause in reception.
+  for (let run = 0; run < 3000; run++) for (let index = 0; index < 3; index++) samples.push({ timestamp: run * 1.03 + index * 0.01, value: index, quality: 'valid' });
+  store.appendSeries(speed, samples);
+  const [all] = store.seriesSlice([speed.id], undefined, 50_000_000);
+  assert.equal(all.gaps.length, 2999);
+  const last = samples.length - 1;
+  assert.equal(crossesSeriesGap(all.gaps, samples[last - 1].timestamp, samples[last].timestamp), false);
+  // A screen-sized budget merges only breaks closer than one drawn point; it never reaches past the data.
+  const [screen] = store.seriesSlice([speed.id], undefined, 4000);
+  assert.ok(screen.gaps.length <= 4000);
+  assert.ok(screen.gaps.at(-1)!.endTimestamp <= samples[last].timestamp);
+  assert.equal(crossesSeriesGap(screen.gaps, samples[last - 1].timestamp, samples[last].timestamp), false);
+});
+
+test('Table width rows scan every row: the widest value and state name of each column, and first and last time', () => {
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed, temperature]);
+  for (let index = 0; index < 3000; index++) {
+    const value = index === 1777 ? 1234567 : index % 10;
+    store.appendFrame(`a:${index}`, index, [decoded(speed, index, value), ...(index === 2222 ? [{ ...decoded(temperature, index, 1), sample: { timestamp: index, value: 1, quality: 'valid' as const, valueLabel: 'とても長い状態の名前' } }] : [])]);
+  }
+  store.finalize();
+  const rows = store.tableWidthRows([speed.id, temperature.id]);
+  const ids = rows.map((row) => row.id);
+  assert.ok(ids.includes('a:1777')); assert.ok(ids.includes('a:2222'));
+  assert.ok(ids.includes('a:0')); assert.ok(ids.includes('a:2999'));
+  assert.ok(rows.length <= 8);
+});
+
+test('RAW decoded text cells count every Signal tag of a frame, wide characters twice', () => {
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed]);
+  store.appendFrame('a:0', 0, [decoded(speed, 0, 12)]);
+  store.appendFrame('a:1', 1, [{ ...decoded(speed, 1, 1), sample: { timestamp: 1, value: 1, quality: 'valid', valueLabel: '停止' } }]);
+  // "Value=12 km/h" = 13 cells + 7 for separator and chip padding.
+  assert.equal(store.frameTextCells('a:0'), 20);
+  assert.equal(store.frameTextCells('a:1'), 12 + 4 + 3 + 7);
+  assert.equal(store.frameTextCells('missing'), 0);
+});
+
+test('RAW decoded text cells leave Plugin Signals to the caller, which counts the tags the RAW log shows', () => {
+  const plugin: SignalDefinition = { id: 'p:x', name: 'X', source: { type: 'plugin', pluginId: 'p', bindingId: 'b' } };
+  const store = new InMemorySignalStore(); store.registerDefinitions([plugin]);
+  store.appendFrame('p:0', 0, [{ definition: plugin, sample: { timestamp: 0, value: 0.1 + 0.2, quality: 'valid' } }]);
+  assert.equal(store.frameTextCells('p:0'), 0);
 });

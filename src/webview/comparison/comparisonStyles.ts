@@ -86,9 +86,14 @@ canvas{display:block}
 .display-settings>summary{padding:var(--sm-space-md) 0;cursor:pointer;font-weight:var(--sm-weight-semibold)}
 .settings-row{display:flex;align-items:center;flex-wrap:wrap;gap:var(--sm-space-md);margin:var(--sm-space-xs) 0}.settings-row[hidden]{display:none}
 .trajectory-axes{padding:var(--sm-space-md) 0;display:grid;gap:var(--sm-space-sm)}
+.trajectory-series-name{display:flex;align-items:center;gap:var(--sm-space-sm);font-size:var(--sm-font-small);font-weight:var(--sm-weight-semibold)}.trajectory-series-name i{flex:0 0 auto;width:14px;height:3px}
 .trajectory-axis-row{display:grid;grid-template-columns:72px minmax(0,1fr);align-items:center;gap:var(--sm-space-sm);font-size:var(--sm-font-small)}
 .trajectory-axis-row select{min-width:0;width:100%}
 .visualize-card[data-kind=trajectory] canvas{cursor:grab}
+.visualize-card[data-kind=trajectory] canvas.measurement-mode{cursor:crosshair}
+.trajectory-measurement{display:flex;align-items:center;gap:var(--sm-space-md);min-height:35px;padding:var(--sm-space-xs) var(--sm-space-md);border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-editorGroupHeader-tabsBackground,var(--vscode-editor-background));font-size:var(--sm-font-small)}
+.trajectory-measurement[hidden]{display:none}
+.trajectory-measurement-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--vscode-editor-font-family)}
 .chart-option{display:flex;align-items:center;gap:var(--sm-space-xs);white-space:nowrap;font-size:var(--sm-font-small)}
 .chart-option input{margin:0}
 .axis-mode{display:flex;align-items:center;gap:var(--sm-space-sm);white-space:nowrap;font-size:var(--sm-font-small)}

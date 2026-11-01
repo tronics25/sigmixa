@@ -90,6 +90,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       else if (update.type === 'sourceDiagnostics') void send({ type: 'sourceDiagnostics', groups: update.groups, total: update.total });
       else if (update.type === 'analysisDiagnostics') void send({ type: 'analysisDiagnostics', groups: update.groups, total: update.total });
       else if (update.type === 'analysisProgress') void send({ type: 'analysisProgress', processed: update.processed, total: update.total });
+      else if (update.type === 'searchProgress') void send({ type: 'searchProgress', complete: update.complete });
       else if (update.type === 'analysisComplete') void send({ type: 'analysisComplete', processed: update.processed, cancelled: update.cancelled });
       else if (update.type === 'timeReference') void send({ type: 'timeReference', reference: update.reference });
       else {
@@ -181,14 +182,14 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       } else if (message.type === 'openText') {
         void vscode.workspace.openTextDocument({ content: message.text, language: 'plaintext' }).then((textDocument) => vscode.window.showTextDocument(textDocument, { viewColumn: vscode.ViewColumn.Beside, preview: false }));
       } else if (message.type === 'lastFramesRequest') {
-        void send({ type: 'lastFrames', requestId: message.requestId, timestamp: message.timestamp, values: document.lastFrames(message.timestamp) });
+        void document.lastFrames(message.timestamp).then((values) => send({ type: 'lastFrames', requestId: message.requestId, timestamp: message.timestamp, values }));
       } else if (message.type === 'pageRequest') {
         const page = document.query({ offset: message.offset, limit: message.limit, filter: message.filter }, sourceProject(this.projectStore, document.uri), this.projectStore.analysisRevision);
         void send({ type: 'page', requestId: message.requestId, ...page });
       } else if (message.type === 'cancelParsing') {
         document.cancel();
       } else if (message.type === 'autoFitSampleRequest') {
-        void send({ type: 'autoFitSample', requestId: message.requestId, rows: document.sample({ filter: message.filter }, sourceProject(this.projectStore, document.uri), this.projectStore.analysisRevision) });
+        void document.widthRows({ filter: message.filter }, sourceProject(this.projectStore, document.uri), this.projectStore.analysisRevision).then((rows) => send({ type: 'autoFitSample', requestId: message.requestId, rows }));
       } else if (message.type === 'openFrameDefinition') {
         this.frameEditor.open(message.definitionId, undefined, sourceGroup(this.projectStore, document.uri)?.frames.some((frame) => frame.id === message.definitionId) ? sourceGroup(this.projectStore, document.uri)?.id : undefined);
       } else if (message.type === 'registerFrame') {
@@ -208,8 +209,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
           rows: page.rows.map((row) => ({ id: row.id, timestamp: row.timestamp, values: Object.fromEntries(Array.from(row.values, ([id, sample]) => [id, sample.value])), valueLabels: Object.fromEntries(Array.from(row.values).flatMap(([id, sample]) => sample.valueLabel ? [[id, sample.valueLabel]] : [])), changes: row.changes })),
         });
       } else if (message.type === 'signalTableSampleRequest') {
-        const rows = document.signalTableSample(message.selectedIds);
-        void send({ type: 'signalTableSample', requestId: message.requestId, rows: rows.map((row) => ({ id: row.id, timestamp: row.timestamp, values: Object.fromEntries(Array.from(row.values, ([id, sample]) => [id, sample.value])), valueLabels: Object.fromEntries(Array.from(row.values).flatMap(([id, sample]) => sample.valueLabel ? [[id, sample.valueLabel]] : [])) })) });
+        void document.signalTableWidthRows(message.selectedIds).then((rows) => send({ type: 'signalTableSample', requestId: message.requestId, rows: rows.map((row) => ({ id: row.id, timestamp: row.timestamp, values: Object.fromEntries(Array.from(row.values, ([id, sample]) => [id, sample.value])), valueLabels: Object.fromEntries(Array.from(row.values).flatMap(([id, sample]) => sample.valueLabel ? [[id, sample.valueLabel]] : [])) })) }));
       } else if (message.type === 'signalTableRowsRequest') {
         void this.transferSignalTableRows(document, message, send);
       } else if (message.type === 'measuredSignalsRequest') {

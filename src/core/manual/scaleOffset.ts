@@ -1,11 +1,15 @@
 import type { ManualConversion } from './manualDefinition';
 
 interface Rational { readonly numerator: bigint; readonly denominator: bigint }
-interface CompiledConversion { readonly source: string; readonly offset: number; readonly lsb: number; readonly multiplier: bigint; readonly addend: bigint; readonly denominator: bigint; readonly binaryShift?: bigint; readonly offsetRatio: Rational }
+interface CompiledConversion {
+  readonly source: string; readonly offset: number; readonly lsb: number; readonly multiplier: bigint; readonly addend: bigint; readonly denominator: bigint; readonly binaryShift?: bigint; readonly offsetRatio: Rational;
+  /** The same numbers as doubles, when they are exact; a quotient of two exact doubles is the correctly rounded value. */
+  readonly fast?: { readonly multiplier: number; readonly addend: number; readonly denominator: number; readonly shift?: number; readonly offsetNumerator: number; readonly offsetDenominator: number };
+}
 const cache = new WeakMap<ManualConversion, CompiledConversion>();
 
 /** Scale selects integer shifts or exact rational conversion; Offset is applied afterward. */
-export function convertScaleOffset(raw: bigint, conversion: ManualConversion): number {
+export function convertScaleOffset(rawValue: bigint | number, conversion: ManualConversion): number {
   let compiled = cache.get(conversion);
   if (!compiled || compiled.source !== conversion.lsbText || compiled.offset !== conversion.offset || compiled.lsb !== conversion.lsb) {
     const scale = parseRational(conversion.lsbText) ?? parseRational(String(conversion.lsb));
@@ -16,10 +20,29 @@ export function convertScaleOffset(raw: bigint, conversion: ManualConversion): n
     const denominator = scale.denominator * offset.denominator;
     const divisor = gcd(gcd(multiplier, addend), denominator);
     const reduced = denominator / divisor;
+    const binaryShift = binaryScaleShift(scale);
     compiled = { source: conversion.lsbText, lsb: conversion.lsb, offset: conversion.offset, multiplier: multiplier / divisor, addend: addend / divisor, denominator: reduced,
-      binaryShift: binaryScaleShift(scale), offsetRatio: offset };
+      binaryShift, offsetRatio: offset };
+    const exact = [compiled.multiplier, compiled.addend, compiled.denominator, offset.numerator, offset.denominator].every((value) => Number.isSafeInteger(Number(value)));
+    if (exact && (binaryShift === undefined || (binaryShift >= -52n && binaryShift <= 52n))) compiled = { ...compiled, fast: { multiplier: Number(compiled.multiplier), addend: Number(compiled.addend), denominator: Number(compiled.denominator),
+      shift: binaryShift === undefined ? undefined : Number(binaryShift), offsetNumerator: Number(offset.numerator), offsetDenominator: Number(offset.denominator) } };
     cache.set(conversion, compiled);
   }
+  const fast = compiled.fast;
+  if (fast && typeof rawValue === 'number' && Number.isSafeInteger(rawValue)) {
+    // Same arithmetic as below in doubles, used only while every step is an exact integer.
+    if (fast.shift !== undefined) {
+      const shifted = fast.shift >= 0 ? rawValue * 2 ** fast.shift : Math.floor(rawValue / 2 ** -fast.shift);
+      const scaled = fast.multiplier < 0 ? -shifted : shifted;
+      if (!Number.isSafeInteger(scaled)) return Number.NaN;
+      const numerator = scaled * fast.offsetDenominator + fast.offsetNumerator;
+      if (Number.isSafeInteger(scaled * fast.offsetDenominator) && Number.isSafeInteger(numerator)) return numerator === 0 ? 0 : numerator / fast.offsetDenominator;
+    } else {
+      const product = rawValue * fast.multiplier; const numerator = product + fast.addend;
+      if (Number.isSafeInteger(product) && Number.isSafeInteger(numerator)) return numerator === 0 ? 0 : numerator / fast.denominator;
+    }
+  }
+  const raw = typeof rawValue === 'bigint' ? rawValue : BigInt(rawValue);
   if (compiled.binaryShift !== undefined) {
     // Shift RAW first, then add Offset. BigInt preserves wide integers and arithmetic signed shifts.
     const shifted = compiled.binaryShift >= 0n ? raw << compiled.binaryShift : raw >> -compiled.binaryShift;

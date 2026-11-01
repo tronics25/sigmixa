@@ -2,7 +2,7 @@ import type { Diagnostic } from '../diagnostics/diagnostic';
 import { createDiagnostic } from '../diagnostics/diagnostic';
 import type { CanFrame } from '../frame/canFrame';
 import type { SignalDefinition, SignalSample } from '../signal/signal';
-import { extractBits } from './bits';
+import { extractBits, extractRaw, floatFromBits } from './bits';
 import type { ManualFrameDefinition, ManualSignalDefinition } from './manualDefinition';
 import { isSignalActive, signalDefinitionFor, valueLabelFor } from './manualDefinition';
 import type { ManualDerivedSignalDefinition } from './manualDefinition';
@@ -19,7 +19,8 @@ export interface ManualDecodedSignal {
   readonly signal: ManualSignalDefinition | ManualDerivedSignalDefinition;
   readonly definition: SignalDefinition;
   readonly sample: SignalSample;
-  readonly raw?: bigint;
+  /** The RAW integer; for a Float Signal, its IEEE 754 value. */
+  readonly raw?: bigint | number;
 }
 
 export interface ManualDecodeResult {
@@ -36,7 +37,7 @@ export function decodeManualFrame(frame: CanFrame, definition: ManualFrameDefini
   const diagnostics: Diagnostic[] = [];
   const values: Record<string, number> = {};
   if (!frameMatchesDefinition(frame, definition)) return { decoded, diagnostics };
-  const multiplexer = definition.multiplexing ? definition.signals.find((signal) => signal.multiplexing?.type === 'multiplexer') : undefined;
+  const multiplexer = definition.multiplexing ? multiplexerOf(definition) : undefined;
   let multiplexerValue: number | undefined;
   if (multiplexer) {
     try { multiplexerValue = Number(extractBits(frame.data, multiplexer.byteOffset, multiplexer.bitOffset, multiplexer.lengthBits, multiplexer.byteOrder, 'unsigned')); }
@@ -44,23 +45,33 @@ export function decodeManualFrame(frame: CanFrame, definition: ManualFrameDefini
   }
   for (const signal of definition.signals) {
     if (!isSignalActive(signal, multiplexerValue)) continue;
-    const location = { sourceId: frame.sourceId, frameId: frame.id };
-    let raw: bigint;
+    let raw: bigint | number;
     try {
-      raw = extractBits(frame.data, signal.byteOffset, signal.bitOffset, signal.lengthBits, signal.byteOrder, signal.signedness);
+      raw = extractRaw(frame.data, signal.byteOffset, signal.bitOffset, signal.lengthBits, signal.byteOrder, signal.signedness);
     } catch (error) {
       diagnostics.push(createDiagnostic({
         source: 'definition', code: 'FRAME_TOO_SHORT', severity: 'warning',
-        message: `${signal.name}: ${(error as Error).message}`, location,
+        message: `${signal.name}: ${(error as Error).message}`, location: { sourceId: frame.sourceId, frameId: frame.id },
         details: { signalId: signal.id, definitionId: definition.id },
       }));
+      continue;
+    }
+    if (signal.signedness === 'float') {
+      // An IEEE 754 Signal: its bits are the value, then scaled like any Signal. NaN and infinities are not values.
+      const rawFloat = floatFromBits(BigInt(raw), signal.lengthBits); const value = rawFloat * signal.conversion.lsb + signal.conversion.offset;
+      if (!Number.isFinite(value)) {
+        diagnostics.push(createDiagnostic({ source: 'definition', code: 'SIGNAL_VALUE_NONFINITE', severity: 'warning', message: `${signal.name}: converted value is not finite.`, location: { sourceId: frame.sourceId, frameId: frame.id }, details: { signalId: signal.id, definitionId: definition.id } }));
+        continue;
+      }
+      decoded.push({ signal, definition: signalDefinitionFor(definition, signal), sample: { timestamp: frame.timestamp, value, quality: 'valid' }, raw: rawFloat });
+      values[signal.name] = value;
       continue;
     }
     const rawNumber = Number(raw);
     if (!Number.isSafeInteger(rawNumber)) {
       diagnostics.push(createDiagnostic({
         source: 'definition', code: 'SIGNAL_INTEGER_UNSAFE', severity: 'warning',
-        message: `${signal.name}: decoded integer cannot be represented exactly as a JavaScript number.`, location,
+        message: `${signal.name}: decoded integer cannot be represented exactly as a JavaScript number.`, location: { sourceId: frame.sourceId, frameId: frame.id },
         details: { signalId: signal.id, definitionId: definition.id },
       }));
       continue;
@@ -69,21 +80,21 @@ export function decodeManualFrame(frame: CanFrame, definition: ManualFrameDefini
     if (!Number.isFinite(value)) {
       diagnostics.push(createDiagnostic({
         source: 'definition', code: 'SIGNAL_VALUE_NONFINITE', severity: 'warning',
-        message: `${signal.name}: converted value is not finite.`, location,
+        message: `${signal.name}: converted value is not finite.`, location: { sourceId: frame.sourceId, frameId: frame.id },
         details: { signalId: signal.id, definitionId: definition.id },
       }));
       continue;
     }
+    const valueLabel = valueLabelFor(signal.valueLabels, raw);
     decoded.push({
       signal,
       definition: signalDefinitionFor(definition, signal),
-      sample: { timestamp: frame.timestamp, value, quality: 'valid', ...(valueLabelFor(signal.valueLabels, raw) !== undefined ? { valueLabel: valueLabelFor(signal.valueLabels, raw) } : {}) },
+      sample: valueLabel !== undefined ? { timestamp: frame.timestamp, value, quality: 'valid', valueLabel } : { timestamp: frame.timestamp, value, quality: 'valid' },
       raw,
     });
     values[signal.name] = value;
   }
   for (const signal of definition.derivedSignals ?? []) {
-    const location = { sourceId: frame.sourceId, frameId: frame.id };
     try {
       const previous = context.filters.get(`${definition.id}:${signal.id}`);
       const previousValue = previous?.value;
@@ -95,7 +106,7 @@ export function decodeManualFrame(frame: CanFrame, definition: ManualFrameDefini
       decoded.push({ signal, definition: signalDefinitionFor(definition, signal), sample: { timestamp: frame.timestamp, value, quality: 'valid', ...(filterEvidence ? { filterEvidence } : {}) } });
       values[signal.name] = value;
     } catch (error) {
-      diagnostics.push(createDiagnostic({ source: 'definition', code: 'DERIVED_SIGNAL_EVALUATION_ERROR', severity: 'warning', message: `${signal.name}: ${(error as Error).message}`, location, details: { signalId: signal.id, definitionId: definition.id } }));
+      diagnostics.push(createDiagnostic({ source: 'definition', code: 'DERIVED_SIGNAL_EVALUATION_ERROR', severity: 'warning', message: `${signal.name}: ${(error as Error).message}`, location: { sourceId: frame.sourceId, frameId: frame.id }, details: { signalId: signal.id, definitionId: definition.id } }));
     }
   }
   return { decoded, diagnostics };
@@ -130,8 +141,17 @@ function evaluateDerived(signal: ManualDerivedSignalDefinition, values: Readonly
   state.lastTimestamp = timestamp; return state.value;
 }
 
-function lookup(pointsValue: readonly { readonly input: number; readonly output: number }[], input: number, outOfRange: 'clamp' | 'error'): number {
-  const points = [...pointsValue].sort((left, right) => left.input - right.input);
+const multiplexers = new WeakMap<ManualFrameDefinition, { readonly signals: readonly ManualSignalDefinition[]; readonly multiplexer: ManualSignalDefinition | undefined }>();
+function multiplexerOf(definition: ManualFrameDefinition): ManualSignalDefinition | undefined {
+  const cached = multiplexers.get(definition); if (cached?.signals === definition.signals) return cached.multiplexer;
+  const multiplexer = definition.signals.find((signal) => signal.multiplexing?.type === 'multiplexer'); multiplexers.set(definition, { signals: definition.signals, multiplexer }); return multiplexer;
+}
+
+type LookupPoints = readonly { readonly input: number; readonly output: number }[];
+const sortedLookups = new WeakMap<LookupPoints, LookupPoints>();
+function lookup(pointsValue: LookupPoints, input: number, outOfRange: 'clamp' | 'error'): number {
+  let points = sortedLookups.get(pointsValue);
+  if (!points) { points = [...pointsValue].sort((left, right) => left.input - right.input); sortedLookups.set(pointsValue, points); }
   if (points.length < 2) throw new Error('Lookup Table requires at least two points.');
   if (input < points[0].input || input > points[points.length - 1].input) {
     if (outOfRange === 'error') throw new Error(`Input ${input} is outside the Lookup Table range.`);

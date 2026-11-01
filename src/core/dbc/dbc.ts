@@ -56,6 +56,16 @@ export function importDbc(text: string, sourceId = 'database.dbc'): DbcImportRes
     current.frame = { ...current.frame, multiplexing: current.frame.multiplexing || Boolean(marker), signals: [...current.frame.signals, definition] };
   });
   finish();
+  // SIG_VALTYPE_ <message> <signal> : 1 (float, 32 bits) | 2 (double, 64 bits); a Signal without one is an integer.
+  lines.forEach((line, index) => {
+    const match = /^\s*SIG_VALTYPE_\s+(0x[0-9a-f]+|\d+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:?\s*(\d+)\s*;/i.exec(line); if (!match) return;
+    const decoded = decodeDbcMessageId(Number(match[1])); const frameIndex = decoded ? frames.findIndex((frame) => frame.canId === decoded.canId && frame.extended === decoded.extended) : -1;
+    const target = frames[frameIndex]?.signals.find((signal) => signal.name === match[2]);
+    if (!target) { diagnostics.push(diagnostic(sourceId, index + 1, 'DBC_VALUE_TYPE_REFERENCE', `SIG_VALTYPE_ references an unknown Signal ${match[2]}.`, 'warning')); return; }
+    const type = Number(match[3]); if (type === 0) return;
+    if ((type !== 1 && type !== 2) || target.lengthBits !== (type === 1 ? 32 : 64)) { diagnostics.push(diagnostic(sourceId, index + 1, 'DBC_VALUE_TYPE_INVALID', `${target.name}: SIG_VALTYPE_ ${type} does not match its ${target.lengthBits}-bit length.`)); return; }
+    frames[frameIndex] = { ...frames[frameIndex], signals: frames[frameIndex].signals.map((signal) => signal.id === target.id ? { ...signal, signedness: 'float' as const } : signal) };
+  });
   // VAL_ records may span lines; a semicolon inside a quoted label is not a terminator.
   const valueRecords = /^[ \t]*VAL_[ \t]+(\d+|0x[0-9a-f]+)[ \t]+([A-Za-z_][A-Za-z0-9_]*)\s+((?:"(?:\\.|[^"\\])*"|[^";])*);/gmi;
   const records = [...text.matchAll(valueRecords)];
@@ -103,7 +113,7 @@ export function exportDbc(frames: readonly ManualFrameDefinition[]): DbcExportRe
   const diagnostics: Diagnostic[] = []; const lines = [
     'VERSION ""', '', 'NS_ :', '', 'BS_:', '', 'BU_: Vector__XXX', '',
   ];
-  const usedMessageNames = new Set<string>();
+  const usedMessageNames = new Set<string>(); const valueTypeLines: string[] = [];
   for (const frame of frames) {
     const validation = validateFrameDefinition(frame);
     if (!validation.valid) { diagnostics.push(...validation.diagnostics); continue; }
@@ -118,7 +128,8 @@ export function exportDbc(frames: readonly ManualFrameDefinition[]): DbcExportRe
       signalNames.set(signal.id, signalName);
       if (signalName !== signal.name) diagnostics.push(diagnostic('export.dbc', undefined, 'DBC_NAME_NORMALIZED', `“${signal.name}” was exported as DBC identifier “${signalName}”.`, 'warning'));
       const start = manualStartToDbc(signal.byteOffset, signal.bitOffset, signal.byteOrder);
-      const byteOrder = signal.byteOrder === 'little' ? '1' : '0'; const sign = signal.signedness === 'signed' ? '-' : '+';
+      const byteOrder = signal.byteOrder === 'little' ? '1' : '0'; const sign = signal.signedness === 'unsigned' ? '+' : '-';
+      if (signal.signedness === 'float') valueTypeLines.push(`SIG_VALTYPE_ ${dbcId} ${signalName} : ${signal.lengthBits === 64 ? 2 : 1};`);
       const [minimum, maximum] = physicalRange(signal);
       const marker = signal.multiplexing?.type === 'multiplexer' ? ' M' : signal.multiplexing?.type === 'conditional' ? ` m${signal.multiplexing.ranges[0]?.from ?? 0}` : '';
       lines.push(` SG_ ${signalName}${marker} : ${start}|${signal.lengthBits}@${byteOrder}${sign} (${numberText(signal.conversion.lsb)},${numberText(signal.conversion.offset)}) [${numberText(minimum)}|${numberText(maximum)}] "${escapeDbc(signal.unit)}" Vector__XXX`);
@@ -133,6 +144,8 @@ export function exportDbc(frames: readonly ManualFrameDefinition[]): DbcExportRe
     if (frame.derivedSignals?.length) diagnostics.push(diagnostic('export.dbc', undefined, 'DBC_DERIVED_SIGNALS_SKIPPED', `${frame.name}: ${frame.derivedSignals.length} Derived Signal definition(s) were not exported because standard DBC SG_ entries cannot preserve their operations.`, 'warning'));
     lines.push('');
   }
+  // SIG_VALTYPE_ records follow the messages, as DBC writers place them.
+  if (valueTypeLines.length) lines.push(...valueTypeLines, '');
   return { text: `${lines.join('\n').trimEnd()}\n`, diagnostics };
 }
 
@@ -159,6 +172,8 @@ function decodeDbcMessageId(rawId: number): { canId: number; extended: boolean }
 
 function physicalRange(signal: ManualSignalDefinition): readonly [number, number] {
   if (signal.minimum !== undefined && signal.maximum !== undefined) return [signal.minimum, signal.maximum];
+  // A Float Signal has no integer range; [0|0] is DBC's "not given".
+  if (signal.signedness === 'float') return [signal.minimum ?? 0, signal.maximum ?? 0];
   const signed = signal.signedness === 'signed'; const rawMinimum = signed ? -(2 ** (signal.lengthBits - 1)) : 0; const rawMaximum = signed ? 2 ** (signal.lengthBits - 1) - 1 : 2 ** signal.lengthBits - 1;
   const first = rawMinimum * signal.conversion.lsb + signal.conversion.offset; const last = rawMaximum * signal.conversion.lsb + signal.conversion.offset;
   return [signal.minimum ?? Math.min(first, last), signal.maximum ?? Math.max(first, last)];

@@ -150,3 +150,38 @@ function parseFixture(name: string): { readonly frames: CanFrame[]; readonly dia
   parseBlfBuffer(readFileSync(`tests/fixtures/python-can/${name}`), { sourceId: name, onFrames: (items) => frames.push(...items), onDiagnostics: (items) => diagnostics.push(...items) });
   return { frames, diagnostics };
 }
+
+test('BLF error and overload frames and unknown bus objects are reported, not dropped silently; descriptive objects stay quiet', () => {
+  const inner = Buffer.concat([
+    object(1, classic(1, 0, 0x100, [1]), 1_000_000_000n),
+    object(2, Buffer.alloc(8), 2_000_000_000n),
+    object(73, Buffer.alloc(32), 3_000_000_000n),
+    object(3, Buffer.alloc(8), 4_000_000_000n),
+    object(65, Buffer.alloc(16), 5_000_000_000n),
+    object(17, Buffer.alloc(16), 6_000_000_000n),
+  ]);
+  const frames: CanFrame[] = []; const diagnostics: Diagnostic[] = [];
+  parseBlfBuffer(blf(inner, true), { sourceId: 'events.blf', onFrames: (items) => frames.push(...items), onDiagnostics: (items) => diagnostics.push(...items) });
+  assert.equal(frames.length, 1);
+  assert.deepEqual(diagnostics.map((item) => [item.code, item.message]), [
+    ['BLF_ERROR_FRAME', 'CAN error frame was not imported.'],
+    ['BLF_ERROR_FRAME', 'CAN error frame was not imported.'],
+    ['BLF_OVERLOAD_FRAME', 'CAN overload frame was not imported.'],
+    ['BLF_OBJECT_UNSUPPORTED', 'BLF object type 17 was not imported.'],
+  ]);
+});
+
+test('a BLF remote frame keeps its DLC and has no data, as an ASC "r" row', () => {
+  const payload = classic(1, 0, 0x321, [9, 9, 9, 9]); payload.writeUInt8(0x80, 2);
+  const frames: CanFrame[] = [];
+  parseBlfBuffer(blf(object(1, payload, 1_000_000_000n), true), { sourceId: 'rtr.blf', onFrames: (items) => frames.push(...items), onDiagnostics: () => undefined });
+  assert.deepEqual(frames.map((frame) => [frame.canId, frame.dlcCode, frame.dataLength, [...frame.data]]), [[0x321, 4, 0, []]]);
+});
+
+test('CAN objects outside any LogContainer are imported too', () => {
+  const fileHeader = Buffer.alloc(144); fileHeader.write('LOGG'); fileHeader.writeUInt32LE(fileHeader.length, 4);
+  const frames: CanFrame[] = []; const diagnostics: Diagnostic[] = [];
+  parseBlfBuffer(Buffer.concat([fileHeader, object(1, classic(2, 1, 0x55, [1, 2]), 1_500_000_000n), object(2, Buffer.alloc(8), 2_000_000_000n)]), { sourceId: 'flat.blf', onFrames: (items) => frames.push(...items), onDiagnostics: (items) => diagnostics.push(...items) });
+  assert.deepEqual(frames.map((frame) => [frame.timestamp, frame.canId, frame.direction, frame.dataLength]), [[1.5, 0x55, 'Tx', 2]]);
+  assert.deepEqual(diagnostics.map((item) => item.code), ['BLF_ERROR_FRAME']);
+});

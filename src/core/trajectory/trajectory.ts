@@ -74,6 +74,9 @@ export function trajectorySceneFrame(points: readonly { x: number; y: number; z?
   return { center: [(x[0] + x[1]) / 2, (y[0] + y[1]) / 2, (z[0] + z[1]) / 2], span: span > 0 ? span : 1 };
 }
 
+/** The colour of a trajectory's series, by its place in the view. */
+export function trajectorySeriesColor(index: number): string { return `hsl(${210 + index * 83 % 360} 75% 60%)`; }
+
 /** Zoom range of the 3D camera, for the user's zoom and for fitting alike: wide enough to fill the view with a long, thin path seen end-on. */
 export const TRAJECTORY_ZOOM_LIMITS = { minimum: .1, maximum: 10_000 } as const;
 
@@ -129,6 +132,23 @@ export function trajectoryAxisEndpoints(minimum: number, maximum: number, invert
 export function trajectoryAxisDisplayValue(value: number, inverted: boolean): number {
   const displayed = inverted ? -value : value;
   return Object.is(displayed, -0) ? 0 : displayed;
+}
+
+/**
+ * A Clip's path ends at the Clip's edges: the sample outside each edge (marked `carried`) is replaced by the point where the
+ * line from it to the first/last point inside crosses the edge. These points are not measured data, so they stay `carried`.
+ */
+export function clipTrajectoryEdges(points: readonly TrajectoryPoint[], bounds: { readonly start: number; readonly end: number } | undefined): readonly TrajectoryPoint[] {
+  const result = [...points];
+  const between = (outside: TrajectoryPoint, inside: TrajectoryPoint | undefined, time: number | undefined): TrajectoryPoint | undefined => {
+    if (!inside || inside.carried || time === undefined || outside.timestamp === inside.timestamp || (time - outside.timestamp) * (time - inside.timestamp) > 0) return undefined;
+    const ratio = (time - outside.timestamp) / (inside.timestamp - outside.timestamp); const mix = (a: number, b: number) => a + (b - a) * ratio;
+    return { timestamp: time, x: mix(outside.x, inside.x), y: mix(outside.y, inside.y), ...(outside.z !== undefined && inside.z !== undefined ? { z: mix(outside.z, inside.z) } : {}), carried: true };
+  };
+  if (result.at(-1)?.carried && result.length > 1) { const edge = between(result.at(-1)!, result.at(-2), bounds?.end); result.pop(); if (edge) result.push(edge); }
+  else if (result.length === 1 && result[0].carried) return [];
+  if (result[0]?.carried) { const edge = between(result[0], result[1], bounds?.start); result.shift(); if (edge) result.unshift(edge); }
+  return result;
 }
 
 export function measureTrajectory(points: readonly TrajectoryPoint[], firstTimestamp: number, secondTimestamp: number): TrajectoryMeasurement | undefined {
