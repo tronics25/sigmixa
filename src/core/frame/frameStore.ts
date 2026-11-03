@@ -36,6 +36,13 @@ export interface FramePage {
   readonly complete?: boolean;
 }
 
+/** Frames as columns: frame `i` at index `i` of each, its payload at `data[dataOffsets[i]..dataOffsets[i + 1])`; flags 1 = extended, 2 = Tx. */
+export interface PackedFrameColumns {
+  readonly count: number;
+  readonly timestamps: Float64Array; readonly canIds: Uint32Array; readonly flags: Uint8Array; readonly channels: Uint32Array;
+  readonly dlcCodes: Uint8Array; readonly lengths: Uint8Array; readonly dataOffsets: Uint32Array; readonly data: Uint8Array;
+}
+
 export interface FrameStore {
   readonly size: number;
   readonly generation: number;
@@ -112,12 +119,21 @@ function matches(frame: CanFrame, filter: FrameFilter | undefined, context?: Fra
  * JavaScript heap. A CanFrame object is made only when a frame is read, so tens of millions of frames fit in memory.
  */
 class FrameChunk {
-  readonly timestamps: Float64Array; readonly canIds: Uint32Array; readonly flags: Uint8Array; readonly channels: Uint32Array;
-  readonly dlcCodes: Uint8Array; readonly lengths: Uint8Array; readonly payloadLengths: Uint8Array; readonly dataOffsets: Uint32Array; readonly sequences: Float64Array; readonly prefixes: Uint16Array;
+  readonly timestamps: Float64Array; readonly canIds: Uint32Array; readonly flags: Uint8Array;
+  readonly dlcCodes: Uint8Array; readonly lengths: Uint8Array; readonly dataOffsets: Uint32Array;
+  /** One byte per frame until a channel above 255 comes. */
+  channels: Uint8Array | Uint32Array;
+  /**
+   * The ID of frame `at` is `idPrefix`'s prefix followed by `idBase + at` while the chunk's IDs run on like that (as the
+   * bundled parsers give them); `prefixes`/`sequences` are made for a chunk whose IDs do not.
+   */
+  private idPrefix = -1; private idBase = 0; private prefixes?: Uint16Array; private sequences?: Float64Array;
+  /** The stored payload lengths, made only when one differs from its frame's length (`lengths`). */
+  private payloadLengths?: Uint8Array;
   data: Uint8Array; dataUsed = 0; length = 0;
   constructor(readonly capacity: number) {
-    this.timestamps = new Float64Array(capacity); this.canIds = new Uint32Array(capacity); this.flags = new Uint8Array(capacity); this.channels = new Uint32Array(capacity);
-    this.dlcCodes = new Uint8Array(capacity); this.lengths = new Uint8Array(capacity); this.payloadLengths = new Uint8Array(capacity); this.dataOffsets = new Uint32Array(capacity); this.sequences = new Float64Array(capacity); this.prefixes = new Uint16Array(capacity);
+    this.timestamps = new Float64Array(capacity); this.canIds = new Uint32Array(capacity); this.flags = new Uint8Array(capacity); this.channels = new Uint8Array(capacity);
+    this.dlcCodes = new Uint8Array(capacity); this.lengths = new Uint8Array(capacity); this.dataOffsets = new Uint32Array(capacity);
     this.data = new Uint8Array(Math.min(capacity * 8, 1 << 20));
   }
   reserve(bytes: number): void {
@@ -127,6 +143,29 @@ class FrameChunk {
   }
   /** Gives back the unused part of the payload buffer once the chunk is full. */
   trim(): void { if (this.data.length > this.dataUsed) this.data = this.data.slice(0, this.dataUsed); }
+
+  setChannel(at: number, channel: number): void { if (channel > 0xff && this.channels instanceof Uint8Array) this.widenChannels(); this.channels[at] = channel; }
+  widenChannels(): void { if (this.channels instanceof Uint8Array) this.channels = Uint32Array.from(this.channels); }
+
+  payloadLength(at: number): number { return this.payloadLengths ? this.payloadLengths[at] : this.lengths[at]; }
+  /** After `lengths[at]` is set. */
+  setPayloadLength(at: number, length: number): void {
+    if (!this.payloadLengths) { if (length === this.lengths[at]) return; this.payloadLengths = this.lengths.slice(); }
+    this.payloadLengths[at] = length;
+  }
+
+  prefix(at: number): number { return this.prefixes ? this.prefixes[at] : this.idPrefix; }
+  sequence(at: number): number { return this.sequences ? this.sequences[at] : this.idBase + at; }
+  /** Frames are given in order (`at` = the chunk's length). */
+  setId(at: number, prefix: number, sequence: number): void {
+    if (!this.prefixes) {
+      if (at === 0 && prefix !== 0xffff) { this.idPrefix = prefix; this.idBase = sequence; return; }
+      if (prefix === this.idPrefix && sequence === this.idBase + at) return;
+      this.prefixes = new Uint16Array(this.capacity).fill(this.idPrefix, 0, at); this.sequences = new Float64Array(this.capacity);
+      for (let index = 0; index < at; index++) this.sequences[index] = this.idBase + index;
+    }
+    this.prefixes[at] = prefix; this.sequences![at] = sequence;
+  }
 }
 
 const FLAG_EXTENDED = 1; const FLAG_TX = 2;
@@ -142,6 +181,8 @@ export class ChunkedFrameStore implements FrameStore {
   private readonly canRefIndexes = new Map<string, OrdinalIndex>();
   private readonly channelIndexes = new Map<number, OrdinalIndex>();
   private readonly directionIndexes = new Map<CanFrame['direction'], OrdinalIndex>();
+  /** Whether `channelIndexes` and `directionIndexes` are made yet (`indexRoutes`). */
+  private routeIndexed = false;
   private cachedMatches = new OrdinalIndex();
   private cachedSearchPattern: RegExp | null | undefined;
   /** The filter being applied to frames below `scanLimit` (those there when it was set); undefined once done. */
@@ -177,8 +218,8 @@ export class ChunkedFrameStore implements FrameStore {
   /** The ID of the frame at `ordinal`, without making the whole frame. */
   idAt(ordinal: number): string | undefined {
     if (ordinal < 0 || ordinal >= this.count) return undefined;
-    const chunk = this.chunks[Math.floor(ordinal / this.chunkSize)]; const at = ordinal % this.chunkSize; const prefixIndex = chunk.prefixes[at];
-    return prefixIndex === 0xffff ? this.otherIds.get(ordinal)!.id : `${this.idPrefixes[prefixIndex].prefix}${chunk.sequences[at]}`;
+    const chunk = this.chunks[Math.floor(ordinal / this.chunkSize)]; const at = ordinal % this.chunkSize; const prefixIndex = chunk.prefix(at);
+    return prefixIndex === 0xffff ? this.otherIds.get(ordinal)!.id : `${this.idPrefixes[prefixIndex].prefix}${chunk.sequence(at)}`;
   }
 
   /** The ordinal of a frame this store handed out. */
@@ -189,7 +230,7 @@ export class ChunkedFrameStore implements FrameStore {
       const ordinal = parsed.sequence + offset;
       if (ordinal >= 0 && ordinal < this.count) {
         const chunk = this.chunks[Math.floor(ordinal / this.chunkSize)]; const at = ordinal % this.chunkSize;
-        if (chunk.prefixes[at] === parsed.prefix && chunk.sequences[at] === parsed.sequence) return ordinal;
+        if (chunk.prefix(at) === parsed.prefix && chunk.sequence(at) === parsed.sequence) return ordinal;
       }
       return undefined;
     }
@@ -222,24 +263,83 @@ export class ChunkedFrameStore implements FrameStore {
       const at = chunk.length;
       chunk.timestamps[at] = frame.timestamp; chunk.canIds[at] = frame.canId;
       chunk.flags[at] = (frame.extended ? FLAG_EXTENDED : 0) | (frame.direction === 'Tx' ? FLAG_TX : 0);
-      chunk.channels[at] = frame.channel; chunk.dlcCodes[at] = frame.dlcCode; chunk.lengths[at] = frame.dataLength;
+      chunk.setChannel(at, frame.channel); chunk.dlcCodes[at] = frame.dlcCode; chunk.lengths[at] = frame.dataLength;
       const payload = frame.data.length > 255 ? frame.data.subarray(0, 255) : frame.data;
-      chunk.reserve(payload.length); chunk.dataOffsets[at] = chunk.dataUsed; chunk.payloadLengths[at] = payload.length; chunk.data.set(payload, chunk.dataUsed); chunk.dataUsed += payload.length;
+      chunk.reserve(payload.length); chunk.dataOffsets[at] = chunk.dataUsed; chunk.setPayloadLength(at, payload.length); chunk.data.set(payload, chunk.dataUsed); chunk.dataUsed += payload.length;
       this.storeId(chunk, at, ordinal, frame);
       chunk.length++;
       this.count++;
       appendIndex(this.canRefIndexes, canKey(frame.canId, frame.extended), ordinal);
-      appendIndex(this.channelIndexes, frame.channel, ordinal);
-      appendIndex(this.directionIndexes, frame.direction, ordinal);
+      if (this.routeIndexed) { appendIndex(this.channelIndexes, frame.channel, ordinal); appendIndex(this.directionIndexes, frame.direction, ordinal); }
       if (this.cachedFilterKey !== undefined && matches(frame, this.cachedFilter, this.cachedContext, this.cachedSearchPattern)) (this.scan ? this.appendedMatches : this.cachedMatches).push(ordinal);
     }
     if (frames.length) this.version++;
   }
 
+  /**
+   * What `append` does for frames packed into columns (`PackedFrameColumns`), whose IDs are `idPrefix` followed by
+   * `firstSequence`, `firstSequence + 1`, …, without making an object per frame.
+   */
+  appendPacked(packed: PackedFrameColumns, sourceId: string, idPrefix: string, firstSequence: number): void {
+    if (!packed.count) return;
+    const prefix = this.rememberPrefix(idPrefix, sourceId);
+    const end = idPrefix.charCodeAt(idPrefix.length - 1);
+    if (idPrefix && !(end >= 48 && end <= 57)) this.lastPrefix = { prefix: idPrefix, sourceId, index: prefix };
+    const canIndexes = new Map<number, OrdinalIndex>(); const channelIndexes = new Map<number, OrdinalIndex>();
+    const directionIndex = (direction: CanFrame['direction']) => { let index = this.directionIndexes.get(direction); if (!index) { index = new OrdinalIndex(); this.directionIndexes.set(direction, index); } return index; };
+    let rxIndex: OrdinalIndex | undefined; let txIndex: OrdinalIndex | undefined;
+    // Column by column, as far as the last chunk has room; then the next chunk.
+    for (let from = 0; from < packed.count;) {
+      let chunk = this.chunks[this.chunks.length - 1];
+      if (!chunk || chunk.length >= chunk.capacity) { chunk?.trim(); chunk = new FrameChunk(this.chunkSize); this.chunks.push(chunk); }
+      const at = chunk.length; const count = Math.min(packed.count - from, chunk.capacity - at); const to = from + count;
+      chunk.timestamps.set(packed.timestamps.subarray(from, to), at); chunk.canIds.set(packed.canIds.subarray(from, to), at); chunk.flags.set(packed.flags.subarray(from, to), at);
+      chunk.dlcCodes.set(packed.dlcCodes.subarray(from, to), at); chunk.lengths.set(packed.lengths.subarray(from, to), at);
+      if (chunk.channels instanceof Uint8Array) for (let index = from; index < to; index++) if (packed.channels[index] > 0xff) { chunk.widenChannels(); break; }
+      chunk.channels.set(packed.channels.subarray(from, to), at);
+      // Payloads are at most 64 bytes (the store keeps up to 255).
+      const dataFrom = packed.dataOffsets[from]; const bytes = packed.dataOffsets[to] - dataFrom;
+      chunk.reserve(bytes); chunk.data.set(packed.data.subarray(dataFrom, dataFrom + bytes), chunk.dataUsed);
+      const shift = chunk.dataUsed - dataFrom;
+      for (let index = from; index < to; index++) {
+        const place = at + index - from;
+        chunk.dataOffsets[place] = packed.dataOffsets[index] + shift; chunk.setPayloadLength(place, packed.dataOffsets[index + 1] - packed.dataOffsets[index]);
+        chunk.setId(place, prefix, firstSequence + index);
+      }
+      chunk.dataUsed += bytes;
+      for (let index = from; index < to; index++) {
+        const timestamp = packed.timestamps[index];
+        if (Number.isFinite(timestamp)) {
+          this.bounds ??= { start: timestamp, end: timestamp };
+          if (timestamp < this.bounds.start) this.bounds.start = timestamp;
+          if (timestamp > this.bounds.end) this.bounds.end = timestamp;
+        }
+        const ordinal = this.count;
+        const offset = ordinal - (firstSequence + index); const known = this.prefixOffsets[prefix];
+        if (known === undefined) this.prefixOffsets[prefix] = offset; else if (known !== offset) this.prefixOffsets[prefix] = Number.NaN;
+        chunk.length++; this.count++;
+        const flags = packed.flags[index]; const canId = packed.canIds[index]; const channel = this.routeIndexed ? packed.channels[index] : 0;
+        const canRef = canId * 2 + (flags & FLAG_EXTENDED);
+        let canIndex = canIndexes.get(canRef);
+        if (!canIndex) { const key = canKey(canId, (flags & FLAG_EXTENDED) !== 0); canIndex = this.canRefIndexes.get(key); if (!canIndex) { canIndex = new OrdinalIndex(); this.canRefIndexes.set(key, canIndex); } canIndexes.set(canRef, canIndex); }
+        canIndex.push(ordinal);
+        if (this.routeIndexed) {
+          let channelIndex = channelIndexes.get(channel);
+          if (!channelIndex) { channelIndex = this.channelIndexes.get(channel); if (!channelIndex) { channelIndex = new OrdinalIndex(); this.channelIndexes.set(channel, channelIndex); } channelIndexes.set(channel, channelIndex); }
+          channelIndex.push(ordinal);
+          if (flags & FLAG_TX) (txIndex ??= directionIndex('Tx')).push(ordinal); else (rxIndex ??= directionIndex('Rx')).push(ordinal);
+        }
+        if (this.cachedFilterKey !== undefined && matches(this.frameAt(ordinal)!, this.cachedFilter, this.cachedContext, this.cachedSearchPattern)) (this.scan ? this.appendedMatches : this.cachedMatches).push(ordinal);
+      }
+      from = to;
+    }
+    this.version++;
+  }
+
   private storeId(chunk: FrameChunk, at: number, ordinal: number, frame: CanFrame): void {
     const parsed = this.parseId(frame.id, frame.sourceId, true);
-    if (!parsed) { this.otherIds.set(ordinal, { id: frame.id, sourceId: frame.sourceId }); chunk.prefixes[at] = 0xffff; chunk.sequences[at] = 0; return; }
-    chunk.prefixes[at] = parsed.prefix; chunk.sequences[at] = parsed.sequence;
+    if (!parsed) { this.otherIds.set(ordinal, { id: frame.id, sourceId: frame.sourceId }); chunk.setId(at, 0xffff, 0); return; }
+    chunk.setId(at, parsed.prefix, parsed.sequence);
     // While every frame of a prefix sits at its number plus one offset, a frame's place follows from its ID.
     const offset = ordinal - parsed.sequence; const known = this.prefixOffsets[parsed.prefix];
     if (known === undefined) this.prefixOffsets[parsed.prefix] = offset; else if (known !== offset) this.prefixOffsets[parsed.prefix] = Number.NaN;
@@ -414,7 +514,7 @@ export class ChunkedFrameStore implements FrameStore {
     this.cachedContext = undefined;
     this.cachedMatches = new OrdinalIndex();
     this.cachedSearchPattern = undefined; this.scan = undefined; this.appendedMatches = new OrdinalIndex();
-    this.canRefIndexes.clear(); this.channelIndexes.clear(); this.directionIndexes.clear();
+    this.canRefIndexes.clear(); this.channelIndexes.clear(); this.directionIndexes.clear(); this.routeIndexed = false;
     this.timestampCacheGeneration = -1;
     this.timestampCache = new Float64Array();
     this.idPrefixes.length = 0; this.prefixIndex.clear(); this.otherIds.clear(); this.prefixOffsets = []; this.idOrdinals = undefined; this.lastPrefix = undefined;
@@ -423,14 +523,14 @@ export class ChunkedFrameStore implements FrameStore {
   private frameAt(ordinal: number): CanFrame | undefined {
     if (ordinal < 0 || ordinal >= this.count) return undefined;
     const chunk = this.chunks[Math.floor(ordinal / this.chunkSize)]; const at = ordinal % this.chunkSize;
-    const prefixIndex = chunk.prefixes[at]; const flags = chunk.flags[at]; const offset = chunk.dataOffsets[at];
+    const prefixIndex = chunk.prefix(at); const flags = chunk.flags[at]; const offset = chunk.dataOffsets[at];
     const source = prefixIndex === 0xffff ? this.otherIds.get(ordinal)! : undefined; const prefix = source ? undefined : this.idPrefixes[prefixIndex];
     const frame: CanFrame = {
-      id: source ? source.id : `${prefix!.prefix}${chunk.sequences[at]}`,
+      id: source ? source.id : `${prefix!.prefix}${chunk.sequence(at)}`,
       sourceId: source ? source.sourceId : prefix!.sourceId,
       timestamp: chunk.timestamps[at], canId: chunk.canIds[at], extended: (flags & FLAG_EXTENDED) !== 0,
       direction: flags & FLAG_TX ? 'Tx' : 'Rx', channel: chunk.channels[at], dlcCode: chunk.dlcCodes[at], dataLength: chunk.lengths[at],
-      data: chunk.data.subarray(offset, offset + chunk.payloadLengths[at]),
+      data: chunk.data.subarray(offset, offset + chunk.payloadLength(at)),
     };
     return frame;
   }
@@ -440,7 +540,28 @@ export class ChunkedFrameStore implements FrameStore {
     return [...unique].map((key) => this.canRefIndexes.get(key)).filter((index): index is OrdinalIndex => Boolean(index));
   }
 
+  /**
+   * The channel and direction indexes are made the first time a filter asks for one (they are 8 bytes per frame and only
+   * the RAW log's channel and direction filters use them), from the frame columns in one pass, then kept up as frames come.
+   */
+  private indexRoutes(): void {
+    if (this.routeIndexed) return;
+    this.routeIndexed = true;
+    const channels = new Map<number, OrdinalIndex>(); const rx = new OrdinalIndex(); const tx = new OrdinalIndex();
+    let ordinal = 0; let lastChannel = -1; let last: OrdinalIndex | undefined;
+    for (const chunk of this.chunks) for (let at = 0; at < chunk.length; at++, ordinal++) {
+      const channel = chunk.channels[at];
+      if (channel !== lastChannel) { lastChannel = channel; last = channels.get(channel); if (!last) { last = new OrdinalIndex(); channels.set(channel, last); } }
+      last!.push(ordinal); (chunk.flags[at] & FLAG_TX ? tx : rx).push(ordinal);
+    }
+    // Keys in the order their first frame came, as when the indexes were kept from the start.
+    const order = [...channels.keys()].sort((left, right) => channels.get(left)!.at(0)! - channels.get(right)!.at(0)!);
+    for (const channel of order) this.channelIndexes.set(channel, channels.get(channel)!);
+    for (const [direction, index] of ([['Rx', rx], ['Tx', tx]] as const).slice().sort((left, right) => (left[1].at(0) ?? Infinity) - (right[1].at(0) ?? Infinity))) if (index.length) this.directionIndexes.set(direction, index);
+  }
+
   private candidateOrdinals(filter: FrameFilter | undefined): Iterable<number> {
+    if (filter?.direction || filter?.channel !== undefined) this.indexRoutes();
     const constrained: OrdinalIndex[] = [];
     if (filter?.direction) { const index = this.directionIndexes.get(filter.direction); if (!index) return []; constrained.push(index); }
     if (filter?.channel !== undefined) { const index = this.channelIndexes.get(filter.channel); if (!index) return []; constrained.push(index); }

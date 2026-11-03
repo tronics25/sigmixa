@@ -87,9 +87,11 @@ interface Series {
 interface BlockSummary { blocks: number; low: Column<Int32Array>; high: Column<Int32Array>; maxDelta: Column<Float64Array> }
 const SUMMARY_BLOCK = 64;
 
+// Every field is there from the start, so all series share one shape and the engine keeps access to them fast.
 const newSeries = (definition: SignalDefinition): Series => ({
-  definition, events: [], values: new F64Column(), quality: -1, minimum: Infinity, maximum: -Infinity, minimumTimestamp: Infinity, maximumTimestamp: -Infinity,
-  sorted: true, lastTimestamp: -Infinity, rowsAscending: true,
+  definition, events: [], values: new F64Column(), rows: undefined, times: undefined, qualities: undefined, quality: -1, labels: undefined, extras: undefined,
+  minimum: Infinity, maximum: -Infinity, minimumTimestamp: Infinity, maximumTimestamp: -Infinity,
+  sorted: true, lastTimestamp: -Infinity, rowsAscending: true, rowOrder: undefined, cadence: undefined, summary: undefined,
 });
 
 interface RowEntry { readonly series: number; readonly sample: number }
@@ -133,8 +135,25 @@ export class InMemorySignalStore {
    * and again as they grow (each copy of a column of tens of millions of entries pauses everything for a moment).
    */
   reserveRows(rows: number, refs: number): void {
-    const count = Math.ceil(rows); const total = Math.ceil(refs);
-    this.rowTimes.reserve(count); this.rowKeys.reserve(count); this.refStart.reserve(count); this.rowOfOrdinal.reserve(count); this.refSeries.reserve(total);
+    for (const column of [this.rowTimes, this.rowKeys, this.refStart, this.rowOfOrdinal]) grow(column, rows);
+    grow(this.refSeries, refs);
+  }
+
+  /**
+   * Makes room for what a log `scale` times as long as the part read so far holds (`frames` frames): the rows, and,
+   * without a cap on Signals per row, each Signal's samples too, for the same reason as `reserveRows`.
+   */
+  reserveScaled(scale: number, frames: number, maxRefsPerRow = 8): void {
+    const rows = Math.min(this.rowTimes.n, frames) * scale;
+    for (const column of [this.rowTimes, this.rowKeys, this.refStart]) grow(column, rows);
+    grow(this.refSeries, Math.min(this.refSeries.n * scale, rows * maxRefsPerRow));
+    grow(this.rowOfOrdinal, frames * scale);
+    // Each Signal's share is trusted only once enough of the log is read (no cap on Signals per row).
+    if (Number.isFinite(maxRefsPerRow)) return;
+    for (const target of this.seriesList) {
+      const size = target.values.n * scale;
+      for (const column of [target.values, target.rows, target.times, target.qualities, target.labels, target.extras]) if (column) grow(column, size);
+    }
   }
   get rowCount(): number { return this.rowTimes.n; }
   /** Samples held by all rows together. */
@@ -151,17 +170,52 @@ export class InMemorySignalStore {
 
   appendFrame(frame: SignalFrameRef, timestamp: number, decoded: readonly DecodedSignalSample[]): void {
     if (!decoded.length) return;
-    const row = this.rowTimes.n; const key = this.keyOf(frame);
-    this.rowTimes.push(timestamp); this.rowKeys.push(key); this.refStart.push(this.refSeries.n);
-    if (this.rowsSorted && timestamp < this.lastRowTime) this.rowsSorted = false;
-    if (timestamp > this.lastRowTime) this.lastRowTime = timestamp;
-    this.indexRow(key, row);
+    const row = this.startRow(this.keyOf(frame), timestamp);
     for (const item of decoded) {
       let index = this.seriesIndex.get(item.definition.id);
       if (index === undefined) index = this.addSeries(newSeries(item.definition));
       this.pushRef(index);
       this.pushSample(this.seriesList[index], item.sample, row, timestamp);
     }
+    this.endRow(row, timestamp);
+  }
+
+  /** The store's number of a Signal (added when new), as `appendValues` takes it. */
+  seriesNumber(definition: SignalDefinition): number { return this.seriesIndex.get(definition.id) ?? this.addSeries(newSeries(definition)); }
+
+  /**
+   * What `appendFrame` does for a frame ordinal whose samples are all valid and at the frame's time, given as numbers:
+   * sample `s` (from..to-1) is Signal `seriesMap[signals[s]]` with `values[s]` and state name `labelTexts[labels[s] - 1]`
+   * (none for 0), followed by `more` (as `appendFrame` takes them). Used for values decoded on another thread, without
+   * making objects per sample.
+   */
+  appendValues(frame: number, timestamp: number, from: number, to: number, signals: Uint32Array, values: Float64Array, labels: Uint32Array, seriesMap: ArrayLike<number>, labelTexts: readonly string[], more?: readonly DecodedSignalSample[]): void {
+    if (from >= to && !more?.length) return;
+    const row = this.startRow(this.keyOf(frame), timestamp);
+    for (let at = from; at < to; at++) {
+      const index = seriesMap[signals[at]];
+      this.pushRef(index);
+      this.pushParts(this.seriesList[index], values[at], timestamp, 1, labels[at] ? labelTexts[labels[at] - 1] : undefined, undefined, undefined, row, timestamp);
+    }
+    if (more) for (const item of more) {
+      let index = this.seriesIndex.get(item.definition.id);
+      if (index === undefined) index = this.addSeries(newSeries(item.definition));
+      this.pushRef(index);
+      this.pushSample(this.seriesList[index], item.sample, row, timestamp);
+    }
+    this.endRow(row, timestamp);
+  }
+
+  private startRow(key: number, timestamp: number): number {
+    const row = this.rowTimes.n;
+    this.rowTimes.push(timestamp); this.rowKeys.push(key); this.refStart.push(this.refSeries.n);
+    if (this.rowsSorted && timestamp < this.lastRowTime) this.rowsSorted = false;
+    if (timestamp > this.lastRowTime) this.lastRowTime = timestamp;
+    this.indexRow(key, row);
+    return row;
+  }
+
+  private endRow(row: number, timestamp: number): void {
     if (this.tableCacheSelection && this.rowMatches(row, this.tableCacheSelection)
       && (!this.tableCacheRange || (timestamp >= this.tableCacheRange.start && timestamp <= this.tableCacheRange.end))) this.tableCache.push(row);
     this.version++;
@@ -170,6 +224,33 @@ export class InMemorySignalStore {
   samplesForFrame(frame: SignalFrameRef): readonly { signalId: string; sample: SignalSample }[] {
     const key = this.existingKey(frame); if (key === undefined) return [];
     return this.rowsOfKey(key).flatMap((row) => this.rowEntries(row).map((entry) => ({ signalId: this.seriesList[entry.series].definition.id, sample: this.sampleAt(this.seriesList[entry.series], entry.sample) })));
+  }
+
+  /**
+   * Every sample of Plugin Signals a frame's rows hold, in the order they came, a Signal held twice in a row twice (as
+   * the Plugin gave them): what the RAW log spells as the frame's Plugin tags.
+   */
+  pluginSamplesOfFrame(frame: SignalFrameRef): { readonly definition: SignalDefinition; readonly value: number }[] {
+    const key = this.existingKey(frame); if (key === undefined) return [];
+    const result: { definition: SignalDefinition; value: number }[] = [];
+    for (const row of this.rowsOfKey(key)) {
+      const start = this.refStart.a[row]; const end = this.refEnd(row); const refs = this.refSeries.a;
+      // The row's samples of a Signal are next to each other: each ref's sample is found from the last of them.
+      const totals = new Map<number, number>();
+      for (let ref = start; ref < end; ref++) if (this.seriesList[refs[ref]].definition.source.type === 'plugin') totals.set(refs[ref], (totals.get(refs[ref]) ?? 0) + 1);
+      if (!totals.size) continue;
+      const firsts = new Map<number, number>();
+      for (let ref = start; ref < end; ref++) {
+        const series = refs[ref]; const total = totals.get(series); if (total === undefined) continue;
+        const target = this.seriesList[series];
+        let next = firsts.get(series);
+        if (next === undefined) { const last = this.lastSampleOfRow(target, row); next = last < 0 ? -1 : last - (total - 1); }
+        if (next < 0) continue;
+        firsts.set(series, next + 1);
+        result.push({ definition: target.definition, value: target.values.a[next] });
+      }
+    }
+    return result;
   }
 
   appendEvents(signalId: string, events: readonly SignalEvent[]): void {
@@ -269,8 +350,8 @@ export class InMemorySignalStore {
 
   /** Gives back the spare room of every column, one column per step: on a large log each is a large copy. */
   *trimSteps(): Generator<void, void> {
-    for (const target of this.seriesList) for (const column of [target.values, target.rows, target.times, target.qualities, target.labels]) if (column) { column.trim(); yield; }
-    for (const column of [this.rowTimes, this.rowKeys, this.refStart, this.refSeries]) { column.trim(); yield; }
+    for (const target of this.seriesList) for (const column of [target.values, target.rows, target.times, target.qualities, target.labels, target.extras]) if (column) { column.trim(); yield; }
+    for (const column of [this.rowTimes, this.rowKeys, this.refStart, this.refSeries, this.rowOfOrdinal]) { column.trim(); yield; }
   }
 
   catalog(): readonly SignalDefinition[] { return this.seriesList.map((item) => item.definition); }
@@ -689,33 +770,37 @@ export class InMemorySignalStore {
   }
 
   private pushSample(target: Series, sample: SignalSample, row: number, rowTime: number): void {
+    this.pushParts(target, sample.value, sample.timestamp, qualityCode(sample.quality), sample.valueLabel, sample.filterEvidence, sample.originalTimestamp, row, rowTime);
+  }
+
+  /** A sample given field by field (`quality` as its code). */
+  private pushParts(target: Series, value: number, timestamp: number, quality: number, valueLabel: string | undefined, filterEvidence: SignalSample['filterEvidence'], originalTimestamp: SignalSample['originalTimestamp'], row: number, rowTime: number): void {
     const index = target.values.n;
-    target.values.push(sample.value);
+    target.values.push(value);
     if (row !== NO_ROW || target.rows) {
       if (!target.rows) { target.rows = new U32Column(Math.max(16, index + 1)); target.rows.fill(NO_ROW, index); }
       target.rows.push(row);
       if (target.rowsAscending && index > 0 && row !== NO_ROW && target.rows.a[index - 1] !== NO_ROW && target.rows.a[index - 1] > row) target.rowsAscending = false;
       target.rowOrder = undefined;
     }
-    if (target.times) target.times.push(sample.timestamp);
-    else if (row === NO_ROW || !Object.is(sample.timestamp, rowTime)) { this.ownTimes(target, this.rowTimes.a, index); target.times!.push(sample.timestamp); }
-    const quality = qualityCode(sample.quality);
+    if (target.times) target.times.push(timestamp);
+    else if (row === NO_ROW || !Object.is(timestamp, rowTime)) { this.ownTimes(target, this.rowTimes.a, index); target.times!.push(timestamp); }
     if (target.quality < 0) target.quality = quality;
     if (target.qualities) target.qualities.push(quality);
     else if (quality !== target.quality) { target.qualities = new U8Column(Math.max(16, index + 1)); target.qualities.fill(target.quality, index); target.qualities.push(quality); }
-    if (sample.valueLabel !== undefined || target.labels) {
+    if (valueLabel !== undefined || target.labels) {
       if (!target.labels) { target.labels = new U32Column(Math.max(16, index + 1)); target.labels.fill(0, index); }
-      target.labels.push(sample.valueLabel === undefined ? 0 : this.labelNumber(sample.valueLabel) + 1);
+      target.labels.push(valueLabel === undefined ? 0 : this.labelNumber(valueLabel) + 1);
     }
-    if (sample.filterEvidence !== undefined || sample.originalTimestamp !== undefined || target.extras) {
+    if (filterEvidence !== undefined || originalTimestamp !== undefined || target.extras) {
       target.extras ??= new SampleExtrasColumn(index);
-      target.extras.push(sample.filterEvidence, sample.originalTimestamp);
+      target.extras.push(filterEvidence, originalTimestamp);
     }
-    if (Number.isFinite(sample.timestamp) && Number.isFinite(sample.value) && quality <= 1) { if (sample.value < target.minimum) target.minimum = sample.value; if (sample.value > target.maximum) target.maximum = sample.value; }
-    if (sample.timestamp < target.minimumTimestamp) target.minimumTimestamp = sample.timestamp;
-    if (sample.timestamp > target.maximumTimestamp) target.maximumTimestamp = sample.timestamp;
-    if (sample.timestamp < target.lastTimestamp) target.sorted = false;
-    target.lastTimestamp = sample.timestamp;
+    if (Number.isFinite(timestamp) && Number.isFinite(value) && quality <= 1) { if (value < target.minimum) target.minimum = value; if (value > target.maximum) target.maximum = value; }
+    if (timestamp < target.minimumTimestamp) target.minimumTimestamp = timestamp;
+    if (timestamp > target.maximumTimestamp) target.maximumTimestamp = timestamp;
+    if (timestamp < target.lastTimestamp) target.sorted = false;
+    target.lastTimestamp = timestamp;
     // Each full block is summarized as it fills, so drawing a long log never has to read it all at once.
     if (target.sorted && target.values.n % SUMMARY_BLOCK === 0) this.summaryOf(target);
   }
@@ -938,6 +1023,14 @@ export class InMemorySignalStore {
   }
 }
 
+/**
+ * Makes room in a column for about `size` values, when it has less: a sixteenth more, so a slightly larger estimate
+ * later does not copy the column again (each copy of a large column briefly needs room for both).
+ */
+function grow(column: { readonly capacity: number; reserve(size: number, exact?: boolean): void }, size: number): void {
+  if (Math.ceil(size) > column.capacity) column.reserve(Math.ceil(size * 17 / 16), true);
+}
+
 const MAX_CADENCE_SAMPLES = 2048;
 
 type FilterEvidence = NonNullable<SignalSample['filterEvidence']>;
@@ -958,6 +1051,10 @@ class SampleExtrasColumn {
 
   constructor(count = 0) { this.kinds.fill(0, count); }
 
+  get capacity(): number { return this.kinds.capacity; }
+  reserve(size: number, exact = false): void { this.kinds.reserve(size, exact); this.fields?.forEach((column) => column.reserve(size, exact)); }
+  trim(): void { this.kinds.trim(); this.fields?.forEach((column) => column.trim()); }
+
   push(filterEvidence: SignalSample['filterEvidence'], originalTimestamp: SignalSample['originalTimestamp']): void {
     const index = this.kinds.n;
     if (filterEvidence === undefined && originalTimestamp === undefined) { this.fields?.forEach((column) => column.push(0)); this.kinds.push(0); return; }
@@ -966,9 +1063,11 @@ class SampleExtrasColumn {
     const evidence = filterEvidence as FilterEvidence;
     if (keys && (four || sameKeys(keys, TWO_FIELDS)) && numberOrUndefined(evidence.previousValue) && typeof evidence.deltaSeconds === 'number'
       && (!four || (numberOrUndefined(evidence.sampleCount) && numberOrUndefined(evidence.sum)))) {
-      const fields = this.fields ??= [0, 1, 2, 3].map(() => { const column = new F64Column(index + 16); column.fill(0, index); return column; });
+      // A low-pass filter's evidence has two fields; the other two are made when a moving average's comes.
+      const fields = this.fields ??= [0, 1].map(() => { const column = new F64Column(index + 16); column.fill(0, index); return column; });
+      if (four && fields.length < 4) for (let field = fields.length; field < 4; field++) { const column = new F64Column(index + 16); column.fill(0, index); fields.push(column); }
       const values = [evidence.previousValue, evidence.deltaSeconds, evidence.sampleCount, evidence.sum];
-      for (let field = 0; field < 4; field++) fields[field].push(values[field] ?? 0);
+      for (let field = 0; field < fields.length; field++) fields[field].push(values[field] ?? 0);
       this.kinds.push((four ? 2 : 1) | (evidence.previousValue === undefined ? 4 : 0) | (four && evidence.sampleCount === undefined ? 8 : 0) | (four && evidence.sum === undefined ? 16 : 0));
       return;
     }

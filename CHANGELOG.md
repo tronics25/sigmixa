@@ -1,5 +1,12 @@
 # Change Log
 
+## 2.3.2 - 2026-11-03
+
+- Logs of 16 MB or more are now read and decoded on several threads at once: in testing, a log of 10 million frames opened about 4 times as fast (75% less time). The screens stay usable while a log is read, and graphs keep growing as before. The results are the same as before.
+- Opening a large log uses less memory: in testing, about 20% less once a log of 50 million frames is open, and about 30% less at most while it is read.
+- Fixed VS Code pausing while a BLF log was read: the whole file was read and decoded in one go. BLF logs are now read a piece at a time, without holding the whole file.
+- Fixed short pauses while a large log was read, each time its stored data needed more room.
+
 ## 2.3.1 - 2026-11-02
 
 - Fixed HTML reports splitting a trajectory with several series into one graph per series, each with its own scale. It is now one graph with all its series on it, as in Visualize. Each series has its own legend entry, and its X, Y and Z are in the graph settings. Saved images list the series too.

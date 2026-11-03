@@ -37,6 +37,35 @@ export function decodeManualFrame(frame: CanFrame, definition: ManualFrameDefini
   const diagnostics: Diagnostic[] = [];
   const values: Record<string, number> = {};
   if (!frameMatchesDefinition(frame, definition)) return { decoded, diagnostics };
+  decodeSignalsInto(frame, definition, decoded, diagnostics, values);
+  decodeDerivedInto(frame, definition, context, decoded, diagnostics, values);
+  return { decoded, diagnostics };
+}
+
+/** The first part of `decodeManualFrame`: the frame's own Signals (not the derived ones), and their values by name. */
+export function decodeManualSignals(frame: CanFrame, definition: ManualFrameDefinition): ManualDecodeResult & { readonly values: Record<string, number> } {
+  const decoded: ManualDecodedSignal[] = []; const diagnostics: Diagnostic[] = []; const values: Record<string, number> = {};
+  if (frameMatchesDefinition(frame, definition)) decodeSignalsInto(frame, definition, decoded, diagnostics, values);
+  return { decoded, diagnostics, values };
+}
+
+/**
+ * The rest of `decodeManualFrame`: its derived Signals, from `values` (by name) that `decodeManualSignals` gave for the
+ * same frame. Only these depend on `context`.
+ */
+export function decodeManualDerived(frame: CanFrame, definition: ManualFrameDefinition, context: ManualDecodeContext, values: Record<string, number>, from = 0, to?: number): ManualDecodeResult {
+  const decoded: ManualDecodedSignal[] = []; const diagnostics: Diagnostic[] = [];
+  if (frameMatchesDefinition(frame, definition)) decodeDerivedInto(frame, definition, context, decoded, diagnostics, values, from, to);
+  return { decoded, diagnostics };
+}
+
+/** How many derived Signals of a definition come before its first filter: they depend on nothing but their frame. */
+export function derivedBeforeFilter(definition: ManualFrameDefinition): number {
+  const derived = definition.derivedSignals ?? []; const index = derived.findIndex((signal) => signal.operation.type === 'filter');
+  return index < 0 ? derived.length : index;
+}
+
+function decodeSignalsInto(frame: CanFrame, definition: ManualFrameDefinition, decoded: ManualDecodedSignal[], diagnostics: Diagnostic[], values: Record<string, number>): void {
   const multiplexer = definition.multiplexing ? multiplexerOf(definition) : undefined;
   let multiplexerValue: number | undefined;
   if (multiplexer) {
@@ -94,22 +123,36 @@ export function decodeManualFrame(frame: CanFrame, definition: ManualFrameDefini
     });
     values[signal.name] = value;
   }
-  for (const signal of definition.derivedSignals ?? []) {
+}
+
+/** Derived Signals `from..to-1` (all by default). */
+function decodeDerivedInto(frame: CanFrame, definition: ManualFrameDefinition, context: ManualDecodeContext, decoded: ManualDecodedSignal[], diagnostics: Diagnostic[], values: Record<string, number>, from = 0, to?: number): void {
+  const derived = definition.derivedSignals ?? [];
+  for (let index = from; index < (to ?? derived.length); index++) {
+    const signal = derived[index];
     try {
-      const previous = context.filters.get(`${definition.id}:${signal.id}`);
+      // Only filters keep state (and evidence of it).
+      if (signal.operation.type !== 'filter') {
+        const value = evaluateDerived(signal, values, frame.timestamp, definition.id, context);
+        decoded.push({ signal, definition: signalDefinitionFor(definition, signal), sample: { timestamp: frame.timestamp, value, quality: 'valid' } });
+        values[signal.name] = value;
+        continue;
+      }
+      const key = filterKey(definition.id, signal);
+      const previous = context.filters.get(key);
       const previousValue = previous?.value;
       const deltaSeconds = previous?.lastTimestamp === undefined ? 0 : frame.timestamp - previous.lastTimestamp;
       const value = evaluateDerived(signal, values, frame.timestamp, definition.id, context);
-      const state = context.filters.get(`${definition.id}:${signal.id}`);
-      const filterEvidence = signal.operation.type === 'filter' ? { previousValue: deltaSeconds > 0 ? previousValue : undefined, deltaSeconds,
-        ...(signal.operation.filter === 'moving-average' ? { sampleCount: state?.samples.length, sum: state?.sum } : {}) } : undefined;
-      decoded.push({ signal, definition: signalDefinitionFor(definition, signal), sample: { timestamp: frame.timestamp, value, quality: 'valid', ...(filterEvidence ? { filterEvidence } : {}) } });
+      const state = context.filters.get(key);
+      const filterEvidence = signal.operation.filter === 'moving-average'
+        ? { previousValue: deltaSeconds > 0 ? previousValue : undefined, deltaSeconds, sampleCount: state?.samples.length, sum: state?.sum }
+        : { previousValue: deltaSeconds > 0 ? previousValue : undefined, deltaSeconds };
+      decoded.push({ signal, definition: signalDefinitionFor(definition, signal), sample: { timestamp: frame.timestamp, value, quality: 'valid', filterEvidence } });
       values[signal.name] = value;
     } catch (error) {
       diagnostics.push(createDiagnostic({ source: 'definition', code: 'DERIVED_SIGNAL_EVALUATION_ERROR', severity: 'warning', message: `${signal.name}: ${(error as Error).message}`, location: { sourceId: frame.sourceId, frameId: frame.id }, details: { signalId: signal.id, definitionId: definition.id } }));
     }
   }
-  return { decoded, diagnostics };
 }
 
 function compiledDerivedExpression(signal: ManualDerivedSignalDefinition): CompiledExpression {
@@ -121,12 +164,19 @@ function compiledDerivedExpression(signal: ManualDerivedSignalDefinition): Compi
   return compiled;
 }
 
+const filterKeys = new WeakMap<ManualDerivedSignalDefinition, { readonly definitionId: string; readonly signalId: string; readonly key: string }>();
+/** Where a filter keeps its state in a decode context (`<definition ID>:<Signal ID>`), made once per Signal. */
+function filterKey(definitionId: string, signal: ManualDerivedSignalDefinition): string {
+  const cached = filterKeys.get(signal); if (cached?.definitionId === definitionId && cached.signalId === signal.id) return cached.key;
+  const key = `${definitionId}:${signal.id}`; filterKeys.set(signal, { definitionId, signalId: signal.id, key }); return key;
+}
+
 function evaluateDerived(signal: ManualDerivedSignalDefinition, values: Readonly<Record<string, number>>, timestamp: number, definitionId: string, context: ManualDecodeContext): number {
   if (signal.operation.type === 'expression') return compiledDerivedExpression(signal).evaluate(values);
   const input = values[signal.operation.input];
   if (!Number.isFinite(input)) throw new Error(`Input Signal “${signal.operation.input}” is missing or invalid.`);
   if (signal.operation.type === 'lookup') return lookup(signal.operation.points, input, signal.operation.outOfRange);
-  const key = `${definitionId}:${signal.id}`; let state = context.filters.get(key);
+  const key = filterKey(definitionId, signal); let state = context.filters.get(key);
   if (!state) { state = { samples: [], sum: 0 }; context.filters.set(key, state); }
   if (state.lastTimestamp !== undefined && timestamp <= state.lastTimestamp) { state.samples = []; state.sum = 0; state.value = undefined; }
   if (signal.operation.filter === 'low-pass') {

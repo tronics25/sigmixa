@@ -75,6 +75,9 @@ export class PluginHost {
     }
   }
 
+  /** The CAN keys (`e:`/`s:` + CAN ID) of the frames a Plugin may process; every other frame gives nothing here. */
+  boundCanKeys(): readonly string[] { return [...this.bindingsByCanKey.keys()]; }
+
   processFrame(frame: CanFrame): PluginHostResult {
     const decoded: PluginDecodedSignal[] = []; const diagnostics: Diagnostic[] = []; const events = new Map<string, SignalEvent[]>(); let handled = false;
     const bindings = this.bindingsByCanKey.get(canKey(frame.canId, frame.extended)) ?? [];

@@ -4,7 +4,7 @@ import type { Diagnostic } from '../../core/diagnostics/diagnostic';
 import type { CanFrame } from '../../core/frame/canFrame';
 import type { TimeReference } from '../../core/time/timeFormat';
 
-const LOG_CONTAINER = 10;
+export const LOG_CONTAINER = 10;
 const CAN_MESSAGE = 1;
 const CAN_MESSAGE_2 = 86;
 const CAN_FD_MESSAGE = 100;
@@ -168,29 +168,45 @@ export async function parseBlfFile(filePath: string, options: BlfParseOptions): 
   return parseBlfBuffer(buffer, options);
 }
 
+export type BlfReport = (code: string, severity: Diagnostic['severity'], message: string, offset?: number, details?: Diagnostic['details']) => void;
+
 function parseObjects(
   buffer: Buffer,
   startTimestamp: number,
   options: BlfParseOptions,
-  report: (code: string, severity: Diagnostic['severity'], message: string, offset?: number, details?: Diagnostic['details']) => void,
+  report: BlfReport,
   append: (frame: Omit<CanFrame, 'id' | 'sourceId'>) => void
 ): Buffer {
+  return parseBlfObjects(buffer, startTimestamp, options.signal, report, append).rest;
+}
+
+/**
+ * Reads the objects in `buffer` (the expanded contents of a LogContainer, after what the one before left). `rest`: the
+ * bytes of an object that continues in the next container; `stopped` when an invalid object ended the container.
+ */
+export function parseBlfObjects(
+  buffer: Buffer,
+  startTimestamp: number,
+  signal: AbortSignal | undefined,
+  report: BlfReport,
+  append: (frame: Omit<CanFrame, 'id' | 'sourceId'>) => void
+): { readonly rest: Buffer; readonly stopped: boolean } {
   let offset = 0;
-  while (!options.signal?.aborted) {
-    if (offset + 16 > buffer.length) return buffer.subarray(offset);
+  while (!signal?.aborted) {
+    if (offset + 16 > buffer.length) return { rest: buffer.subarray(offset), stopped: false };
     const objectOffset = findObjectOffset(buffer, offset);
     if (objectOffset === undefined) {
-      if (buffer.length - offset > 7) report('BLF_INNER_OBJECT_HEADER', 'error', 'An object inside a LogContainer is invalid; this container was stopped.', offset);
-      return buffer.subarray(offset);
+      if (buffer.length - offset > 7) { report('BLF_INNER_OBJECT_HEADER', 'error', 'An object inside a LogContainer is invalid; this container was stopped.', offset); return { rest: buffer.subarray(offset), stopped: true }; }
+      return { rest: buffer.subarray(offset), stopped: false };
     }
     offset = objectOffset;
     const base = readBaseObjectHeader(buffer, offset);
     if (!base) {
       report('BLF_INNER_OBJECT_HEADER', 'error', 'An object inside a LogContainer is invalid; this container was stopped.', offset);
-      return Buffer.alloc(0);
+      return { rest: Buffer.alloc(0), stopped: true };
     }
     if (offset + base.objectSize > buffer.length) {
-      return buffer.subarray(offset);
+      return { rest: buffer.subarray(offset), stopped: false };
     }
     const header = readObjectHeader(buffer, offset);
     if (!header) {
@@ -212,7 +228,7 @@ function parseObjects(
     else if (!DESCRIPTIVE_OBJECTS.has(header.objectType)) report('BLF_OBJECT_UNSUPPORTED', 'warning', `BLF object type ${header.objectType} was not imported.`, offset, { objectType: header.objectType });
     offset += header.objectSize;
   }
-  return buffer.subarray(offset);
+  return { rest: buffer.subarray(offset), stopped: false };
 }
 
 function classicFrame(buffer: Buffer, header: ObjectHeader, startTimestamp: number): Omit<CanFrame, 'id' | 'sourceId'> | null {
@@ -253,7 +269,7 @@ function frame(header: ObjectHeader, startTimestamp: number, id: { canId: number
   return { timestamp: startTimestamp + timestampSeconds(header.timestamp, header.flags), ...id, direction, channel, dlcCode: Math.min(dlcCode, 15), dataLength: data.length, data };
 }
 
-function readBaseObjectHeader(buffer: Buffer, offset: number): BaseObjectHeader | undefined {
+export function readBaseObjectHeader(buffer: Buffer, offset: number): BaseObjectHeader | undefined {
   if (offset + 16 > buffer.length || buffer.toString('ascii', offset, offset + 4) !== 'LOBJ') return undefined;
   const headerSize = buffer.readUInt16LE(offset + 4);
   const objectSize = buffer.readUInt32LE(offset + 8);
@@ -283,12 +299,12 @@ function decodeCanId(raw: number): { canId: number; extended: boolean } {
   return { canId: raw & 0x1fffffff, extended: (raw & EXTENDED_ID) !== 0 };
 }
 
-function findObjectOffset(buffer: Buffer, offset: number): number | undefined {
+export function findObjectOffset(buffer: Buffer, offset: number): number | undefined {
   const found = buffer.indexOf('LOBJ', offset, 'ascii');
   return found >= offset && found < Math.min(buffer.length, offset + 8) ? found : undefined;
 }
 
-function fileStartTimestamp(buffer: Buffer): number {
+export function fileStartTimestamp(buffer: Buffer): number {
   if (buffer.length < 72 || buffer.readUInt32LE(4) < 72) return 0;
   const year = buffer.readUInt16LE(40); const month = buffer.readUInt16LE(42); const day = buffer.readUInt16LE(46);
   const hour = buffer.readUInt16LE(48); const minute = buffer.readUInt16LE(50); const second = buffer.readUInt16LE(52); const milliseconds = buffer.readUInt16LE(54);

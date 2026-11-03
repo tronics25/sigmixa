@@ -30,6 +30,9 @@ const extensionConfig = {
   logLevel: 'info',
 };
 
+// Worker thread that reads and decodes pieces of large logs (loaded from out/ next to extension.js).
+const logWorkerConfig = { ...extensionConfig, entryPoints: [path.join(__dirname, 'src/parsers/parallel/logWorker.ts')], outfile: path.join(__dirname, 'out/logWorker.js') };
+
 // One entry per webview UI screen. Each is a standalone script loaded
 // directly into its webview's <script> tag (IIFE, no module system needed).
 const webviewEntries = [
@@ -57,7 +60,7 @@ async function run() {
   // Remove stale bundles before creating a release package.
   fs.rmSync(path.join(__dirname, 'out'), { recursive: true, force: true });
   copyCodicons();
-  const configs = [extensionConfig, ...webviewConfigs];
+  const configs = [extensionConfig, logWorkerConfig, ...webviewConfigs];
   if (watch) {
     console.log('[sigmixa-watch] starting');
     const contexts = await Promise.all(configs.map((c) => esbuild.context(c)));

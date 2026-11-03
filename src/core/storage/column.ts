@@ -10,12 +10,18 @@ export abstract class Column<A extends Typed> {
   protected abstract make(size: number): A;
   protected abstract copy(): Column<A>;
   abstract push(value: number): void;
-  reserve(size: number): void {
+  get capacity(): number { return this.a.length; }
+  /** `exact`: room for `size` values and no more (an estimate of the final size), instead of growing by half again. */
+  reserve(size: number, exact = false): void {
     if (size <= this.a.length) return;
-    const next = this.make(Math.max(size, Math.ceil(this.a.length * 1.5), 16)); (next as Uint8Array).set(this.a.subarray(0, this.n) as Uint8Array); this.a = next;
+    const next = this.make(Math.max(size, exact ? 0 : Math.ceil(this.a.length * 1.5), 16)); (next as Uint8Array).set(this.a.subarray(0, this.n) as Uint8Array); this.a = next;
   }
   fill(value: number, count: number): void { this.reserve(this.n + count); this.a.fill(value, this.n, this.n + count); this.n += count; }
-  trim(): void { if (this.a.length > this.n) { const next = this.make(this.n); (next as Uint8Array).set(this.a.subarray(0, this.n) as Uint8Array); this.a = next; } }
+  /**
+   * Gives back the spare room, when it is more than an eighth: a column reserved from an estimate keeps its few
+   * percent, as copying tens of millions of values to give them back would briefly need room for both.
+   */
+  trim(): void { if (this.a.length - this.n > this.n / 8) { const next = this.make(this.n); (next as Uint8Array).set(this.a.subarray(0, this.n) as Uint8Array); this.a = next; } }
   /** Reorders the values: position `index` gets the value that was at `order[index]`. */
   permute(order: Uint32Array): void { const next = this.make(Math.max(16, this.n)); for (let index = 0; index < this.n; index++) next[index] = this.a[order[index]]; this.a = next; }
   clone(): Column<A> { const copy = this.copy(); copy.a = this.a.slice(0, Math.max(1, this.n)) as A; copy.n = this.n; return copy; }
