@@ -17,7 +17,7 @@ import { parseProjectJson, type SigMixaProject } from '../src/core/project/schem
 
 // Pieces of a few kilobytes, so even small logs are read as many pieces on the workers.
 const settings = { ...parallelLoadSettings };
-const small = () => Object.assign(parallelLoadSettings, { minBytes: 0, ascRangeBytes: 3000, blfRangeBytes: 700, workers: 3, workerScript: path.join(__dirname, 'logWorker.js') });
+const small = () => Object.assign(parallelLoadSettings, { minBytes: 0, ascRangeBytes: 3000, blfRangeBytes: 700, mdfPieceFrames: 300, workers: 3, workerScript: path.join(__dirname, 'logWorker.js') });
 const restore = () => Object.assign(parallelLoadSettings, settings);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sigmixa-parallel-'));
 test.after(() => { restore(); fs.rmSync(root, { recursive: true, force: true }); });
@@ -69,6 +69,11 @@ test('ASC logs read in pieces on workers give the same frames, diagnostics and s
   // A log with lone \r line breaks only is read in one go (it cannot be cut at \n).
   write('cr.asc', asc.replace(/\n/g, '\r'));
   small(); assert.equal(canLoadInParallel(path.join(root, 'cr.asc')), false); assert.equal(canLoadInParallel(path.join(root, 'mixed.asc')), true); restore();
+  // \n line breaks first, then many pieces' worth of lone \r ones: pieces are cut after a lone \r too, never between \r and \n.
+  const half = Math.floor(lines.length / 2);
+  write('then-cr.asc', lines.slice(0, half).join('\n') + '\n' + lines.slice(half).join('\r') + '\r\n' + lines.slice(half).join('\r\n'));
+  small(); assert.equal(canLoadInParallel(path.join(root, 'then-cr.asc')), true); restore();
+  assert.ok(await assertSameReading(path.join(root, 'then-cr.asc')) > 3000);
   write('empty.asc', '');
   await assertSameReading(path.join(root, 'empty.asc'));
 });
@@ -175,7 +180,7 @@ test('a log decoded on workers shows the same values, Plugin output and diagnost
   // Frames shorter than their definitions (diagnostics), in the middle of the log.
   const lines = asc.split('\n'); const at = Math.floor(lines.length / 3);
   const short = write('short.asc', [...lines.slice(0, at), '   20.000100 1  2A0             Rx   d 2 01 02', '   20.000200 1  300             Rx   d 1 07', ...lines.slice(at)].join('\n'));
-  for (const file of [path.resolve('sample/sigmixa-basic.asc'), path.resolve('sample/sigmixa-basic.blf'), short]) {
+  for (const file of [path.resolve('sample/sigmixa-basic.asc'), path.resolve('sample/sigmixa-basic.blf'), path.resolve('sample/sigmixa-basic.mf4'), short]) {
     const expected = await open(file, project, registry, false);
     const actual = await open(file, project, registry, true);
     assert.ok(expected.rows.length > 3000 && expected.ids.length > 40 && expected.analysis.some((group) => group.code === 'DERIVED_SIGNAL_EVALUATION_ERROR'), file);
@@ -208,10 +213,14 @@ test('definitions changed while a log is read on workers give the values of the 
   }
 });
 
-test('Plugin tags spelled from the Signal store are the tags kept as given, also after rows are put in time order', async () => {
+test('Plugin tags spelled from the Signal store are the tags as given, with each name and unit as given, also after rows are put in time order', async () => {
   const { InMemorySignalStore } = await import('../src/core/signal/signalStore');
   const { PluginFrameTags } = await import('../src/extension/editors/pluginFrameTags');
-  const store = new InMemorySignalStore(); const kept = new PluginFrameTags(); const stored = new PluginFrameTags((frame) => store.pluginSamplesOfFrame(frame));
+  const { textCells, TAG_SPACING } = await import('../src/core/frame/widestText');
+  const store = new InMemorySignalStore(); const stored = new PluginFrameTags((frame) => store.pluginSamplesOfFrame(frame));
+  // What the RAW log is to show: each value spelled with the name and unit it came with.
+  const expected = new Map<number, { tags: string[]; diagnostics: readonly unknown[] }>();
+  const kept = { set: (frame: number, decoded: readonly { name: string; unit?: string; value: number }[], diagnostics: readonly unknown[]) => { if (decoded.length || diagnostics.length) expected.set(frame, { tags: decoded.map((item) => `${item.name}=${item.value}${item.unit ? ` ${item.unit}` : ''}`), diagnostics }); } };
   const plugin = (id: string, name: string, unit?: string) => ({ id, name, unit, source: { type: 'plugin', pluginId: 'p', bindingId: 'b' } }) as never;
   const manual = { id: 'm', name: 'M', source: { type: 'manual-can', frameDefinitionId: 'd' } } as never;
   const a = plugin('a', 'Speed', 'km/h'); const b = plugin('b', 'Mode'); const renamed = plugin('a', 'Velocity', 'm/s');
@@ -221,7 +230,7 @@ test('Plugin tags spelled from the Signal store are the tags kept as given, also
     const first = frame < 400 ? a : renamed;
     const outputs = frame % 5 === 0 ? [] : frame % 3 === 0 ? [{ definition: first, value: frame }, { definition: first, value: -frame }, { definition: b, value: 0.1 + frame / 10 }] : [{ definition: b, value: frame * 3 }];
     store.appendFrame(frame, time, [{ definition: manual, sample: { timestamp: time, value: 1 } }, ...outputs.map((item) => ({ definition: item.definition, sample: { timestamp: time, value: item.value } }))]);
-    const decoded = outputs.map((item) => ({ id: (item.definition as { id: string }).id, name: (item.definition as { name: string }).name, unit: (item.definition as { unit?: string }).unit, value: item.value }));
+    const decoded = outputs.map((item) => ({ name: (item.definition as { name: string }).name, unit: (item.definition as { unit?: string }).unit, value: item.value }));
     const diagnostics = frame % 11 === 0 ? [{ id: `d${frame}`, source: 'plugin', code: 'X', severity: 'warning', message: 'x' } as const] : [];
     kept.set(frame, decoded, diagnostics); stored.set(frame, decoded, diagnostics);
   }
@@ -229,13 +238,12 @@ test('Plugin tags spelled from the Signal store are the tags kept as given, also
   const x = plugin('x', 'A'); const y = plugin('y', 'B'); const x2 = plugin('x', 'A2'); const y2 = plugin('y', 'B2');
   for (const [frame, outputs] of [[500, [x]], [501, [x2, y]], [502, [x, y2]]] as const) {
     store.appendFrame(frame, frame, outputs.map((definition) => ({ definition, sample: { timestamp: frame, value: frame } })));
-    const decoded = outputs.map((definition) => ({ id: (definition as { id: string }).id, name: (definition as { name: string }).name, value: frame }));
+    const decoded = outputs.map((definition) => ({ name: (definition as { name: string }).name, value: frame }));
     kept.set(frame, decoded, []); stored.set(frame, decoded, []);
   }
   store.finalize();
-  const cells = (text: string) => text.length;
   assert.deepEqual(stored.get(502)?.tags, ['A=502', 'B2=502']);
-  for (let frame = 0; frame < 504; frame++) { assert.deepEqual(stored.get(frame), kept.get(frame), `frame ${frame}`); assert.equal(stored.cells(frame, cells, 7), kept.cells(frame, cells, 7)); }
+  for (let frame = 0; frame < 504; frame++) { assert.deepEqual(stored.get(frame), expected.get(frame), `frame ${frame}`); assert.equal(stored.cells(frame), (expected.get(frame)?.tags ?? []).reduce((sum, tag) => sum + textCells(tag) + TAG_SPACING, 0)); }
 });
 
 test('channel and direction filters made on first use find the same frames, also frames added afterwards', async () => {
@@ -254,4 +262,51 @@ test('channel and direction filters made on first use find the same frames, also
   const packer = new FramePacker(); for (let index = 1500; index < 2000; index++) packer.push(frame(index));
   store.appendPacked(packer.finish(), 's', 's:', 1500);
   for (const filter of filters) assert.deepEqual(all(filter), expected(filter, 2000), JSON.stringify(filter));
+});
+
+test('an MF4 load cancelled before it begins ends, without waiting for room that never comes', async () => {
+  const { loadMdfInParallel } = await import('../src/parsers/parallel/parallelLoad');
+  small();
+  try {
+    const controller = new AbortController(); controller.abort();
+    const summary = await loadMdfInParallel(path.resolve('sample/sigmixa-basic.mf4'), { sourceId: 'x', signal: controller.signal, decodeSpec: () => ({ owner: {}, spec: { definitions: [], signalIds: [], pluginKeys: [] } }), onChunk: () => undefined, onDiagnostics: () => undefined });
+    assert.equal(summary.cancelled, true);
+  } finally { restore(); }
+});
+
+test('definitions changed after a log is read are decoded again on workers with the same results as in one go', async () => {
+  const sample = path.resolve('sample');
+  (vscode.workspace as any).workspaceFolders = [{ uri: vscode.Uri.file(sample) }];
+  (vscode.workspace as any).getWorkspaceFolder = () => vscode.workspace.workspaceFolders![0];
+  const project = parseProjectJson(fs.readFileSync(path.join(sample, '.sigmixa/project.json'), 'utf8'));
+  const registry = () => {
+    const result = new PluginRegistry();
+    for (const plugin of project.plugins) {
+      const file = path.join(sample, plugin.source, 'index.js'); delete require.cache[require.resolve(file)];
+      const loaded = require(file); const instance = loaded.default ?? loaded; instance.setConfig?.(plugin.config); result.register(instance, plugin.source);
+    }
+    return result;
+  };
+  const changeFrames = (ids: string[], offset: number) => ({ ...project, frames: project.frames.map((frame) => ids.includes(frame.id) ? { ...frame, signals: frame.signals.map((signal) => ({ ...signal, conversion: { ...signal.conversion, offset: signal.conversion.offset + offset } })) } : frame) }) as SigMixaProject;
+  // A Frame with a filter and Plugins, then a plain one (only their CAN IDs are decoded again), then a Plugin change (all frames).
+  const changes = [changeFrames(['ff-2a0'], 1), changeFrames(['ff-2a0', 'ff-310'], 2), { ...changeFrames(['ff-2a0', 'ff-310'], 2), plugins: project.plugins.map((plugin, index) => index ? plugin : { ...plugin, config: { ...plugin.config as object, factor: 3 } }) } as SigMixaProject];
+  const file = path.resolve('sample/sigmixa-basic.asc');
+  const run = async (onWorkers: boolean) => {
+    Object.assign(parallelLoadSettings, { minBytes: Infinity });
+    const doc = new RawLogDocument(vscode.Uri.file(file), file, project, 1, registry());
+    try {
+      await doc.whenReady();
+      if (onWorkers) Object.assign(parallelLoadSettings, { minStoredFrames: 0, storedPieceFrames: 250, workers: 3, workerScript: path.join(__dirname, 'logWorker.js') });
+      const results: unknown[] = []; let revision = 2;
+      for (const next of changes) {
+        const done = new Promise<void>((resolve) => { const sub = doc.onDidUpdate((update) => { if (update.type === 'analysisComplete') { sub.dispose(); resolve(); } }); });
+        await doc.rebuildSignals(next, revision++); await done;
+        results.push(shown(doc, next));
+      }
+      return results;
+    } finally { doc.dispose(); restore(); }
+  };
+  const expected = await run(false); const actual = await run(true);
+  assert.ok((expected[0] as { ids: string[] }).ids.length > 40);
+  assert.deepEqual(actual, expected);
 });

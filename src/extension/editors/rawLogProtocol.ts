@@ -80,7 +80,10 @@ export interface SignalGroupDto {
   readonly id: string;
   readonly label: string;
   readonly signalIds: readonly string[];
-  readonly remove?: { readonly type: 'external-csv'; readonly sourceId: string };
+  /** The heading the group is listed under, a level above it (the comparison screen's "only in …"). */
+  readonly section?: { readonly id: string; readonly label: string };
+  /** The whole file's measured Signals with no group name of their own: a CSV log's. (MF4/MDF channel groups without a name are read as "Group N".) */
+  readonly unnamed?: boolean;
 }
 
 export interface SignalTableRowDto {
@@ -103,18 +106,6 @@ export interface SignalSeriesDto {
 
 export interface MeasuredSignalDto { readonly signalId: string; readonly sample: SignalSample; }
 
-export interface ExternalCsvPreviewDto {
-  readonly importId: string;
-  readonly fileName: string;
-  readonly headers: readonly string[];
-  readonly suggestedTimestampColumn?: string;
-  readonly suggestedTimestampUnit: 'seconds' | 'milliseconds' | 'microseconds';
-  readonly suggestedTimeBase: ExternalCsvTimeBase;
-  /** Whether the open log records its start, which relative, Unix and date-time CSV times need. */
-  readonly logStartKnown: boolean;
-  /** The CSV's first data row, to propose (and show) how the chosen column's times are written. */
-  readonly firstRow?: readonly string[];
-}
 
 export interface RawRowDto {
   readonly id: string;
@@ -153,7 +144,8 @@ export type ToExtensionMessage =
   /** Text the Webview already has (Trace rows), opened in an untitled editor. */
   | { readonly type: 'openText'; readonly text: string }
   | { readonly type: 'ready' }
-  | { readonly type: 'setViewSettingsScope'; readonly scope: 'file' | 'group'; readonly state: LogViewState }
+  /** `shown` is the settings the view showed when it sent the message, so a view not yet reloaded cannot save into the other one. */
+  | { readonly type: 'setViewSettingsScope'; readonly scope: 'file' | 'group'; readonly shown?: 'file' | 'group'; readonly state: LogViewState }
   | { readonly type: 'lastFramesRequest'; readonly requestId: number; readonly timestamp: number }
   | { readonly type: 'pageRequest'; readonly requestId: number; readonly offset: number; readonly limit: number; readonly filter?: FrameFilter }
   | { readonly type: 'cancelParsing' }
@@ -176,10 +168,6 @@ export type ToExtensionMessage =
   | { readonly type: 'openWholeLog' }
   /** A Clip's start or end was dragged on a graph. */
   | { readonly type: 'updateClipRange'; readonly clipId: string; readonly startTimestamp: number; readonly endTimestamp: number }
-  | { readonly type: 'importExternalCsv' }
-  | { readonly type: 'commitExternalCsv'; readonly importId: string; readonly timestampColumn: string; readonly timestampUnit: 'seconds' | 'milliseconds' | 'microseconds'; readonly timeBase?: ExternalCsvTimeBase; readonly valueColumns: readonly { readonly column: string; readonly name: string; readonly unit?: string }[] }
-  | { readonly type: 'cancelExternalCsvImport'; readonly importId: string }
-  | { readonly type: 'removeExternalCsvSignal'; readonly sourceId: string; readonly column: string }
   | { readonly type: 'exportSignalCsv'; readonly selectedIds: readonly string[]; readonly timeDisplay?: TimeDisplayMode }
   | { readonly type: 'saveTimeSeriesImage'; readonly pngDataUrl: string; readonly svg: string }
   | { readonly type: 'saveTrajectoryImage'; readonly pngDataUrl: string; readonly svg: string }
@@ -188,7 +176,7 @@ export type ToExtensionMessage =
   | { readonly type: 'adjustTimeRangeRequest'; readonly requestId: number; readonly edge: 'start' | 'end'; readonly direction: -1 | 1; readonly startTimestamp: number; readonly endTimestamp: number }
   | { readonly type: 'createTableClip'; readonly startRow: number; readonly endRow: number; readonly generation: number; readonly signalIds: readonly string[] }
   | { readonly type: 'createClip'; readonly startTimestamp: number; readonly endTimestamp: number; readonly signalIds: readonly string[]; readonly viewState?: LogViewState }
-  | { readonly type: 'saveLogViewState'; readonly state: LogViewState };
+  | { readonly type: 'saveLogViewState'; readonly shown?: 'file' | 'group'; readonly state: LogViewState };
 
 export type ToWebviewMessage =
   | { readonly type: 'timelineRange'; readonly requestId: number; readonly range?: { readonly start: number; readonly end: number } }
@@ -214,8 +202,7 @@ export type ToWebviewMessage =
   | { readonly type: 'rowsCopied'; readonly count: number }
   | { readonly type: 'signalTableRowsCopied'; readonly count: number }
   | { readonly type: 'timeRangeAdjusted'; readonly requestId: number; readonly startTimestamp: number; readonly endTimestamp: number }
-  | { readonly type: 'signalCatalog'; readonly requestId: number; readonly definitions: readonly SignalDefinition[]; readonly groups: readonly SignalGroupDto[]; /** The Signals this log has samples of. Lists show only these (and what is already chosen). */ readonly measuredIds?: readonly string[]; /** True when the view settings are shared in a group, where Signals another log has may be wanted too. */ readonly unmeasuredOption?: boolean }
-  | ({ readonly type: 'externalCsvPreview' } & ExternalCsvPreviewDto)
+  | { readonly type: 'signalCatalog'; readonly requestId: number; readonly definitions: readonly SignalDefinition[]; readonly groups: readonly SignalGroupDto[]; /** The Signals this log has samples of. Lists show only these (and what is already chosen). */ readonly measuredIds?: readonly string[]; /** True when the view settings are shared in a group (the workspace root included), where Signals another log has may be wanted too. */ readonly unmeasuredOption?: boolean }
   | { readonly type: 'signalTablePage'; readonly requestId: number; readonly offset: number; readonly total: number; readonly generation: number; readonly rows: readonly SignalTableRowDto[] }
   | { readonly type: 'signalTableSample'; readonly requestId: number; readonly rows: readonly SignalTableRowDto[] }
   | { readonly type: 'signalSeries'; readonly requestId: number; readonly fullRange?: { readonly start: number; readonly end: number }; readonly series: readonly SignalSeriesDto[] };

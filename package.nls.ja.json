@@ -1,5 +1,5 @@
 {
-  "sigmixa.description": "VS Codeで使える無料・オープンソースのCAN/CAN FDログ解析ツール。DBCを使ったASC/BLFのデコード、シグナルのグラフ化、クリップ比較、2D/3D軌跡再生に対応。オフラインでログを解析できる、CANalyzerに代わる選択肢です。",
+  "sigmixa.description": "VS Codeで使える無料・オープンソースのCAN/CAN FDログ解析ツール。DBCを使ったASC/BLF/MF4のデコード、MDF・CSVの計測値の読み込み、シグナルのグラフ化、クリップ比較、2D/3D軌跡再生に対応。オフラインでログを解析できる、CANalyzerに代わる選択肢です。",
   "sigmixa.views.frames": "フレーム定義",
   "sigmixa.views.plugins": "プラグイン",
   "sigmixa.command.openLog": "CANログを開く",

@@ -4,7 +4,9 @@ export type SignalSource =
   | { readonly type: 'manual-can'; readonly frameDefinitionId: string }
   | { readonly type: 'plugin'; readonly pluginId: string; readonly bindingId: string }
   | { readonly type: 'calculated'; readonly calculationId: string }
-  | { readonly type: 'external-csv'; readonly sourceId: string; readonly column: string };
+  | { readonly type: 'external-csv'; readonly sourceId: string; readonly column: string }
+  /** A measured signal stored in the MF4 log itself: its channel group and channel. */
+  | { readonly type: 'mdf-channel'; readonly group: string; readonly channel: string; /** Absent: MF4. */ readonly format?: 'MDF' | 'CSV' };
 
 export interface SignalDefinition {
   readonly id: string;
@@ -14,6 +16,8 @@ export interface SignalDefinition {
   readonly group?: string;
   readonly source: SignalSource;
   readonly frameRef?: { readonly canId: number; readonly extended: boolean };
+  /** A member of a structure or an element of an array (MF4): listed under its parent, by `member`. */
+  readonly parent?: { readonly id: string; readonly label: string; readonly member: string };
 }
 
 export interface SignalSample {

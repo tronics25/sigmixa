@@ -34,7 +34,7 @@ An analysis group bundles Frame definitions and view settings for one thing you 
 
 Each level stores its settings in its own `.sigmixa/project.json`. Workspaces from SigMixa 1.x load as the workspace level.
 
-Logs are ASC or BLF files with Classic CAN or CAN FD records. Parsing progress, cancellation and diagnostics appear in the log view.
+Logs are ASC or BLF files with Classic CAN or CAN FD records, CSV files of measured values, or ASAM MDF files: MF4 with CAN bus logging and measured signals, and MDF 3 with measured signals. Measured signals are listed under **MF4 ·** (or **MDF ·**) and their channel group, next to the Signals decoded from CAN; members of structures and elements of arrays are listed under their structure or array. Parsing progress, cancellation and diagnostics appear in the log view.
 
 ## 2. Define Frames and Signals
 
@@ -101,7 +101,7 @@ The Table shows selected Signals at their original event timestamps.
 
 ### Graphs
 
-- **Unit systems.** Compatible units are converted onto one axis. For example, km/h from CAN and m/s from a CSV file share one speed axis. When all Signals already use one unit, that unit is kept. A graph shows up to two unit systems on real-value axes; with more, choose normalized display, or let SigMixa split the extra unit systems into further graphs.
+- **Unit systems.** Compatible units are converted onto one axis. For example, km/h and m/s share one speed axis. When all Signals already use one unit, that unit is kept. A graph shows up to two unit systems on real-value axes; with more, choose normalized display, or let SigMixa split the extra unit systems into further graphs.
 - **Gaps.** **Connect gaps** draws continuous lines between samples taken at different times or periods. It changes only the drawing, not the measured values.
 - **Values.** Hover to read values along the line. Click to pin a marker, which snaps to the original measured samples. A compact offset such as `@-3ms` marks a sample taken at a different time from the marker. Hover a legend entry to emphasize that Signal's line and values.
 - **One time axis.** Every graph shows the same time span. Zoom with the buttons at the top right of Visualize, or zoom and scroll with the wheel on any graph: all graphs follow.
@@ -109,8 +109,8 @@ The Table shows selected Signals at their original event timestamps.
 
 ### Trajectories
 
-- **Series.** A trajectory draws X, Y and optional Z Signals from one source. Without Z it is 2D. One view can draw several series at once, for example four wheel positions, or a vehicle and an obstacle.
-- **Camera.** **X**, **Y** and **Z** look along that axis from its + side, and **Reset view** returns to the default angle. They only move the camera, and fit the whole trajectory to the view; the fit follows when the view is resized until you zoom, pan or rotate. Drag to rotate and scroll to zoom.
+- **Series.** A trajectory is drawn by combining three (or two) values within a frame. One view can draw several series at once, for example four wheel positions, or a vehicle and an obstacle.
+- **Camera.** **X**, **Y** and **Z** look along that axis from its + side, and **Reset view** returns to the default angle. They only move the camera, and fit the whole trajectory to the view; the fit follows when the view is resized or rotated until you zoom or pan. Drag to rotate and scroll to zoom.
 - **Coordinate system.** A 3D trajectory is right-handed by default. If your axes are left-handed, such as X forward, Y right and Z up, choose **Left-handed** in the drawing settings; every view is then shown mirrored, so the axes appear the way they are defined.
 - **Inspection.** Show data points, inspect coordinates, or select two points to measure elapsed time, coordinate differences, straight distance, path length and average speed.
 
@@ -120,13 +120,15 @@ The Table shows selected Signals at their original event timestamps.
 - **Playing and following.** Play, step or drag the time position; graphs and trajectories follow it.
 - **Arranging rows.** Pin CAN IDs to keep them at the top. Switch rows between RAW and decoded. Right-click to choose columns.
 
-### External CSV
+### CSV logs
 
-**External CSV** adds reference Signals to graphs. Choose the timestamp column, its unit (seconds, milliseconds or microseconds) and the value columns. Removing the last imported Signal removes the CSV source from the project; the file itself is kept.
+A CSV file of measured values opens as a log. Add it to an analysis group (or the workspace) with **Open CAN Log** or by dropping it there: unlike ASC and BLF files, CSV files in a folder are not listed by themselves. Its first row names the columns. The time column is the one named like a time (for example `Time`, `Timestamp` or `Time_ms`), otherwise the first column; its unit comes from its name (`_ms`, `[us]`, `(ns)`, otherwise seconds), and dates and times or Unix seconds are read as clock times. Every other column is a Signal, with the unit written in brackets after its name (`Speed [km/h]`). A column holding anything but numbers is reported as an error; an empty cell is a gap. The RAW log of a CSV log is empty; its Signals appear in Visualize, the Table and trajectories. To view a CSV log together with a CAN log, compare them on the comparison screen.
 
 ### Where view settings are saved
 
-In an analysis group, **View settings** chooses where a log's view settings are saved: **This file** or **Shared in group**. Shared settings make every log of the group open with the same views.
+**View settings** chooses which settings a log shows: **This file** (its own) or **Shared in group**. Shared settings make every log of the group open with the same views, and a change made while they are shown applies to every log that shows them. A log keeps its own settings while it shows the group's: switching back to **This file** shows them as they were. A log that has no settings of its own yet starts from the view a new log opens with. Logs at the top of the workspace, outside any group's folder, form a group of their own.
+
+Column widths are not saved: each time a log opens, every column of the RAW log, the Table and the Trace is fitted to its content.
 
 ### Export
 
@@ -170,13 +172,3 @@ Plugins extend decoding with local CommonJS packages. Register a package from **
 An analysis group can only use a Plugin that is registered and enabled with the same version and configuration; otherwise its logs open without that Plugin's decoding, and SigMixa says so.
 
 Plugins execute locally in the VS Code Extension Host, so install only code you trust. See the [Plugin SDK](plugin-sdk.md).
-
-## Compatibility and limits
-
-- External CSV Signals appear in graphs, not in the Table or in trajectories.
-- A trajectory needs X/Y/Z samples from one source with matching timestamps; it does not resample unmatched series.
-- Large captures use memory in proportion to the parsed Frames and decoded Signals.
-- Graphs thin the drawn points for responsiveness; pinned markers read the original samples.
-- Plugins run synchronously and are not sandboxed; a slow Plugin delays analysis.
-- Clips and added logs refer to their files. Moving or renaming a file inside VS Code updates them. Moving it outside VS Code, for example in Finder or File Explorer, leaves them marked **Not found**.
-- The main workflows are available in English and Japanese; some low-level diagnostics remain in English.

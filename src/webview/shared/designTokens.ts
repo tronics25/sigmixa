@@ -55,6 +55,8 @@ input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color])
 :is(.cell,.data-table td) input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),:is(.cell,.data-table td) select{height:var(--sm-control-height-compact);font-size:var(--sm-font-small)}
 :is(.cell,.data-table td) .choice-group>button{height:var(--sm-control-height-compact);min-height:0;padding:0 var(--sm-control-padding-x-compact);font-size:var(--sm-font-small)}
 .toolbar,.view-toolbar{gap:var(--sm-toolbar-gap)}
+.side-panel-resizer{position:relative;z-index:2;flex:0 0 5px;margin-right:-5px;cursor:col-resize;background:transparent}.side-panel-resizer:hover,.side-panel-resizer.dragging{background:var(--vscode-focusBorder)}.side-panel-resizer:has(+[hidden]){display:none}
+.add-view,.add-graph{display:inline-flex;align-items:center;gap:var(--sm-space-xs)}.add-view .codicon,.add-graph .codicon{font-size:var(--sm-font-heading)}
 /* In toolbars a labelled choice reads inline, like the checkboxes beside it. */
 :is(.axis-mode,.chart-axis-mode).choice-field{flex-direction:row;align-items:center;gap:var(--sm-space-sm)}
 /* Icon buttons inside a joined group keep the standard hover shape. */

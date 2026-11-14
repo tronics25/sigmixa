@@ -64,6 +64,9 @@ async function run() {
   if (watch) {
     console.log('[sigmixa-watch] starting');
     const contexts = await Promise.all(configs.map((c) => esbuild.context(c)));
+    // watch() returns before its first build is written, and out/ was just removed: build once first, so "ready"
+    // (which lets F5 start the Extension Development Host) never comes while out/ is empty or half written.
+    await Promise.all(contexts.map((ctx) => ctx.rebuild()));
     await Promise.all(contexts.map((ctx) => ctx.watch()));
     console.log('[sigmixa-watch] ready');
   } else {

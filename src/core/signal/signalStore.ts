@@ -1,8 +1,9 @@
 import type { SignalDefinition, SignalEvent, SignalSample } from './signal';
 import { signalCellChange, type SignalCellChange } from './tableChanges';
-import { finishScan, SCAN_STEP, textCells, WidestPicker } from '../frame/widestText';
+import { finishScan, memoCells, SCAN_STEP, tagTextCells, TAG_SPACING, textCells, valueTextCells, WidestPicker } from '../frame/widestText';
 import type { TimeRange } from '../timeline/timeline';
-import { Column, F64Column, I32Column, stableOrder, U16Column, U32Column, U8Column } from '../storage/column';
+import { watchedSteps } from '../storage/steps';
+import { Column, F64Column, I32Column, mergedOrder, stableOrder, U16Column, U32Column, U8Column } from '../storage/column';
 
 export interface SignalEventRow {
   readonly id: string;
@@ -70,6 +71,13 @@ interface Series {
   /** State names, as the store's label number + 1 (0 = none). */
   labels?: Column<Uint32Array>;
   extras?: SampleExtrasColumn;
+  /**
+   * The name and unit a sample came with, when a Plugin gave the Signal another one than the series has: variant number
+   * + 1 in `variantDefinitions` (0 = the series' own). Made when the first such sample comes.
+   */
+  variants?: VariantColumn; variantDefinitions?: SignalDefinition[];
+  /** `variantDefinitions` by name and unit (see `variantKey`): its number there. Made again when missing. */
+  variantNumbers?: Map<string, number>;
   minimum: number; maximum: number; minimumTimestamp: number; maximumTimestamp: number;
   sorted: boolean; lastTimestamp: number;
   /** `rows` never decreases, so a row's samples are found by binary search; otherwise through `rowOrder`. */
@@ -89,7 +97,7 @@ const SUMMARY_BLOCK = 64;
 
 // Every field is there from the start, so all series share one shape and the engine keeps access to them fast.
 const newSeries = (definition: SignalDefinition): Series => ({
-  definition, events: [], values: new F64Column(), rows: undefined, times: undefined, qualities: undefined, quality: -1, labels: undefined, extras: undefined,
+  definition, events: [], values: new F64Column(), rows: undefined, times: undefined, qualities: undefined, quality: -1, labels: undefined, extras: undefined, variants: undefined, variantDefinitions: undefined, variantNumbers: undefined,
   minimum: Infinity, maximum: -Infinity, minimumTimestamp: Infinity, maximumTimestamp: -Infinity,
   sorted: true, lastTimestamp: -Infinity, rowsAscending: true, rowOrder: undefined, cadence: undefined, summary: undefined,
 });
@@ -100,6 +108,11 @@ interface RowEntry { readonly series: number; readonly sample: number }
  * Signal values of a log. Everything is kept in typed arrays, so tens of millions of samples fit in memory; SignalSample
  * objects and rows are made only for what is handed out.
  */
+/** Samples for `appendSeriesRows`: all at once, or by index (`time` and `sample` of 0..length-1, in time order). */
+export type SeriesRowsSource =
+  | { readonly definition: SignalDefinition; readonly samples: readonly SignalSample[] }
+  | { readonly definition: SignalDefinition; readonly length: number; time(index: number): number; sample(index: number): SignalSample };
+
 export class InMemorySignalStore {
   private seriesList: Series[] = [];
   private seriesIndex = new Map<string, number>();
@@ -143,16 +156,17 @@ export class InMemorySignalStore {
    * Makes room for what a log `scale` times as long as the part read so far holds (`frames` frames): the rows, and,
    * without a cap on Signals per row, each Signal's samples too, for the same reason as `reserveRows`.
    */
-  reserveScaled(scale: number, frames: number, maxRefsPerRow = 8): void {
+  /** `ordinals`: the frame ordinals the rows will reach, when known (else `frames * scale`). */
+  reserveScaled(scale: number, frames: number, maxRefsPerRow = 8, ordinals = frames * scale): void {
     const rows = Math.min(this.rowTimes.n, frames) * scale;
     for (const column of [this.rowTimes, this.rowKeys, this.refStart]) grow(column, rows);
     grow(this.refSeries, Math.min(this.refSeries.n * scale, rows * maxRefsPerRow));
-    grow(this.rowOfOrdinal, frames * scale);
+    grow(this.rowOfOrdinal, ordinals);
     // Each Signal's share is trusted only once enough of the log is read (no cap on Signals per row).
     if (Number.isFinite(maxRefsPerRow)) return;
     for (const target of this.seriesList) {
       const size = target.values.n * scale;
-      for (const column of [target.values, target.rows, target.times, target.qualities, target.labels, target.extras]) if (column) grow(column, size);
+      for (const column of [target.values, target.rows, target.times, target.qualities, target.labels, target.extras, target.variants]) if (column) grow(column, size);
     }
   }
   get rowCount(): number { return this.rowTimes.n; }
@@ -175,7 +189,7 @@ export class InMemorySignalStore {
       let index = this.seriesIndex.get(item.definition.id);
       if (index === undefined) index = this.addSeries(newSeries(item.definition));
       this.pushRef(index);
-      this.pushSample(this.seriesList[index], item.sample, row, timestamp);
+      this.pushSample(this.seriesList[index], item.sample, row, timestamp); this.noteDefinition(this.seriesList[index], item.definition);
     }
     this.endRow(row, timestamp);
   }
@@ -201,9 +215,20 @@ export class InMemorySignalStore {
       let index = this.seriesIndex.get(item.definition.id);
       if (index === undefined) index = this.addSeries(newSeries(item.definition));
       this.pushRef(index);
-      this.pushSample(this.seriesList[index], item.sample, row, timestamp);
+      this.pushSample(this.seriesList[index], item.sample, row, timestamp); this.noteDefinition(this.seriesList[index], item.definition);
     }
     this.endRow(row, timestamp);
+  }
+
+  /** Keeps the name and unit the sample just added came with, when they are not the series' own (see `Series.variants`). */
+  private noteDefinition(target: Series, definition: SignalDefinition): void {
+    if (definition === target.definition || (definition.name === target.definition.name && definition.unit === target.definition.unit)) return;
+    const list = target.variantDefinitions ??= [];
+    const numbers = target.variantNumbers ??= new Map(list.map((item, number) => [variantKey(item), number]));
+    const key = variantKey(definition); let number = numbers.get(key);
+    if (number === undefined) { number = list.length; list.push(definition); numbers.set(key, number); }
+    const index = target.values.n - 1;
+    (target.variants ??= new VariantColumn(index + 1)).set(index, number + 1);
   }
 
   private startRow(key: number, timestamp: number): number {
@@ -233,25 +258,31 @@ export class InMemorySignalStore {
   pluginSamplesOfFrame(frame: SignalFrameRef): { readonly definition: SignalDefinition; readonly value: number }[] {
     const key = this.existingKey(frame); if (key === undefined) return [];
     const result: { definition: SignalDefinition; value: number }[] = [];
-    for (const row of this.rowsOfKey(key)) {
-      const start = this.refStart.a[row]; const end = this.refEnd(row); const refs = this.refSeries.a;
-      // The row's samples of a Signal are next to each other: each ref's sample is found from the last of them.
-      const totals = new Map<number, number>();
-      for (let ref = start; ref < end; ref++) if (this.seriesList[refs[ref]].definition.source.type === 'plugin') totals.set(refs[ref], (totals.get(refs[ref]) ?? 0) + 1);
-      if (!totals.size) continue;
-      const firsts = new Map<number, number>();
-      for (let ref = start; ref < end; ref++) {
-        const series = refs[ref]; const total = totals.get(series); if (total === undefined) continue;
-        const target = this.seriesList[series];
-        let next = firsts.get(series);
-        if (next === undefined) { const last = this.lastSampleOfRow(target, row); next = last < 0 ? -1 : last - (total - 1); }
-        if (next < 0) continue;
-        firsts.set(series, next + 1);
-        result.push({ definition: target.definition, value: target.values.a[next] });
-      }
-    }
+    const first = key >= 0 && key < this.rowOfOrdinal.n ? this.rowOfOrdinal.a[key] - 1 : -1;
+    if (first >= 0) this.pluginSamplesOfRow(first, result);
+    const more = this.moreRows.get(key); if (more) for (const row of more) this.pluginSamplesOfRow(row, result);
     return result;
   }
+
+  private pluginSamplesOfRow(row: number, result: { definition: SignalDefinition; value: number }[]): void {
+    const start = this.refStart.a[row]; const end = this.refEnd(row); const refs = this.refSeries.a; const list = this.seriesList;
+    // How often the row holds each Signal: counted ref by ref in a short row, through a map in a long one (a Plugin
+    // giving hundreds of values), so neither makes work per ref that grows with the row.
+    let totals: Map<number, number> | undefined; let seens: Map<number, number> | undefined;
+    if (end - start > 32) { totals = new Map(); seens = new Map(); for (let ref = start; ref < end; ref++) totals.set(refs[ref], (totals.get(refs[ref]) ?? 0) + 1); }
+    for (let ref = start; ref < end; ref++) {
+      const series = refs[ref]; const target = list[series];
+      if (target.definition.source.type !== 'plugin') continue;
+      // The row's samples of a Signal are next to each other: the one this ref stands for is found from the last of them.
+      let seen = 0; let total = 0;
+      if (totals) { total = totals.get(series)!; seen = seens!.get(series) ?? 0; seens!.set(series, seen + 1); }
+      else for (let other = start; other < end; other++) if (refs[other] === series) { if (other < ref) seen++; total++; }
+      const last = this.lastSampleOfRow(target, row); if (last < 0) continue;
+      const sample = last - (total - 1) + seen; const variant = target.variants?.at(sample);
+      result.push({ definition: variant ? target.variantDefinitions![variant - 1] : target.definition, value: target.values.a[sample] });
+    }
+  }
+
 
   appendEvents(signalId: string, events: readonly SignalEvent[]): void {
     const index = this.seriesIndex.get(signalId);
@@ -268,34 +299,112 @@ export class InMemorySignalStore {
   }
 
   /**
+   * Signals measured apart from the frames (External CSV, the measured signals of an MF4 log), each given in time order:
+   * every time at which any of them has a sample becomes a row of its own, keyed `key`, so the Table shows them in
+   * time order among the frames' rows. A sample without a finite time has no place in time and is left out.
+   */
+  appendSeriesRows(key: string, input: readonly SeriesRowsSource[]): void {
+    // Samples given by accessor are made one at a time: millions of them are never all objects at once.
+    const series = input.map((item) => !('time' in item) ? { definition: item.definition, length: item.samples.length, time: (i: number) => item.samples[i].timestamp, sample: (i: number) => item.samples[i] } : item);
+    this.registerDefinitions(series.map((item) => item.definition));
+    const rowKey = this.keyOf(key);
+    const targets = series.map((item) => this.seriesIndex.get(item.definition.id)!);
+    const at = series.map(() => 0);
+    const next = (i: number): number => {
+      const item = series[i];
+      while (at[i] < item.length && !Number.isFinite(item.time(at[i]))) at[i]++;
+      return at[i] < item.length ? item.time(at[i]) : Infinity;
+    };
+    for (;;) {
+      let time = Infinity;
+      for (let i = 0; i < series.length; i++) time = Math.min(time, next(i));
+      if (time === Infinity) break;
+      const row = this.startRow(rowKey, time);
+      for (let i = 0; i < series.length; i++) {
+        if (next(i) !== time) continue;
+        this.pushRef(targets[i]);
+        this.pushSample(this.seriesList[targets[i]], series[i].sample(at[i]++), row, time);
+      }
+      this.endRow(row, time);
+    }
+  }
+
+  /**
    * Atomically replaces a subset of decoded definitions with a separately-built
    * shard. This keeps unrelated series intact during incremental reanalysis.
    */
   replaceDefinitions(predicate: (definition: SignalDefinition) => boolean, replacement: InMemorySignalStore): void {
+    finishScan(this.replaceDefinitionsSteps(predicate, replacement));
+  }
+
+  /** The series of `index`, moved into `into` (its state names numbered there) instead of copied: `this` is not used after. */
+  private moveSeries(index: number, into: InMemorySignalStore): Series {
+    const source = this.seriesList[index];
+    if (source.labels) {
+      const numbers = this.labelTexts.map((text) => into.labelNumber(text) + 1); const labels = source.labels;
+      for (let sample = 0; sample < labels.n; sample++) if (labels.a[sample]) labels.a[sample] = numbers[labels.a[sample] - 1];
+    }
+    return { ...source, rowOrder: undefined, cadence: undefined, summary: undefined };
+  }
+
+  /**
+   * `replaceDefinitions` in steps (about a hundred thousand rows or samples each), so a large log's screens are served
+   * between them: everything is built aside, and the store changes only at the last step, so it reads as before until
+   * then. A store that changed between steps (rows added, samples reordered, or replaced again) is not changed: false;
+   * with `move`, `replacement` is then used up and must be made again.
+   */
+  /** `move`: `replacement` is not used afterwards, so its series are moved here rather than copied. */
+  *replaceDefinitionsSteps(predicate: (definition: SignalDefinition) => boolean, replacement: InMemorySignalStore, move = false): Generator<void, boolean> {
+    // Rows added, or samples put in another order (a graph sorted a Signal), since the first step: what was built no longer fits.
+    return (yield* watchedSteps(() => [this.version, this.layoutVersion], () => this.replaceDefinitionsJob(predicate, replacement, move), 'drop')) ?? false;
+  }
+
+  private *replaceDefinitionsJob(predicate: (definition: SignalDefinition) => boolean, replacement: InMemorySignalStore, move: boolean): Generator<void, boolean> {
+    let work = 0;
     const incoming = new Set(replacement.seriesList.map((target) => target.definition.id));
     // Old series index -> new index (-1 = removed); replacement series follow the kept ones.
     const oldToNew = new Int32Array(this.seriesList.length).fill(-1); const series: Series[] = [];
     this.seriesList.forEach((target, index) => { if (!predicate(target.definition) && !incoming.has(target.definition.id)) { oldToNew[index] = series.length; series.push(target); } });
-    const replacementToNew = replacement.seriesList.map((target, index) => { series.push(replacement.cloneSeries(index, this)); return series.length - 1; });
+    const kept = series.length;
+    const replacementToNew = replacement.seriesList.map((target, index) => { series.push(move ? replacement.moveSeries(index, this) : replacement.cloneSeries(index, this)); return series.length - 1; });
     const oldRows = this.rowTimes.n; const newRows = replacement.rowTimes.n;
     // Kept Signals of each old row; a row left with none is dropped.
     const keptRefs = new Uint32Array(oldRows);
-    for (let row = 0; row < oldRows; row++) { const end = this.refEnd(row); for (let ref = this.refStart.a[row]; ref < end; ref++) if (oldToNew[this.refSeries.a[ref]] >= 0) keptRefs[row]++; }
+    for (let row = 0; row < oldRows; row++) { const end = this.refEnd(row); for (let ref = this.refStart.a[row]; ref < end; ref++) if (oldToNew[this.refSeries.a[ref]] >= 0) keptRefs[row]++; if ((work += 1) >= REPLACE_STEP) { work = 0; yield; } }
     // Each replacement row joins the old row of its frame (at the same time, else the first), or becomes a row of its own.
     const target = new Int32Array(newRows).fill(-1);
     for (let row = 0; row < newRows; row++) {
       const key = this.existingKey(replacement.frameRefOf(replacement.rowKeys.a[row])); if (key === undefined) continue;
-      const candidates = this.rowsOfKey(key).filter((candidate) => keptRefs[candidate] > 0);
-      target[row] = candidates.find((candidate) => this.rowTimes.a[candidate] === replacement.rowTimes.a[row]) ?? candidates[0] ?? -1;
+      // Of the frame's rows that keep a Signal (`rowsOfKey` order), the first at the same time, else the first.
+      let chosen = -1; const time = replacement.rowTimes.a[row];
+      const consider = (candidate: number): boolean => { if (keptRefs[candidate] === 0) return false; if (chosen < 0) chosen = candidate; if (this.rowTimes.a[candidate] === time) { chosen = candidate; return true; } return false; };
+      const first = key >= 0 && key < this.rowOfOrdinal.n ? this.rowOfOrdinal.a[key] - 1 : -1;
+      if (!(first >= 0 && consider(first))) { const more = this.moreRows.get(key); if (more) for (const candidate of more) if (consider(candidate)) break; }
+      target[row] = chosen;
+      if ((work += 4) >= REPLACE_STEP) { work = 0; yield; }
     }
-    const joined = new Map<number, number[]>();
-    for (let row = 0; row < newRows; row++) if (target[row] >= 0) { const list = joined.get(target[row]) ?? []; list.push(row); joined.set(target[row], list); }
+    // The replacement rows that join each old row, in order, as linked lists in typed arrays (no object per row).
+    const firstJoined = new Int32Array(oldRows).fill(-1); const lastJoined = new Int32Array(oldRows).fill(-1); const nextJoined = new Int32Array(newRows).fill(-1);
+    for (let row = 0; row < newRows; row++) {
+      const old = target[row];
+      if (old >= 0) { if (firstJoined[old] < 0) firstJoined[old] = row; else nextJoined[lastJoined[old]] = row; lastJoined[old] = row; }
+      if ((++work) >= REPLACE_STEP) { work = 0; yield; }
+    }
     // Merged rows: kept old rows in their order, then new rows; sorted by time, keeping that order for equal times.
-    const order: number[] = [];
-    for (let row = 0; row < oldRows; row++) if (keptRefs[row] > 0) order.push(row);
-    for (let row = 0; row < newRows; row++) if (target[row] < 0) order.push(oldRows + row);
     const timeOf = (item: number) => item < oldRows ? this.rowTimes.a[item] : replacement.rowTimes.a[item - oldRows];
-    order.sort((left, right) => timeOf(left) - timeOf(right) || left - right);
+    let olds = new Uint32Array(oldRows); let oldCount = 0; let news = new Uint32Array(newRows); let newCount = 0;
+    for (let row = 0; row < oldRows; row++) { if (keptRefs[row] > 0) olds[oldCount++] = row; if ((++work) >= REPLACE_STEP) { work = 0; yield; } }
+    for (let row = 0; row < newRows; row++) { if (target[row] < 0) news[newCount++] = oldRows + row; if ((++work) >= REPLACE_STEP) { work = 0; yield; } }
+    olds = olds.subarray(0, oldCount); news = news.subarray(0, newCount);
+    const compare = (left: number, right: number) => timeOf(left) - timeOf(right) || left - right;
+    // Both lists already in time order (rows put in order when the log was read): merged as they are, else sorted.
+    let sorted = true;
+    for (const list of [olds, news]) for (let index = 1; sorted && index < list.length; index++) { if (!(compare(list[index - 1], list[index]) < 0)) sorted = false; if ((++work) >= REPLACE_STEP) { work = 0; yield; } }
+    let order: Uint32Array;
+    if (sorted) {
+      order = new Uint32Array(oldCount + newCount); let left = 0; let right = 0;
+      for (let index = 0; index < order.length; index++) { order[index] = right >= newCount || (left < oldCount && compare(olds[left], news[right]) < 0) ? olds[left++] : news[right++]; if ((++work) >= REPLACE_STEP) { work = 0; yield; } }
+    } else order = Uint32Array.from([...olds, ...news].sort(compare));
     const oldRowToNew = new Int32Array(oldRows).fill(-1); const newRowToMerged = new Int32Array(newRows).fill(-1);
     const rowTimes = new F64Column(order.length + 1); const rowKeys = new I32Column(order.length + 1); const refStart = new U32Column(order.length + 1);
     const refSeries: Column<Uint32Array> = new U32Column(this.refSeries.n + replacement.refSeries.n + 1);
@@ -307,27 +416,46 @@ export class InMemorySignalStore {
       if (item < oldRows) {
         rowTimes.push(this.rowTimes.a[item]); rowKeys.push(this.rowKeys.a[item]); oldRowToNew[item] = merged;
         copyRefs(this, item, (index) => oldToNew[index]);
-        for (const row of joined.get(item) ?? []) { newRowToMerged[row] = merged; copyRefs(replacement, row, (index) => replacementToNew[index]); }
+        for (let row = firstJoined[item]; row >= 0; row = nextJoined[row]) { newRowToMerged[row] = merged; copyRefs(replacement, row, (index) => replacementToNew[index]); }
       } else {
         const row = item - oldRows; rowTimes.push(replacement.rowTimes.a[row]); rowKeys.push(this.keyOf(replacement.frameRefOf(replacement.rowKeys.a[row]))); newRowToMerged[row] = merged;
         copyRefs(replacement, row, (index) => replacementToNew[index]);
       }
+      if ((work += 1) >= REPLACE_STEP) { work = 0; yield; }
     }
+    // Kept series still belong to the store as it is: their new rows (and times) are made aside and set at the end.
+    const remapped: { readonly item: Series; readonly rows: Column<Uint32Array>; readonly times?: Column<Float64Array>; readonly ascending: boolean }[] = [];
     for (let index = 0; index < series.length; index++) {
       const item = series[index]; if (!item.rows) continue;
-      const fromReplacement = replacementToNew.includes(index);
+      const fromReplacement = index >= kept;
       const map = fromReplacement ? newRowToMerged : oldRowToNew; const sourceTimes = fromReplacement ? replacement.rowTimes.a : this.rowTimes.a;
       // A sample that takes its time from its row keeps that time, even if it joined a row at another time.
+      let times: Column<Float64Array> | undefined;
       if (!item.times) for (let sample = 0; sample < item.values.n; sample++) {
-        const row = item.rows.a[sample]; if (row !== NO_ROW && rowTimes.a[map[row]] !== sourceTimes[row]) { this.ownTimes(item, sourceTimes); break; }
+        if ((++work) >= REPLACE_STEP) { work = 0; yield; }
+        const row = item.rows.a[sample]; if (row !== NO_ROW && rowTimes.a[map[row]] !== sourceTimes[row]) { times = new F64Column(Math.max(16, item.values.n + 1)); for (let at = 0; at < item.values.n; at++) { const from = item.rows.a[at]; times.push(from === NO_ROW ? Number.NaN : sourceTimes[from]); } break; }
       }
-      for (let sample = 0; sample < item.values.n; sample++) { const row = item.rows.a[sample]; if (row !== NO_ROW) item.rows.a[sample] = map[row]; }
-      this.checkRowsAscending(item);
+      const rows = fromReplacement ? item.rows : item.rows.clone() as Column<Uint32Array>;
+      // Whether the new rows still only grow (as `checkRowsAscending` finds), found on the way.
+      let ascending = true; let previous = -1;
+      for (let sample = 0; sample < item.values.n; sample++) {
+        let row = rows.a[sample]; if (row !== NO_ROW) { row = rows.a[sample] = map[row]; if (row < previous) ascending = false; previous = row; }
+        if ((sample & 0xffff) === 0xffff) if ((work += 0x10000) >= REPLACE_STEP) { work = 0; yield; }
+      }
+      remapped.push({ item, rows, ascending, ...(times ? { times } : {}) });
+      if ((work += item.values.n % 0x10000) >= REPLACE_STEP) { work = 0; yield; }
     }
+    // The row of each frame ordinal, for the new rows.
+    // A new column is all zeros already.
+    const rowOfOrdinal = new I32Column(Math.max(16, this.rowOfOrdinal.n)); rowOfOrdinal.n = this.rowOfOrdinal.n; const moreRows = new Map<number, number[]>();
+    for (let row = 0; row < rowTimes.n; row++) { indexRowInto(rowOfOrdinal, moreRows, rowKeys.a[row], row); if ((work += 1) >= REPLACE_STEP) { work = 0; yield; } }
+    for (const { item, rows, times, ascending } of remapped) { item.rows = rows; if (times) item.times = times; item.rowOrder = undefined; item.rowsAscending = ascending; }
     this.seriesList = series; this.seriesIndex = new Map(series.map((item, index) => [item.definition.id, index]));
     this.rowTimes = rowTimes; this.rowKeys = rowKeys; this.refStart = refStart; this.refSeries = refSeries;
     this.rowsSorted = true; this.lastRowTime = rowTimes.n ? rowTimes.a[rowTimes.n - 1] : -Infinity;
-    this.rebuildRowIndex(); this.invalidateTableCache(); this.version++; this.layoutVersion++;
+    this.rowOfOrdinal = rowOfOrdinal; this.moreRows = moreRows;
+    this.invalidateTableCache(); this.version++; this.layoutVersion++;
+    return true;
   }
 
   calculationSeries(): readonly { readonly definition: SignalDefinition; readonly samples: readonly SignalSample[] }[] {
@@ -350,7 +478,7 @@ export class InMemorySignalStore {
 
   /** Gives back the spare room of every column, one column per step: on a large log each is a large copy. */
   *trimSteps(): Generator<void, void> {
-    for (const target of this.seriesList) for (const column of [target.values, target.rows, target.times, target.qualities, target.labels, target.extras]) if (column) { column.trim(); yield; }
+    for (const target of this.seriesList) for (const column of [target.values, target.rows, target.times, target.qualities, target.labels, target.extras, target.variants]) if (column) { column.trim(); yield; }
     for (const column of [this.rowTimes, this.rowKeys, this.refStart, this.refSeries, this.rowOfOrdinal]) { column.trim(); yield; }
   }
 
@@ -379,14 +507,20 @@ export class InMemorySignalStore {
    */
   tableWidthRows(selectedIds: readonly string[], range?: TimeRange): readonly SignalEventRow[] { return finishScan(this.tableWidthScan(selectedIds, range)); }
 
-  /** `tableWidthRows` in steps: yields every few thousand rows so a caller can let other work run on a large log. */
+  /**
+   * `tableWidthRows` in steps: yields every few thousand rows so a caller can let other work run on a large log. Rows or
+   * samples put in another order between steps (the log finished reading) change what row numbers mean: it starts again.
+   */
   *tableWidthScan(selectedIds: readonly string[], range?: TimeRange): Generator<void, readonly SignalEventRow[]> {
+    return (yield* watchedSteps(() => [this.layoutVersion], () => this.tableWidthJob(selectedIds, range), 'restart')) ?? [];
+  }
+
+  private *tableWidthJob(selectedIds: readonly string[], range?: TimeRange): Generator<void, readonly SignalEventRow[]> {
     // Works from the Signals' own samples, not from the Table's row list, so another Table selection made between steps
     // does not disturb it: every row holding a sample of a selected Signal is a Table row, when it is in the range.
-    // Rows or samples put in another order between steps (the log finished reading) change what row numbers mean: start again.
-    const layout = this.layoutVersion; const ids = [...new Set(selectedIds)];
+    const ids = [...new Set(selectedIds)];
     const picker = new WidestPicker<number>();
-    const valueCells = memoCells(tableValueText); const labelCells = memoCells(textCells);
+    const valueCells = memoCells(tableValueText); const labelCells = memoCells((label: string) => label);
     // The earliest and the latest Table row; of rows with the same time, the first one, as the Table lists them.
     let first = -1; let last = -1;
     // Samples already looked at, per Signal. A pass looks at the samples added since, including Signals that got their first
@@ -403,7 +537,7 @@ export class InMemorySignalStore {
       const steps = pending >= SCAN_STEP;
       for (const { id, target } of targets) {
         for (let sample = done.get(id) ?? 0; sample < target.values.n; sample++) {
-          if (steps && ++scanned >= SCAN_STEP) { scanned = 0; done.set(id, sample); yield; if (this.layoutVersion !== layout) return yield* this.tableWidthScan(selectedIds, range); }
+          if (steps && ++scanned >= SCAN_STEP) { scanned = 0; done.set(id, sample); yield; }
           // Read again after a step: the arrays grow while the log is read.
           const rows = target.rows!.a; const row = rows[sample]; if (row === NO_ROW) continue;
           const time = this.rowTimes.a[row]; if (range && (time < range.start || time > range.end)) continue;
@@ -412,7 +546,7 @@ export class InMemorySignalStore {
           // A row shows the last sample of a Signal it holds twice; the next sample of the row may not be read yet.
           if (target.rowsAscending ? sample + 1 < target.values.n && rows[sample + 1] === row : this.lastSampleOfRow(target, row) !== sample) continue;
           const label = target.labels?.a[sample] ? this.labelTexts[target.labels.a[sample] - 1] : undefined;
-          picker.add(id, valueCells(target.values.a[sample]) + (label ? labelCells(label) + 3 : 0), row);
+          picker.add(id, valueTextCells(valueCells(target.values.a[sample]), label ? labelCells(label) : undefined), row);
         }
         done.set(id, target.values.n);
       }
@@ -428,7 +562,7 @@ export class InMemorySignalStore {
 
   /** `frameTextCells` for many frames: names, values and state names already counted are reused. */
   frameTextCounter(): (frame: SignalFrameRef) => number {
-    const nameCells = new Map<number, number>(); const valueCells = memoCells(decodedValueText); const labelCells = memoCells(textCells);
+    const nameCells = new Map<number, { readonly name: number; readonly unit?: number }>(); const valueCells = memoCells(decodedValueText); const labelCells = memoCells((label: string) => label);
     // Frames are mostly asked in order, so each Signal's next sample is usually just after the last one found.
     const cursors = new Float64Array(this.seriesList.length);
     return (frame) => {
@@ -445,14 +579,10 @@ export class InMemorySignalStore {
           // Plugin tags can repeat a Signal within one frame, so the store cannot spell them; the caller counts them.
           if (target.definition.source.type === 'plugin') continue;
           const sample = this.sampleOfRowFrom(target, row, cursors, series); if (sample < 0) continue;
-          let fixed = nameCells.get(series);
-          if (fixed === undefined) {
-            const definition = target.definition;
-            // `name=` and ` unit`, plus the separator and chip padding the RAW screen draws around each tag.
-            fixed = textCells(definition.name) + 1 + (definition.unit ? textCells(definition.unit) + 1 : 0) + 7; nameCells.set(series, fixed);
-          }
+          let name = nameCells.get(series);
+          if (name === undefined) { const definition = target.definition; name = { name: textCells(definition.name), ...(definition.unit ? { unit: textCells(definition.unit) } : {}) }; nameCells.set(series, name); }
           const label = this.labelOf(target, sample);
-          cells += fixed + valueCells(target.values.a[sample]) + (label ? labelCells(label) + 3 : 0);
+          cells += tagTextCells(name.name, name.unit, valueCells(target.values.a[sample]), label ? labelCells(label) : undefined) + TAG_SPACING;
         }
       };
       const first = key >= 0 && key < this.rowOfOrdinal.n ? this.rowOfOrdinal.a[key] - 1 : -1;
@@ -646,7 +776,8 @@ export class InMemorySignalStore {
   }
 
   private rebuildRowIndex(): void {
-    this.rowOfOrdinal = new I32Column(); this.moreRows = new Map();
+    // The column is cleared and filled again where it is: on a large log, a new one would be another large allocation.
+    this.rowOfOrdinal.a.fill(0, 0, this.rowOfOrdinal.n); this.moreRows = new Map();
     for (let row = 0; row < this.rowTimes.n; row++) this.indexRow(this.rowKeys.a[row], row);
   }
 
@@ -741,7 +872,12 @@ export class InMemorySignalStore {
   private sortRows(): void {
     if (this.rowsSorted) return;
     const count = this.rowTimes.n; const times = this.rowTimes.a;
-    const order = stableOrder(count, (left, right) => times[left] - times[right]);
+    // Rows added after the frames' (External CSV, an MF4 log's measured signals) are a short run in time order of their
+    // own: they are merged in where they are, without copying the log's rows.
+    let split = 1; while (split < count && times[split] >= times[split - 1]) split++;
+    let tail = split + 1; while (tail < count && times[tail] >= times[tail - 1]) tail++;
+    if (tail >= count && count - split <= count / 4) { this.mergeTailRows(split); return; }
+    const order = mergedOrder(times, count);
     const newIndex = new Uint32Array(count); for (let index = 0; index < count; index++) newIndex[order[index]] = index;
     const refStart = new U32Column(count + 1); const refSeries = this.refSeries.a instanceof Uint16Array ? new U16Column(this.refSeries.n + 1) : new U32Column(this.refSeries.n + 1);
     for (let index = 0; index < count; index++) {
@@ -749,6 +885,35 @@ export class InMemorySignalStore {
       const end = this.refEnd(row); for (let ref = this.refStart.a[row]; ref < end; ref++) refSeries.push(this.refSeries.a[ref]);
     }
     this.rowTimes.permute(order); this.rowKeys.permute(order); this.refStart = refStart; this.refSeries = refSeries;
+    for (const target of this.seriesList) {
+      if (!target.rows) continue;
+      for (let sample = 0; sample < target.values.n; sample++) { const row = target.rows.a[sample]; if (row !== NO_ROW) target.rows.a[sample] = newIndex[row]; }
+      this.checkRowsAscending(target);
+    }
+    this.rowsSorted = true; this.rebuildRowIndex(); this.layoutVersion++;
+  }
+
+  /** `sortRows` for rows in two runs in time order, the second (from `split`) short: a merge from the end, in place. */
+  private mergeTailRows(split: number): void {
+    const count = this.rowTimes.n; const tail = count - split; const totalRefs = this.refSeries.n;
+    const times = this.rowTimes.a; const keys = this.rowKeys.a; const starts = this.refStart.a; const refs = this.refSeries.a;
+    const tailTimes = times.slice(split, count); const tailKeys = keys.slice(split, count); const tailStarts = starts.slice(split, count);
+    const tailFrom = tailStarts[0]; const tailRefs = refs.slice(tailFrom, totalRefs);
+    const newIndex = new Uint32Array(count);
+    for (let row = 0; row < split; row++) newIndex[row] = row;
+    let i = split - 1; let j = tail - 1; let w = count - 1; let wr = totalRefs;
+    while (j >= 0) {
+      // Equal times keep the earlier row first: a frame's row stays before a row added at its time.
+      if (i >= 0 && times[i] > tailTimes[j]) {
+        const from = starts[i]; const end = i + 1 < split ? starts[i + 1] : tailFrom; const length = end - from;
+        refs.copyWithin(wr - length, from, end); wr -= length;
+        times[w] = times[i]; keys[w] = keys[i]; starts[w] = wr; newIndex[i] = w; i--; w--;
+      } else {
+        const from = tailStarts[j] - tailFrom; const end = (j + 1 < tail ? tailStarts[j + 1] : totalRefs) - tailFrom; const length = end - from;
+        refs.set(tailRefs.subarray(from, end), wr - length); wr -= length;
+        times[w] = tailTimes[j]; keys[w] = tailKeys[j]; starts[w] = wr; newIndex[split + j] = w; j--; w--;
+      }
+    }
     for (const target of this.seriesList) {
       if (!target.rows) continue;
       for (let sample = 0; sample < target.values.n; sample++) { const row = target.rows.a[sample]; if (row !== NO_ROW) target.rows.a[sample] = newIndex[row]; }
@@ -792,6 +957,7 @@ export class InMemorySignalStore {
       if (!target.labels) { target.labels = new U32Column(Math.max(16, index + 1)); target.labels.fill(0, index); }
       target.labels.push(valueLabel === undefined ? 0 : this.labelNumber(valueLabel) + 1);
     }
+    if (target.variants) target.variants.push(0);
     if (filterEvidence !== undefined || originalTimestamp !== undefined || target.extras) {
       target.extras ??= new SampleExtrasColumn(index);
       target.extras.push(filterEvidence, originalTimestamp);
@@ -844,7 +1010,7 @@ export class InMemorySignalStore {
       for (let sample = 0; sample < labels.n; sample++) if (labels.a[sample]) labels.a[sample] = numbers[labels.a[sample] - 1];
     }
     return { ...source, events: [...source.events], values: source.values.clone(), rows: source.rows?.clone(), times: source.times?.clone(), qualities: source.qualities?.clone(),
-      labels, extras: source.extras?.clone(), rowOrder: undefined, cadence: undefined, summary: undefined };
+      labels, extras: source.extras?.clone(), variants: source.variants?.clone(), variantDefinitions: source.variantDefinitions && [...source.variantDefinitions], variantNumbers: undefined, rowOrder: undefined, cadence: undefined, summary: undefined };
   }
 
   private checkRowsAscending(target: Series): void {
@@ -857,7 +1023,7 @@ export class InMemorySignalStore {
     if (target.sorted) return;
     const order = stableOrder(target.values.n, (left, right) => this.timeAt(target, left) - this.timeAt(target, right));
     target.values.permute(order); target.rows?.permute(order); target.times?.permute(order); target.qualities?.permute(order); target.labels?.permute(order);
-    target.extras?.permute(order);
+    target.extras?.permute(order); target.variants?.permute(order);
     target.summary = undefined; this.layoutVersion++; target.sorted = true; target.lastTimestamp = target.values.n ? this.timeAt(target, target.values.n - 1) : -Infinity;
     this.checkRowsAscending(target);
   }
@@ -1031,6 +1197,18 @@ function grow(column: { readonly capacity: number; reserve(size: number, exact?:
   if (Math.ceil(size) > column.capacity) column.reserve(Math.ceil(size * 17 / 16), true);
 }
 
+/** About how much work (rows or samples) a step of `replaceDefinitionsSteps` does. */
+const REPLACE_STEP = 100_000;
+
+/** `indexRow` into the given row index (one being built). */
+function indexRowInto(rowOfOrdinal: Column<Int32Array>, moreRows: Map<number, number[]>, key: number, row: number): void {
+  if (key >= 0) {
+    if (key >= rowOfOrdinal.n) rowOfOrdinal.fill(0, key + 1 - rowOfOrdinal.n);
+    if (rowOfOrdinal.a[key] === 0) { rowOfOrdinal.a[key] = row + 1; return; }
+  }
+  const list = moreRows.get(key); if (list) list.push(row); else moreRows.set(key, [row]);
+}
+
 const MAX_CADENCE_SAMPLES = 2048;
 
 type FilterEvidence = NonNullable<SignalSample['filterEvidence']>;
@@ -1097,6 +1275,58 @@ class SampleExtrasColumn {
     return copy;
   }
 }
+
+const variantKey = (definition: SignalDefinition): string => JSON.stringify([definition.name, definition.unit ?? null]);
+
+/**
+ * Each sample's variant number (`Series.variants`). Few samples of a long series usually have one (a Plugin renaming an
+ * output now and then), so they are kept by position until they are more than one in VARIANT_DENSE, and only then in a
+ * number per sample.
+ */
+class VariantColumn {
+  private n: number;
+  private sparse: Map<number, number> | undefined = new Map();
+  private dense: Column<Uint32Array> | undefined;
+
+  constructor(count = 0) { this.n = count; }
+
+  get capacity(): number { return this.dense ? this.dense.capacity : Infinity; }
+  reserve(size: number, exact = false): void { this.dense?.reserve(size, exact); }
+  trim(): void { this.dense?.trim(); }
+
+  push(number: number): void {
+    if (this.dense) { this.dense.push(number); this.n = this.dense.n; return; }
+    this.n++; if (number) this.set(this.n - 1, number);
+  }
+
+  /** Sets the number of a sample already counted (index < length). */
+  set(index: number, number: number): void {
+    if (this.dense) { this.dense.a[index] = number; return; }
+    const sparse = this.sparse!;
+    if (number) sparse.set(index, number); else sparse.delete(index);
+    if (sparse.size * VARIANT_DENSE > this.n && sparse.size > 64) {
+      const dense = new U32Column(Math.max(16, this.n)); dense.fill(0, this.n);
+      for (const [at, value] of sparse) dense.a[at] = value;
+      this.dense = dense; this.sparse = undefined;
+    }
+  }
+
+  at(index: number): number { return this.dense ? this.dense.a[index] : this.sparse!.get(index) ?? 0; }
+
+  /** Position `index` gets what position `order[index]` had. */
+  permute(order: Uint32Array): void {
+    if (this.dense) { this.dense.permute(order); return; }
+    const from = new Uint32Array(this.n); for (let index = 0; index < order.length; index++) from[order[index]] = index;
+    const moved = new Map<number, number>(); for (const [index, number] of this.sparse!) moved.set(from[index], number);
+    this.sparse = moved;
+  }
+
+  clone(): VariantColumn {
+    const copy = new VariantColumn(this.n); copy.sparse = this.sparse && new Map(this.sparse); copy.dense = this.dense?.clone();
+    return copy;
+  }
+}
+const VARIANT_DENSE = 16;
 
 /** Positions 0..length-1 evenly picked down to `limit` (all when they fit). */
 function evenPositions(length: number, limit: number): number[] {
@@ -1167,24 +1397,3 @@ function tableValueText(value: number): string { return !Number.isFinite(value) 
 /** The value text the RAW log draws (twelve significant digits). */
 function decodedValueText(value: number): string { return Number.isInteger(value) ? String(value) : Number(value.toPrecision(12)).toString(); }
 /** Counts cells of `format(key)` once per distinct key; logs repeat the same values many times. */
-function memoCells<K>(format: (key: K) => string): (key: K) => number;
-function memoCells(format: (key: string) => number): (key: string) => number;
-function memoCells<K>(format: (key: K) => string | number): (key: K) => number {
-  let memo = new Map<K, number>();
-  return (key) => {
-    // Integers (most CAN values) are counted directly: digits plus the minus sign.
-    if (typeof key === 'number' && Number.isSafeInteger(key)) return integerCells(key);
-    let cells = memo.get(key);
-    if (cells === undefined) {
-      const text = format(key); cells = typeof text === 'number' ? text : textCells(text);
-      if (memo.size >= 100_000) memo = new Map();
-      memo.set(key, cells);
-    }
-    return cells;
-  };
-}
-function integerCells(value: number): number {
-  let cells = value < 0 ? 2 : 1; let rest = Math.abs(value);
-  while (rest >= 10) { rest = Math.floor(rest / 10); cells++; }
-  return cells;
-}

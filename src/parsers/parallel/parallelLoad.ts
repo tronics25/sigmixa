@@ -5,13 +5,16 @@ import { Worker } from 'worker_threads';
 import type { Diagnostic } from '../../core/diagnostics/diagnostic';
 import type { TimeReference } from '../../core/time/timeFormat';
 import { parseAscLine, type AscNumericBase } from '../asc/ascLineParser';
+import { firstLineEnd, wholeLines } from '../lineBreaks';
+import { ReadBudget } from '../readBudget';
 import type { AscParseSummary } from '../asc/parseAscStream';
 import { fileStartTimestamp, findObjectOffset, parseBlfObjects, readBaseObjectHeader, type BlfParseSummary } from '../blf/parseBlf';
 import type { AscLineEvent, AscRangeResult } from './ascRange';
 import type { BlfEvent, BlfRangeResult } from './blfRange';
 import type { DecodeSpec } from './chunkDecoder';
-import { FramePacker, type PackedFrames, type PackedSignals } from './packedFrames';
-import type { WorkerRequest } from './logWorker';
+import { FramePacker, packedTransfer, type PackedFrames, type PackedSignals } from './packedFrames';
+import type { MdfParseOptions, MdfParseSummary } from '../mdf/parseMdf';
+import type { MdfPartial, WorkerRequest } from './logWorker';
 
 /** A piece of a log, in file order: its frames are numbered `firstSequence`, … after `idPrefix`. */
 export interface LoadedChunk {
@@ -38,9 +41,15 @@ export interface ParallelLoadOptions {
 export const parallelLoadSettings = {
   /** Smaller logs are read on the main thread as before. */
   minBytes: 16 << 20,
+  /** Logs with fewer frames are decoded again on the main thread after a definition changes, as before. */
+  minStoredFrames: 200_000,
+  /** Frames per piece when stored frames are decoded again. */
+  storedPieceFrames: 20_000,
   ascRangeBytes: 4 << 20,
   // About as many frames per piece as an ASC piece (compressed BLF holds several times more per byte).
   blfRangeBytes: 512 << 10,
+  /** Frames per piece of an MDF log sent to a worker (about as many as an ASC piece holds). */
+  mdfPieceFrames: 1 << 16,
   workers: Math.max(1, Math.min(8, (typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length) - 1)),
   workerScript: path.join(__dirname, 'logWorker.js'),
 };
@@ -49,16 +58,23 @@ export function canLoadInParallel(filePath: string): boolean {
   try {
     if (parallelLoadSettings.workers < 1 || statSync(filePath).size < parallelLoadSettings.minBytes || !existsSync(parallelLoadSettings.workerScript)) return false;
     // An ASC log is cut at \n: one with other line breaks only (lone \r) is read in one go as before.
-    if (path.extname(filePath).toLowerCase() === '.blf') return true;
+    const extension = path.extname(filePath).toLowerCase();
+    if (extension === '.blf') return true;
+    if (extension === '.mf4' || extension === '.mdf' || extension === '.csv') return false;
     const fd = openSync(filePath, 'r');
     try { return readAt(fd, 0, 1 << 16).includes(10); } finally { closeSync(fd); }
   } catch { return false; }
 }
 
+/** Whether a log's frames, read here, can be decoded on worker threads (MDF: its records are read in order on one thread). */
+export function canDecodeInParallel(filePath: string): boolean {
+  try { return parallelLoadSettings.workers >= 1 && statSync(filePath).size >= parallelLoadSettings.minBytes && existsSync(parallelLoadSettings.workerScript); } catch { return false; }
+}
+
 // ---- workers ----
 
 interface Slot { readonly worker: Worker; busy: number; readonly jobs: Set<number> }
-interface Pending { readonly slot: Slot; resolve(value: unknown): void; reject(error: Error): void }
+interface Pending { readonly slot: Slot; resolve(value: unknown): void; reject(error: Error): void; partial?(value: unknown): void }
 
 type PieceRequest = Extract<WorkerRequest, { id: number }> extends infer R ? R extends unknown ? Omit<R, 'id' | 'job'> : never : never;
 
@@ -69,17 +85,21 @@ class LogWorkerPool {
   private nextId = 1;
   private idleTimer?: NodeJS.Timeout;
 
-  run<T>(job: { readonly id: number; readonly spec: DecodeSpec }, request: PieceRequest, transfer: ArrayBuffer[] = []): Promise<T> {
+  run<T>(job: { readonly id: number; readonly spec: DecodeSpec }, request: PieceRequest, transfer: ArrayBuffer[] = []): Promise<T> { return this.stream<T>(job, request, undefined, transfer).result; }
+
+  /** `run`, for a request that sends `partial` messages before its result; `post` sends the request's worker a message. */
+  stream<T>(job: { readonly id: number; readonly spec: DecodeSpec }, request: PieceRequest, partial: ((value: unknown) => void) | undefined, transfer: ArrayBuffer[] = []): { readonly id: number; readonly result: Promise<T>; post(message: WorkerRequest): void } {
     if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = undefined; }
     while (this.slots.length < parallelLoadSettings.workers) this.slots.push(this.spawn());
     const slot = this.slots.reduce((best, item) => item.busy < best.busy ? item : best);
     if (!slot.jobs.has(job.id)) { slot.jobs.add(job.id); slot.worker.postMessage({ type: 'job', job: job.id, spec: job.spec } satisfies WorkerRequest); }
     const id = this.nextId++;
     if (slot.busy++ === 0) slot.worker.ref();
-    return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { slot, resolve: resolve as (value: unknown) => void, reject });
+    const result = new Promise<T>((resolve, reject) => {
+      this.pending.set(id, { slot, resolve: resolve as (value: unknown) => void, reject, ...(partial ? { partial } : {}) });
       slot.worker.postMessage({ ...request, id, job: job.id }, transfer);
     });
+    return { id, result, post: (message) => slot.worker.postMessage(message) };
   }
 
   endJob(job: number): void {
@@ -90,8 +110,9 @@ class LogWorkerPool {
     const worker = new Worker(parallelLoadSettings.workerScript);
     const slot: Slot = { worker, busy: 0, jobs: new Set() };
     worker.unref();
-    worker.on('message', (message: { id: number; result?: unknown; error?: string }) => {
+    worker.on('message', (message: { id: number; result?: unknown; error?: string; partial?: unknown }) => {
       const pending = this.pending.get(message.id); if (!pending) return;
+      if ('partial' in message) { pending.partial?.(message.partial); return; }
       this.pending.delete(message.id); this.release(slot);
       if (message.error !== undefined) pending.reject(new Error(message.error)); else pending.resolve(message.result);
     });
@@ -135,6 +156,7 @@ class Jobs {
  * (`rerun`). Stops early when the load is cancelled.
  */
 async function ordered<T, R>(tasks: Iterator<T>, run: (task: T) => Promise<R>, merge: (task: T, result: R) => Promise<void> | void, signal: AbortSignal | undefined): Promise<boolean> {
+  const budget = new ReadBudget(signal);
   const ahead = parallelLoadSettings.workers * 2 + 1;
   const queue: { readonly task: T; readonly result: Promise<R> }[] = [];
   let done = false;
@@ -146,16 +168,34 @@ async function ordered<T, R>(tasks: Iterator<T>, run: (task: T) => Promise<R>, m
   };
   fill();
   while (queue.length) {
-    if (signal?.aborted) return false;
+    if (budget.cancelled) return false;
     const { task, result } = queue.shift()!;
     const value = await result;
-    if (signal?.aborted) return false;
+    if (budget.cancelled) return false;
     fill();
     await merge(task, value);
     // Between pieces, the screens are served.
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await budget.pause();
   }
-  return !signal?.aborted;
+  return !budget.cancelled;
+}
+
+/** Whether stored frames can be decoded again on worker threads (see `decodeStoredInParallel`). */
+export function canDecodeStoredInParallel(frames: number): boolean {
+  return parallelLoadSettings.workers >= 1 && frames >= parallelLoadSettings.minStoredFrames && existsSync(parallelLoadSettings.workerScript);
+}
+
+/**
+ * Decodes frames already stored (after Frame definitions or Plugins changed) on the worker threads with `spec`, a few
+ * pieces ahead, and hands each piece's values to `merge` in the order `pieces` gives them. False when `cancelled`
+ * became true (checked between pieces); pieces not yet merged are dropped.
+ */
+export async function decodeStoredInParallel<T extends { readonly frames: PackedFrames }>(spec: DecodeSpec, pieces: Iterator<T>, merge: (piece: T, signals: PackedSignals) => Promise<void> | void, cancelled: () => boolean): Promise<boolean> {
+  const job = { id: nextJob++, spec }; const abort = new AbortController();
+  try {
+    return await ordered(pieces, (piece) => pool.run<{ frames: PackedFrames; signals: PackedSignals }>(job, { type: 'decode', frames: piece.frames }),
+      async (piece, result) => { if (cancelled()) { abort.abort(); return; } await merge(piece, result.signals); if (cancelled()) abort.abort(); }, abort.signal);
+  } finally { pool.endJob(job.id); }
 }
 
 /** The first pieces are smaller, so the first frames show up at once while the code that reads them is still cold. */
@@ -182,11 +222,12 @@ export async function loadAscInParallel(filePath: string, options: ParallelLoadO
   try {
     // Pieces after the first are read with the base the header sets; a piece read with another one is read again.
     const assumed = headerBase(readAt(fd, 0, Math.min(totalBytes, 1 << 16)));
-    /** Where the first line starting at or after `position` starts. */
+    /** Where the first line starting at or after `position` starts (after a \n or a lone \r, as `lineBreaks` ends lines). */
     const lineStart = (position: number): number => {
       if (position <= 0) return 0;
       for (let at = position - 1; at < totalBytes; at += 1 << 16) {
-        const found = readAt(fd, at, Math.min(1 << 16, totalBytes - at)).indexOf(10);
+        // One byte more than is searched, to see whether a \r there is followed by \n.
+        const found = firstLineEnd(readAt(fd, at, Math.min((1 << 16) + 1, totalBytes - at)), Math.min(1 << 16, totalBytes - at));
         if (found >= 0) return at + found + 1;
       }
       return totalBytes;
@@ -220,7 +261,7 @@ export async function loadAscInParallel(filePath: string, options: ParallelLoadO
 
 /** The base set before the first frame of a log's start (`hex` when none is). */
 function headerBase(head: Buffer): AscNumericBase {
-  const lines = head.toString('utf8').split(/\r\n|\n|\r/); lines.pop();
+  const lines = wholeLines(head.toString('utf8'));
   let base: AscNumericBase = 'hex';
   for (const [index, line] of lines.entries()) {
     const result = parseAscLine(line, { sourceId: '', line: index + 1, sequence: 0, base });
@@ -287,22 +328,23 @@ export async function loadBlfInParallel(filePath: string, options: ParallelLoadO
       }
       if (objects.length) yield take(end);
     }
-    let tail: Uint8Array = new Uint8Array(0);
-    const run = async (task: BlfTask, known?: Uint8Array): Promise<BlfResult> => {
+    let tail: Uint8Array = new Uint8Array(0); let tailSkip = 0;
+    const run = async (task: BlfTask, known?: Uint8Array, knownSkip = 0): Promise<BlfResult> => {
       const job = jobs.get();
       const tailOption = known ?? (task.first ? new Uint8Array(0) : undefined);
-      return { ...await pool.run<BlfRangeResult & { signals: PackedSignals }>(job, { type: 'blf', file: filePath, start: task.start, end: task.end, objects: task.objects, startTimestamp, ...(tailOption ? { tail: tailOption } : {}) }), owner: job.owner };
+      return { ...await pool.run<BlfRangeResult & { signals: PackedSignals }>(job, { type: 'blf', file: filePath, start: task.start, end: task.end, objects: task.objects, startTimestamp, ...(tailOption ? { tail: tailOption } : {}), ...(known && knownSkip ? { tailSkip: knownSkip } : {}) }), owner: job.owner };
     };
     const completed = await ordered(tasks(), (task) => run(task), async (task, first) => {
       // A piece read without what came before it holds when those bytes, followed by the worker's `anchorPrefix`, end
       // exactly where the worker started; they are then read here, as the start of the piece.
       let result = first; let exact = task.first; let lead: { readonly frames: PackedFrames; readonly reports: readonly Report[] } | undefined;
-      if (!exact && !result.unsure && result.anchorPrefix) {
+      // Bytes of a too-large object still to be skipped cannot be checked against the anchor: the piece is read again.
+      if (!exact && !result.unsure && result.anchorPrefix && !tailSkip) {
         const packer = new FramePacker(); const reports: Report[] = [];
         const read = parseBlfObjects(Buffer.concat([tail, result.anchorPrefix]), startTimestamp, undefined, (code, severity, message, at, details) => reports.push({ code, severity, message, offset: at, details }), (frame) => packer.push(frame));
         if (!read.stopped && !read.rest.length) lead = { frames: packer.finish(), reports };
       }
-      if (!exact && (result.unsure || (result.anchorPrefix && !lead))) { result = await run(task, tail); exact = true; lead = undefined; if (options.signal?.aborted) return; }
+      if (!exact && (result.unsure || (result.anchorPrefix && !lead))) { result = await run(task, tail, tailSkip); exact = true; lead = undefined; if (options.signal?.aborted) return; }
       const anchor = !exact && result.anchorPrefix ? result.anchorEvents! : result.events.length;
       const shift = (event: BlfEvent): Report => ({ ...event, offset: event.offset === undefined ? undefined : event.offset + (event.shifted ? tail.length : 0) });
       emit([...result.events.slice(0, anchor).map(shift), ...lead?.reports ?? [], ...result.events.slice(anchor).map(shift)]);
@@ -310,7 +352,7 @@ export async function loadBlfInParallel(filePath: string, options: ParallelLoadO
       options.onChunk({ frames: result.frames, signals: result.signals, decodedWith: result.owner, idPrefix: `${options.sourceId}:blf:`, firstSequence: sequence });
       sequence += result.frames.count;
       // A piece with no container read from where it lined up left what came before it as it was.
-      if (exact || result.anchorPrefix) tail = result.tail;
+      if (exact || result.anchorPrefix) { tail = result.tail; tailSkip = result.tailSkip; }
       bytesRead = task.end;
       options.onProgress?.({ framesParsed: sequence, bytesRead, totalBytes });
     }, options.signal);
@@ -322,6 +364,65 @@ export async function loadBlfInParallel(filePath: string, options: ParallelLoadO
     emit(finals);
     return summary(totalBytes, bytesRead, sequence, diagnosticCount, false, timeReference);
   } finally { closeSync(fd); jobs.end(); }
+}
+
+// ---- MDF ----
+
+/**
+ * `parseMdfFile` on worker threads: one worker reads the records in order (their channel groups, VLSD payloads and time
+ * order need the whole stream) and sends its frames a piece at a time; the other workers decode the pieces, which are
+ * stored here in order. The same frames, diagnostics, signals and summary.
+ */
+export async function loadMdfInParallel(filePath: string, options: ParallelLoadOptions & Pick<MdfParseOptions, 'onSignals'>): Promise<MdfParseSummary> {
+  const jobs = new Jobs(options); const budget = new ReadBudget(options.signal);
+  const ahead = parallelLoadSettings.workers * 2 + 1;
+  const decoded: { readonly result: Promise<{ readonly frames: PackedFrames; readonly signals: PackedSignals; readonly owner: object }>; readonly firstSequence: number; readonly bytesRead: number }[] = [];
+  const totalBytes = statSync(filePath).size;
+  let sequence = 0; let received = 0; let bytesRead = 0; let failure: Error | undefined;
+  let wake: (() => void) | undefined;
+  const notify = () => { const resolve = wake; wake = undefined; resolve?.(); };
+  const reader = pool.stream<MdfParseSummary>(jobs.get(), { type: 'mdf-read', file: filePath, sourceId: options.sourceId, pieceFrames: parallelLoadSettings.mdfPieceFrames, credits: ahead }, (value) => {
+    const part = value as MdfPartial;
+    if ('frames' in part) {
+      const job = jobs.get(); const firstSequence = received; received += part.frames.count;
+      const result = pool.run<{ frames: PackedFrames; signals: PackedSignals }>(job, { type: 'decode', frames: part.frames }, packedTransfer(part.frames)).then((item) => ({ ...item, owner: job.owner }));
+      result.catch(() => undefined);
+      decoded.push({ result, firstSequence, bytesRead: part.bytesRead }); notify();
+    } else if ('diagnostics' in part) options.onDiagnostics(part.diagnostics);
+    else if ('timeReference' in part) options.onTimeReference?.(part.timeReference);
+    else if ('signals' in part) options.onSignals?.(part.signals);
+    else bytesRead = part.progress.bytesRead;
+  });
+  const cancel = () => reader.post({ type: 'mdf-cancel', read: reader.id });
+  options.signal?.addEventListener('abort', cancel);
+  // Cancelled before it began: the abort event has already gone.
+  if (options.signal?.aborted) cancel();
+  let finished = false;
+  const summary = reader.result.catch((error: Error) => { failure = error; return undefined; }).finally(() => { finished = true; notify(); });
+  try {
+    // Pieces are stored in order as they are decoded; each one taken lets the reader send one more.
+    while (!budget.cancelled) {
+      if (!decoded.length) { if (finished) break; await new Promise<void>((resolve) => { wake = resolve; }); continue; }
+      // Progress is where the file was read up to this piece: what is stored, not what the reader has gone on to.
+      const { result, firstSequence, bytesRead: pieceBytes } = decoded.shift()!; bytesRead = pieceBytes;
+      const { frames, signals, owner } = await result;
+      if (budget.cancelled) break;
+      options.onChunk({ frames, signals, decodedWith: owner, idPrefix: `${options.sourceId}:mdf:`, firstSequence });
+      sequence = firstSequence + frames.count;
+      reader.post({ type: 'mdf-credit', read: reader.id });
+      // Until the reader has said how far it is, there is no rate of frames per byte to tell.
+      if (bytesRead > 0) options.onProgress?.({ framesParsed: sequence, bytesRead, totalBytes });
+      // Between pieces, the screens are served.
+      await budget.pause();
+    }
+    const result = await summary;
+    if (failure) throw failure;
+    return budget.cancelled ? { ...result!, cancelled: true, framesParsed: sequence } : result!;
+  } finally {
+    // A piece that failed to decode ends the read too, so the reader does not wait for room forever.
+    if (!finished) cancel();
+    options.signal?.removeEventListener('abort', cancel); jobs.end();
+  }
 }
 
 function hasNonZero(fd: number, from: number, to: number): boolean {

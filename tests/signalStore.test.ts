@@ -208,3 +208,55 @@ test('RAW decoded text cells leave Plugin Signals to the caller, which counts th
   store.appendFrame('p:0', 0, [{ definition: plugin, sample: { timestamp: 0, value: 0.1 + 0.2, quality: 'valid' } }]);
   assert.equal(store.frameTextCells('p:0'), 0);
 });
+
+test('Signals measured apart from frames (External CSV, MF4) get rows of their own times, shown in time order among frame rows', () => {
+  const store = new InMemorySignalStore();
+  const reference: SignalDefinition = { id: 'mdf:Ref:Speed', name: 'Speed', unit: 'm/s', source: { type: 'mdf-channel', group: 'Ref', channel: 'Speed' } };
+  const ambient: SignalDefinition = { id: 'mdf:Ref:Temp', name: 'Temp', unit: '°C', source: { type: 'mdf-channel', group: 'Ref', channel: 'Temp' } };
+  store.appendFrame('a:0', 0, [decoded(speed, 0, 10)]);
+  store.appendFrame('a:1', 1, [decoded(speed, 1, 30)]);
+  // Speed and Temp share 0.5; Temp alone has 0.75; one sample has no time and gets no row.
+  store.appendSeriesRows('mdf:Ref', [
+    { definition: reference, samples: [{ timestamp: 0.5, value: 1 }, { timestamp: 1.5, value: 3 }] },
+    { definition: ambient, samples: [{ timestamp: Number.NaN, value: 0 }, { timestamp: 0.5, value: 20 }, { timestamp: 0.75, value: 21 }] },
+  ]);
+  store.finalize();
+  const page = store.tablePage([speed.id, reference.id, ambient.id], 0, 10);
+  assert.deepEqual(page.rows.map((row) => [row.timestamp, [...row.values].map(([id, sample]) => `${id}=${sample.value}`).join(' ')]), [
+    [0, 'frame-a:speed=10'],
+    [0.5, 'mdf:Ref:Speed=1 mdf:Ref:Temp=20'],
+    [0.75, 'mdf:Ref:Temp=21'],
+    [1, 'frame-a:speed=30'],
+    [1.5, 'mdf:Ref:Speed=3'],
+  ]);
+  assert.equal(store.tablePage([ambient.id], 0, 10).total, 2);
+});
+
+test('merging rows in a few time-ordered runs gives the same stable order as sorting', async () => {
+  const { mergedOrder, stableOrder } = await import('../src/core/storage/column');
+  for (const runs of [1, 2, 3, 7, 70]) {
+    const times = new Float64Array(Array.from({ length: runs }, (_, run) => Array.from({ length: 50 + run }, (_, i) => Math.floor((i * 7 + run * 3) / 4))).flat());
+    assert.deepEqual(Array.from(mergedOrder(times, times.length)), Array.from(stableOrder(times.length, (left, right) => times[left] - times[right])), `${runs} runs`);
+  }
+});
+
+test('a short run of rows added after many frame rows is merged in place, with the same rows, values and lookups as a full sort', () => {
+  const build = (frames: number) => {
+    const store = new InMemorySignalStore();
+    for (let i = 0; i < frames; i++) store.appendFrame(`a:${i}`, i / 10, [decoded(speed, i / 10, i)]);
+    const reference: SignalDefinition = { id: 'external:r:v', name: 'V', source: { type: 'external-csv', sourceId: 'r', column: 'v' } };
+    store.appendSeriesRows('external:r', [{ definition: reference, samples: [0.05, 0.3, 0.3, 2.95].map((timestamp, i) => ({ timestamp, value: 100 + i })) }]);
+    store.finalize();
+    return { store, reference };
+  };
+  const { store, reference } = build(40);
+  const page = store.tablePage([speed.id, reference.id], 0, 100);
+  assert.equal(page.total, 44);
+  const times = page.rows.map((row) => row.timestamp);
+  assert.deepEqual(times, [...times].sort((left, right) => left - right));
+  // At 0.3 the frame's row stays first, then the two added rows in the order they came.
+  const at = page.rows.findIndex((row) => row.timestamp === 0.3);
+  assert.deepEqual(page.rows.slice(at, at + 3).map((row) => [...row.values.values()].map((sample) => sample.value)), [[3], [101], [102]]);
+  assert.deepEqual(store.samplesForFrame('a:5').map((item) => item.sample.value), [5]);
+  assert.deepEqual(store.tablePage([reference.id], 0, 10).rows.map((row) => row.values.get(reference.id)!.value), [100, 101, 102, 103]);
+});

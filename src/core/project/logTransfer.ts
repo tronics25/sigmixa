@@ -13,6 +13,8 @@ export interface TransferItem {
   /** The item is a log added to a group (a reference), not the file where it is. */
   readonly listed: boolean;
   readonly exists: boolean;
+  /** A log shown only where it is added (CSV): its own folder does not show it by itself. */
+  readonly addedOnly?: boolean;
 }
 
 const isOutside = (located: string) => posix.isAbsolute(located) || /^[A-Za-z]:[\\/]/.test(located);
@@ -30,7 +32,7 @@ export function refuseTransfer(mode: TransferMode, item: TransferItem, destinati
   const outside = isOutside(item.located);
   if (mode === 'link') {
     const level = levelOf(levels, destination ? `${destination}/x` : 'x');
-    if (!outside && locationLevel(levels, item.located) === level) return 'already-in-group';
+    if (!outside && !item.addedOnly && locationLevel(levels, item.located) === level) return 'already-in-group';
     return logs.some((log) => log.level === level && log.path === item.located) ? 'already-in-group' : undefined;
   }
   if (mode === 'move' && item.listed) return 'link-cannot-move';

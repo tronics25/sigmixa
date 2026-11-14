@@ -20,6 +20,8 @@ await build({
 });
 // Large logs are read on worker threads; the tests load the worker from next to themselves.
 await build({ entryPoints: ['src/parsers/parallel/logWorker.ts'], outfile: path.join(output, 'logWorker.js'), bundle: true, platform: 'node', format: 'cjs', target: 'node18', sourcemap: true, logLevel: 'silent' });
+// Damaged logs are read on a worker thread, so a read that hangs or runs out of memory can be stopped.
+await build({ entryPoints: ['tests/support/fuzzWorker.ts'], outfile: path.join(output, 'fuzzWorker.js'), bundle: true, platform: 'node', format: 'cjs', target: 'node18', sourcemap: true, logLevel: 'silent' });
 const testFiles = (await fs.readdir(output)).filter((name) => name.endsWith('.test.js')).map((name) => path.join(output, name));
 const result = spawnSync(process.execPath, ['--test', ...testFiles], { stdio: 'inherit' });
 process.exitCode = result.status ?? 1;

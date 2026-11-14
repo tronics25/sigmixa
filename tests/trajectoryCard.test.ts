@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TrajectoryCard } from '../src/webview/comparison/trajectoryCard';
 import { TRAJECTORY_FIT_MARGIN, defaultTrajectoryView } from '../src/core/trajectory/trajectory';
+import { TrajectoryCamera } from '../src/core/trajectory/trajectoryCamera';
 import { placeTickLabel, separateTitles } from '../src/webview/shared/trajectoryLabels';
 import { TrajectoryView } from '../src/webview/trajectory/trajectoryView';
 import { commonDisplayUnit } from '../src/core/units/displayUnit';
@@ -27,7 +28,7 @@ test('report trajectory rendering applies inversion, trail, gaps, grid and legen
     const card = Object.assign(Object.create(TrajectoryCard.prototype), {
       definitionValue: { id: 'path', name: 'Path', axes: { x: 'x', y: 'y' }, invert: { x: true, y: false, z: false },
         trajectoryTrail: { type: 'last-seconds', seconds: 5 }, trajectoryCurrentTime: 13, connectGaps: false, showGrid: false },
-      view: defaultTrajectoryView(), definitions, samples: new Map([['a', items]]),
+      camera: new TrajectoryCamera(defaultTrajectoryView(), false), definitions, samples: new Map([['a', items]]),
       host: { targets: () => [{ id: 'a', name: 'A', status: 'ready' }], hidden: () => false, anchor: () => 0, targetIndex: () => 0 },
     });
     const tracks = card.tracks();
@@ -73,7 +74,7 @@ test('a fitted 3D trajectory refits to every size until the user zooms or drags;
     const updates: any[] = [];
     const card = Object.assign(Object.create(TrajectoryCard.prototype), {
       definitionValue: { id: 'path', name: 'Path', axes: { x: 'x', y: 'y', z: 'z' } },
-      view: { ...defaultTrajectoryView(), yaw: -Math.PI / 2, pitch: Math.PI / 2 }, fitted: true, definitions, samples: new Map([['a', items]]),
+      camera: new TrajectoryCamera({ ...defaultTrajectoryView(), yaw: -Math.PI / 2, pitch: Math.PI / 2 }, true), definitions, samples: new Map([['a', items]]),
       host: { targets: () => [{ id: 'a', name: 'A', status: 'ready' }], hidden: () => false, anchor: () => 0, targetIndex: () => 0 },
       draw() { /* no canvas */ }, scheduleDraw() { /* no canvas */ }, update(partial: object) { updates.push(partial); this.definitionValue = { ...this.definitionValue, ...partial }; },
     });
@@ -87,24 +88,26 @@ test('a fitted 3D trajectory refits to every size until the user zooms or drags;
     assert.ok(fits(card.paint(context, 360, 700, 0, tracks, undefined), 360, 700), 'tall card after a resize');
     assert.ok(fits(card.paint(context, 1600, 930, 70, tracks, undefined).map((p: any) => ({ x: p.x, y: p.y - 70 })), 1600, 930), 'export image is fitted to its own size');
     // Zooming leaves the fitted state: a later resize keeps the camera.
-    card.zoom(1.5); assert.equal(card.fitted, false);
-    const zoomed = { ...card.view };
-    card.paint(context, 800, 350, 0, tracks, undefined); assert.deepEqual(card.view, zoomed);
-    // Dragging leaves it too, and the saved definition says so.
+    card.zoom(1.5); assert.equal(card.camera.fitted, false);
+    const zoomed = { ...card.camera.view };
+    card.paint(context, 800, 350, 0, tracks, undefined); assert.deepEqual(card.camera.view, zoomed);
+    // Rotating keeps a fitted camera fitted: the new angle is saved, and the trajectory still fills the card (it went out of view before).
     const handlers: Record<string, (event: any) => void> = {};
     card.canvas = { addEventListener: (type: string, fn: (event: any) => void) => { handlers[type] = fn; }, setPointerCapture() {}, hasPointerCapture: () => false, releasePointerCapture() {}, clientHeight: 350 };
-    card.bindCanvas(); card.fitted = true;
-    handlers.pointerdown({ button: 0, clientX: 0, clientY: 0, pointerId: 1, shiftKey: false }); handlers.pointermove({ clientX: 30, clientY: 0 }); handlers.pointerup({ pointerId: 1 });
-    assert.equal(card.fitted, false); assert.equal(updates.at(-1).trajectoryViewFit, false);
-    // A slow drag of one-pixel steps is saved too.
-    card.fitted = true; updates.length = 0;
-    handlers.pointerdown({ button: 0, clientX: 0, clientY: 0, pointerId: 1, shiftKey: false }); handlers.pointermove({ clientX: 1, clientY: 0 }); handlers.pointermove({ clientX: 2, clientY: 0 }); handlers.pointerup({ pointerId: 1 });
-    assert.equal(card.fitted, false); assert.equal(updates.at(-1)?.trajectoryViewFit, false);
+    card.bindCanvas(); card.camera.fitted = true;
+    card.camera.reset({ ...defaultTrajectoryView(), yaw: -Math.PI / 2, pitch: Math.PI / 2 }); card.paint(context, 800, 350, 0, tracks, undefined);
+    handlers.pointerdown({ button: 0, clientX: 0, clientY: 0, pointerId: 1, shiftKey: false }); handlers.pointermove({ clientX: 30, clientY: 60 }); handlers.pointerup({ pointerId: 1 });
+    assert.equal(card.camera.fitted, true); assert.equal(updates.at(-1).trajectoryViewFit, true); assert.notEqual(updates.at(-1).trajectoryView.yaw, -Math.PI / 2);
+    assert.ok(fits(card.paint(context, 800, 350, 0, tracks, undefined), 800, 350), 'still fitted after rotating');
+    // Panning takes the camera over, also a slow drag of one-pixel steps, and the saved definition says so.
+    updates.length = 0;
+    handlers.pointerdown({ button: 0, clientX: 0, clientY: 0, pointerId: 1, shiftKey: true }); handlers.pointermove({ clientX: 1, clientY: 0 }); handlers.pointermove({ clientX: 2, clientY: 0 }); handlers.pointerup({ pointerId: 1 });
+    assert.equal(card.camera.fitted, false); assert.equal(updates.at(-1)?.trajectoryViewFit, false);
     clearTimeout(card.viewCommit);
     // A definition with a saved camera and no fit flag (older data) is drawn as saved.
     card.setDefinition.call(Object.assign(card, { title: {}, syncSettings() {}, request() {} }), { ...card.definitionValue, trajectoryView: { yaw: 1, pitch: .2, zoom: 3, panX: 1, panY: 2 }, trajectoryViewFit: undefined });
-    assert.equal(card.fitted, false); assert.deepEqual(card.view, { yaw: 1, pitch: .2, zoom: 3, panX: 1, panY: 2 });
-    card.setDefinition({ ...card.definitionValue, trajectoryViewFit: true }); assert.equal(card.fitted, true);
+    assert.equal(card.camera.fitted, false); assert.deepEqual(card.camera.view, { yaw: 1, pitch: .2, zoom: 3, panX: 1, panY: 2 });
+    card.setDefinition({ ...card.definitionValue, trajectoryViewFit: true }); assert.equal(card.camera.fitted, true);
   } finally {
     if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument); else Reflect.deleteProperty(globalThis, 'document');
     if (previousStyle) Object.defineProperty(globalThis, 'getComputedStyle', previousStyle); else Reflect.deleteProperty(globalThis, 'getComputedStyle');
@@ -125,7 +128,7 @@ test('several series share one plot: each has its colour, its own gaps and a com
       definitionValue: { id: 'path', name: 'Path', connectGaps: false, showGrid: false, trajectorySeries: [
         { id: 'a', name: 'A', color: '#111111', axes: { x: 'ax', y: 'ay' } }, { id: 'b', name: 'B', color: '#222222', axes: { x: 'bx', y: 'by' } }, { id: 'unfinished', name: 'C', color: '#333333', axes: { x: 'ax' } },
       ] },
-      view: defaultTrajectoryView(), fitted: true, definitions,
+      camera: new TrajectoryCamera(defaultTrajectoryView(), true), definitions,
       samples: new Map([['log', [series('ax', 1, [{ startTimestamp: 1, endTimestamp: 2 }]), series('ay', 1), series('bx', .001), series('by', .001)]]]),
       host: { targets: () => [{ id: 'log', name: 'Log', status: 'ready' }], hidden: () => false, anchor: () => 0, targetIndex: () => 0 },
     });

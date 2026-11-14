@@ -11,9 +11,6 @@ import type { FrameDefinitionEditor } from '../frame-editor/frameDefinitionEdito
 import { createHash, randomUUID } from 'crypto';
 import type { PluginManager } from '../plugins/pluginManager';
 import * as path from 'path';
-import { readExternalCsvPreview } from '../external/externalCsvLoader';
-import { suggestCsvTimeBase } from '../../core/external/csv';
-import { isExternalCsvTimeBase, removeExternalCsvSignal, type ExternalCsvValueColumn } from '../../core/project/schema';
 import { signalCatalogGroups } from './signalCatalogGroups';
 import { reportCatalog, reportGraphs, reportSeries, reportTable, saveReport } from '../report/reportExporter';
 import { REPORT_FORMAT_VERSION } from '../report/reportData';
@@ -36,7 +33,6 @@ class ReopenDocument implements vscode.CustomDocument {
 
 export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider<RawLogDocument | ReopenDocument> {
   private readonly warnedPlugins = new Set<string>();
-  private readonly pendingExternalCsv = new Map<string, { readonly uri: vscode.Uri; readonly headers: readonly string[] }>();
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly logFiles: AnalysisGroupsProvider,
@@ -164,9 +160,10 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         void send({ type: 'sourceDiagnostics', groups: document.sourceDiagnosticGroups, total: document.diagnosticCount });
         void send({ type: 'analysisDiagnostics', groups: document.analysisDiagnosticGroups, total: document.analysisDiagnosticCount });
       } else if (message.type === 'setViewSettingsScope') {
-        const group = currentGroup(); if (!group) return;
+        // The workspace root is a group too (`currentGroup()` is undefined there): its logs can share settings as well.
+        const group = currentGroup();
         ownViewSave++;
-        void this.projectStore.update((project) => staleSettings ? project : switchViewSettingsScope(project, viewStateKey, message.state as Record<string, unknown>, group, message.scope)).then(() => { panel.webview.html = rawLogHtml(panel.webview, this.extensionUri, document.fileName, vscode.env.language); }).catch((error) => vscode.window.showErrorMessage(`${t('Could not switch where view settings are saved', '表示設定の切り替えに失敗しました')}: ${errorText(error)}`)).finally(() => { ownViewSave--; });
+        void this.projectStore.update((project) => staleSettings ? project : switchViewSettingsScope(project, viewStateKey, message.state as Record<string, unknown>, group, message.scope, message.shown)).then(() => { panel.webview.html = rawLogHtml(panel.webview, this.extensionUri, document.fileName, vscode.env.language); }).catch((error) => vscode.window.showErrorMessage(`${t('Could not switch where view settings are saved', '表示設定の切り替えに失敗しました')}: ${errorText(error)}`)).finally(() => { ownViewSave--; });
       } else if (message.type === 'updateClipRange') {
         // The graphs already show the dragged range; whatever happens, they are told what is saved.
         // The Clip is one of this log's: it is named by this log and its ID, so no Clip of another log can be meant.
@@ -199,9 +196,9 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       } else if (message.type === 'signalCatalogRequest') {
         const allDefinitions = document.signalCatalog();
         const definitions = message.view === 'table'
-          ? allDefinitions.filter((item) => item.source.type === 'manual-can' || item.source.type === 'plugin')
-          : message.view === 'trajectory' ? allDefinitions.filter((item) => item.source.type !== 'external-csv') : allDefinitions;
-        void send({ type: 'signalCatalog', requestId: message.requestId, definitions, groups: signalCatalogGroups(allDefinitions, sourceProject(this.projectStore, document.uri), message.view === 'timeSeries'), measuredIds: document.measuredSignalIds(), unmeasuredOption: Boolean(currentGroup()) && viewSettingsScope(this.projectStore.current, viewStateKey, currentGroup()) === 'group' });
+          ? allDefinitions.filter((item) => item.source.type !== 'calculated')
+          : allDefinitions;
+        void send({ type: 'signalCatalog', requestId: message.requestId, definitions, groups: signalCatalogGroups(allDefinitions, sourceProject(this.projectStore, document.uri), true), measuredIds: document.measuredSignalIds(), unmeasuredOption: viewSettingsScope(this.projectStore.current, viewStateKey, currentGroup()) === 'group' });
       } else if (message.type === 'signalTablePageRequest') {
         const page = document.signalTablePage(message.selectedIds, message.offset, message.limit);
         void send({
@@ -221,14 +218,6 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         void send({ type: 'signalSeries', requestId: message.requestId, fullRange: result.range, series: result.series.map((series) => ({ ...series, events: series.events ?? [] })) });
       } else if (message.type === 'cancelAnalysis') {
         document.cancelAnalysis();
-      } else if (message.type === 'importExternalCsv') {
-        void this.selectExternalCsv(document, send);
-      } else if (message.type === 'commitExternalCsv') {
-        void this.commitExternalCsv(message, sourceGroup(this.projectStore, document.uri)?.id);
-      } else if (message.type === 'cancelExternalCsvImport') {
-        this.pendingExternalCsv.delete(message.importId);
-      } else if (message.type === 'removeExternalCsvSignal') {
-        void this.removeExternalCsvSignal(message.sourceId, message.column, sourceGroup(this.projectStore, document.uri)?.id);
       } else if (message.type === 'exportSignalCsv') {
         void this.exportSignals(document, message.selectedIds, message.timeDisplay);
       } else if (message.type === 'saveTimeSeriesImage') {
@@ -238,7 +227,7 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
           const format = await chooseExportFormat('Export', 'エクスポート'); if (!format) return;
           if (format === 'html') { await this.exportReport(document, currentSettings() as LogViewState, clip, message.trajectoryCurrentTime); return; }
           if (!requireRenderedImage(message)) return;
-          const base = document.fileName.replace(/\.(?:asc|blf)$/i, '');
+          const base = document.fileName.replace(/\.(?:asc|blf|mf4|mdf|csv)$/i, '');
           await saveRenderedImage({ title: 'Save All Graphs Image', japaneseTitle: '全グラフの画像を保存', defaultBasePath: path.join(path.dirname(document.filePath), `${clip?.name ?? base}-graphs`), image: message, format });
         })();
       } else if (message.type === 'saveTrajectoryImage') {
@@ -260,7 +249,8 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
       } else if (message.type === 'saveLogViewState') {
         ownViewSave++;
         void this.projectStore.update((project) => {
-          if (staleSettings) return project;
+          // Another view of this log switched settings and this one has not been reloaded yet: what it shows belongs to the other settings.
+          if (staleSettings || (message.shown !== undefined && message.shown !== viewSettingsScope(project, viewStateKey, currentGroup()))) return project;
           return saveViewSettings(project, viewStateKey, message.state as Record<string, unknown>, currentGroup());
         }).then(() => { viewStateSaveErrorShown = false; }).catch((error) => {
           if (viewStateSaveErrorShown) return; viewStateSaveErrorShown = true;
@@ -346,76 +336,13 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
   }
 
   private async saveTimeSeriesImage(document: RawLogDocument, image: RenderedImage): Promise<void> {
-    const base = document.fileName.replace(/\.(?:asc|blf)$/i, ''); await saveRenderedImage({ title: 'Save Time Series Image', japaneseTitle: '時系列画像を保存', defaultBasePath: path.join(path.dirname(document.filePath), `${base}-time-series`), image });
+    const base = document.fileName.replace(/\.(?:asc|blf|mf4|mdf|csv)$/i, ''); await saveRenderedImage({ title: 'Save Time Series Image', japaneseTitle: '時系列画像を保存', defaultBasePath: path.join(path.dirname(document.filePath), `${base}-time-series`), image });
   }
 
   private async saveTrajectoryImage(document: RawLogDocument, image: RenderedImage): Promise<void> {
-    const base = document.fileName.replace(/\.(?:asc|blf)$/i, ''); await saveRenderedImage({ title: 'Save Trajectory Image', japaneseTitle: '軌跡画像を保存', defaultBasePath: path.join(path.dirname(document.filePath), `${base}-trajectory`), image });
+    const base = document.fileName.replace(/\.(?:asc|blf|mf4|mdf|csv)$/i, ''); await saveRenderedImage({ title: 'Save Trajectory Image', japaneseTitle: '軌跡画像を保存', defaultBasePath: path.join(path.dirname(document.filePath), `${base}-trajectory`), image });
   }
 
-  private async selectExternalCsv(document: RawLogDocument, send: (message: ToWebviewMessage) => Thenable<boolean>): Promise<void> {
-    const root = this.projectStore.requireWorkspace();
-    if (!root) return;
-    const selected = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { CSV: ['csv'] }, title: t('Import External CSV', "外部CSVをインポート") });
-    const uri = selected?.[0];
-    if (!uri) return;
-    if (uri.scheme !== 'file') { void vscode.window.showErrorMessage(t('External CSV import currently requires a local file.', "外部CSVにはローカルファイルを選択してください。")); return; }
-    try {
-      const { headers, firstRow } = await readExternalCsvPreview(uri.fsPath);
-      if (headers.length < 2) { void vscode.window.showErrorMessage(t('The CSV needs a header row with a Timestamp column and at least one value column.', "CSVにはヘッダー行と、時刻列および1列以上の値列が必要です。")); return; }
-      const importId = randomUUID(); this.pendingExternalCsv.set(importId, { uri, headers });
-      const suggestedTimestampColumn = headers.find((header) => /^(?:time|timestamp)(?:\b|[_ (])/i.test(header.trim())) ?? headers[0];
-      const normalized = suggestedTimestampColumn.toLowerCase();
-      const suggestedTimestampUnit = /(?:^|[_ (])(?:us|µs|μs|microseconds?)(?:\b|[)])/i.test(normalized) ? 'microseconds'
-        : /(?:^|[_ (])(?:ms|milliseconds?)(?:\b|[)])/i.test(normalized) ? 'milliseconds' : 'seconds';
-      const suggestedTimeBase = suggestCsvTimeBase(firstRow?.[headers.indexOf(suggestedTimestampColumn)], suggestedTimestampUnit);
-      void send({ type: 'externalCsvPreview', importId, fileName: path.basename(uri.fsPath), headers, suggestedTimestampColumn, suggestedTimestampUnit, suggestedTimeBase, logStartKnown: Boolean(document.timeReference), ...(firstRow ? { firstRow } : {}) });
-    } catch (error) {
-      void vscode.window.showErrorMessage(t(`External CSV import failed: ${errorText(error)}`, `外部CSVをインポートできませんでした: ${errorText(error)}`));
-    }
-  }
 
-  /** An External CSV belongs to the level of the log it was added from, so it travels with that folder. */
-  private async commitExternalCsv(message: Extract<ToExtensionMessage, { type: 'commitExternalCsv' }>, groupId?: string): Promise<void> {
-    const root = this.projectStore.requireWorkspace(); const pending = this.pendingExternalCsv.get(message.importId);
-    if (!root || !pending) { void vscode.window.showErrorMessage(t('The selected CSV import has expired. Choose the file again.', "CSVの選択が無効になりました。ファイルを選択し直してください。")); return; }
-    const uri = pending.uri; const available = new Set(pending.headers);
-    if (!available.has(message.timestampColumn) || !message.valueColumns.length || message.valueColumns.some((column) => !available.has(column.column) || column.column === message.timestampColumn)) {
-      void vscode.window.showErrorMessage(t('Choose one Timestamp column and at least one different value column.', "時刻列と、それとは別の値列を1列以上選択してください。")); return;
-    }
-    const configured: ExternalCsvValueColumn[] = message.valueColumns.map((column) => ({ column: column.column, name: column.name.trim() || column.column, unit: column.unit?.trim() || undefined }));
-    try {
-      const portablePath = portableClipPath(uri.fsPath, root.fsPath);
-      const group = this.projectStore.current.analysisGroups?.find((item) => item.id === groupId);
-      const sources = group ? group.definitionDependencies?.externalCsvSources ?? [] : this.projectStore.current.externalCsvSources;
-      const existing = sources.find((source) => {
-        const absolute = path.isAbsolute(source.path) ? source.path : path.resolve(root.fsPath, source.path);
-        return path.normalize(absolute) === path.normalize(uri.fsPath);
-      });
-      const id = existing?.id ?? `csv-${createHash('sha256').update(uri.fsPath).digest('hex').slice(0, 16)}`;
-      const added = { id, path: portablePath, fileName: path.basename(uri.fsPath), timestampColumn: message.timestampColumn, timestampUnit: message.timestampUnit, ...(message.timeBase && isExternalCsvTimeBase(message.timeBase) && message.timeBase !== 'log' ? { timeBase: message.timeBase } : {}), valueColumns: configured };
-      await this.projectStore.update((project) => group ? updateGroup(project, group.id, (item) => ({ ...item, definitionDependencies: {
-        plugins: [], pluginBindings: [], lookupTables: [], calculations: [], ...item.definitionDependencies,
-        externalCsvSources: [...(item.definitionDependencies?.externalCsvSources ?? []).filter((source) => source.id !== id), added] } }))
-        : { ...project, externalCsvSources: [...project.externalCsvSources.filter((source) => source.id !== id), added] });
-      this.pendingExternalCsv.delete(message.importId);
-    } catch (error) {
-      void vscode.window.showErrorMessage(t(`External CSV import failed: ${errorText(error)}`, `外部CSVをインポートできませんでした: ${errorText(error)}`));
-    }
-  }
-
-  private async removeExternalCsvSignal(sourceId: string, column: string, groupId?: string): Promise<void> {
-    const group = this.projectStore.current.analysisGroups?.find(item => item.id === groupId);
-    const local = group?.definitionDependencies?.externalCsvSources.some(item => item.id === sourceId);
-    const source = (local ? group!.definitionDependencies!.externalCsvSources : this.projectStore.current.externalCsvSources).find(item => item.id === sourceId);
-    const signal = source?.valueColumns.find((item) => item.column === column); if (!source || !signal) return;
-    try {
-      await this.projectStore.update((project) => local ? { ...project, analysisGroups: project.analysisGroups?.map(item => item.id === groupId && item.definitionDependencies ? { ...item, definitionDependencies: { ...item.definitionDependencies,
-        externalCsvSources: removeExternalCsvSignal({ ...project, externalCsvSources: item.definitionDependencies.externalCsvSources }, sourceId, column).externalCsvSources,
-      } } : item) } : removeExternalCsvSignal(project, sourceId, column));
-    } catch (error) {
-      void vscode.window.showErrorMessage(t(`External CSV Signal removal failed: ${errorText(error)}`, `外部CSVのシグナルを削除できませんでした: ${errorText(error)}`));
-    }
-  }
 
 }

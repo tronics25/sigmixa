@@ -54,6 +54,36 @@ export class I32Column extends Column<Int32Array> {
 }
 
 /** Indexes 0..count-1 sorted by `compare`, equal ones kept in their order. */
+/**
+ * The stable time order of `times[0..count)` that are already in order in a few runs (rows added after the frames, such
+ * as External CSV values): the runs are merged, so a log of tens of millions of rows is not sorted again from scratch.
+ */
+export function mergedOrder(times: Float64Array, count: number): Uint32Array {
+  let order = new Uint32Array(count); for (let index = 0; index < count; index++) order[index] = index;
+  const starts: number[] = [0];
+  for (let index = 1; index < count; index++) if (times[index] < times[index - 1]) {
+    // Many runs (rows far out of order): a plain sort, decided before the list of runs grows.
+    if (starts.length >= 64) return stableOrder(count, (left, right) => times[left] - times[right]);
+    starts.push(index);
+  }
+  let next = new Uint32Array(count);
+  let runs = [...starts, count];
+  while (runs.length > 2) {
+    const merged: number[] = [0];
+    for (let r = 0; r + 1 < runs.length; r += 2) {
+      const from = runs[r]; const middle = runs[r + 1]; const to = r + 2 < runs.length ? runs[r + 2] : middle;
+      let left = from; let right = middle; let out = from;
+      // Ties keep the earlier run first: stable.
+      while (left < middle && right < to) next[out++] = times[order[right]] < times[order[left]] ? order[right++] : order[left++];
+      while (left < middle) next[out++] = order[left++];
+      while (right < to) next[out++] = order[right++];
+      merged.push(to);
+    }
+    runs = merged; [order, next] = [next, order];
+  }
+  return order;
+}
+
 export function stableOrder(count: number, compare: (left: number, right: number) => number): Uint32Array {
   const order = new Uint32Array(count); for (let index = 0; index < count; index++) order[index] = index;
   return order.sort((left, right) => compare(left, right) || left - right);

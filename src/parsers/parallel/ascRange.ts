@@ -1,5 +1,6 @@
 import { parseAscFrameBytes, parseAscLine, type AscNumericBase } from '../asc/ascLineParser';
 import { FramePacker, type PackedFrames } from './packedFrames';
+import { lastLines, LineCursor, pieceCut } from '../lineBreaks';
 
 /**
  * A line of an ASC piece that is not a frame and not ignored (a `base` or `date` line, or one reported as a
@@ -19,7 +20,7 @@ export interface AscRangeResult {
 /**
  * Reads lines `[0, end)` of `buffer`, a piece of an ASC log that starts at the start of a line, exactly as
  * `parseAscFile` reads them, starting with `base`. `last`: the piece ends the file, so a last line without a line break
- * is read too; otherwise the piece ends after a \n.
+ * is read too; otherwise the piece ends after a \n or a lone \r.
  */
 export function parseAscRange(buffer: Buffer, base: AscNumericBase, last: boolean): AscRangeResult {
   const packer = new FramePacker(); const events: AscLineEvent[] = [];
@@ -32,22 +33,15 @@ export function parseAscRange(buffer: Buffer, base: AscNumericBase, last: boolea
     else if (result.type === 'ignored') return;
     else { if (result.type === 'base') context.base = result.base; events.push({ line: lines, frames: packer.size, text: line }); }
   };
-  const cut = buffer.lastIndexOf(10);
-  let position = 0;
-  while (position <= cut) {
-    let next = buffer.indexOf(10, position); if (next < 0 || next > cut) next = cut;
-    const lineEnd = next > position && buffer[next - 1] === 13 ? next - 1 : next;
+  // The piece ends after a line break (or is the end of the file), so all of it but what follows its last one is whole lines.
+  const cut = pieceCut(buffer);
+  const cursor = new LineCursor(buffer, cut);
+  while (cursor.next()) {
     context.line = lines + 1; context.sequence = packer.size;
-    const frame = parseAscFrameBytes(buffer, position, lineEnd, context);
+    const frame = parseAscFrameBytes(buffer, cursor.start, cursor.end, context);
     if (frame) { lines++; packer.push(frame); }
-    else { const pieces = buffer.toString('utf8', position, next + 1).split(/\r\n|\n|\r/); pieces.pop(); for (const piece of pieces) text(piece); }
-    position = next + 1;
+    else for (const piece of cursor.lines()) text(piece);
   }
-  if (last && cut + 1 < buffer.length) {
-    const pieces = buffer.toString('utf8', cut + 1).split(/\r\n|\n|\r/);
-    // A last line ending in a lone \r gives an empty piece after it, which readline does not report as a line.
-    if (pieces.length > 1 && pieces[pieces.length - 1] === '') pieces.pop();
-    for (const piece of pieces) text(piece);
-  }
+  if (last && cut + 1 < buffer.length) for (const piece of lastLines(buffer.toString('utf8', cut + 1))) text(piece);
   return { frames: packer.finish(), events, lines, base: context.base };
 }

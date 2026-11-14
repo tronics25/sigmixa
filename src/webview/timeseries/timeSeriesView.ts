@@ -1,8 +1,6 @@
 import { isTextEditing } from '../shared/keyboard';
 import { chartTicks } from '../shared/chartAxes';
 import { onTimeDisplayChange, timeLabel, timeRangeLabel, timeTicks } from '../shared/timeDisplay';
-import { suggestCsvTimeBase } from '../../core/external/csv';
-import type { ExternalCsvTimeBase } from '../../core/project/schema';
 import { enhanceChoiceSelect, focusChoiceSelect } from '../shared/choiceGroup';
 import { buttonContextAction, type ViewContextAction } from '../shared/viewContextAction';
 import { signalAxisKey, graphDisplayPolicy, partitionActualGraphs } from '../shared/graphDisplayPolicy';
@@ -10,7 +8,7 @@ import { chartAxisGeometry } from '../shared/chartAxes';
 import { ViewElements } from '../shared/viewElements';
 import { normalizeValue } from '../../core/timeline/timeline';
 import type { SignalDefinition, SignalSample } from '../../core/signal/signal';
-import type { ChartAxisRangeSetting, ExternalCsvPreviewDto, LogViewState, SignalSeriesDto, ToExtensionMessage, ToWebviewMessage } from '../../extension/editors/rawLogProtocol';
+import type { ChartAxisRangeSetting, LogViewState, SignalSeriesDto, ToExtensionMessage, ToWebviewMessage } from '../../extension/editors/rawLogProtocol';
 import { SIGNAL_COLOR_PRESETS, SignalSelector } from '../shared/signalSelector';
 import { bindPressRepeat } from '../shared/pressRepeat';
 import type { TimelineController } from '../shared/timelineController';
@@ -163,7 +161,6 @@ export class TimeSeriesView {
   }
   private readonly status: HTMLElement;
   private readonly saveImageButton: HTMLButtonElement;
-  private pendingImport: (ExternalCsvPreviewDto & { timestampColumn: string; timestampUnit: 'seconds' | 'milliseconds' | 'microseconds'; timeBase: ExternalCsvTimeBase; timeBaseChosen: boolean; selectedColumns: Set<string>; units: Map<string, string> }) | undefined;
 
   constructor(
     private readonly host: HTMLElement,
@@ -185,7 +182,7 @@ export class TimeSeriesView {
     this.selected = new Set(initial?.chartSelectedIds ?? []);
     this.colors = new Map(Object.entries(initial?.chartColors ?? {}));
     this.mode = initial?.chartMode ?? 'raw'; this.connectGaps = initial?.chartConnectGaps !== false; this.axisRange = initialAxisRange(initial); this.groupLayout = normalizeChartGroupLayout(initial?.chartGroupLayout); this.paneWidth = initial?.chartPaneWidth ?? 250; this.paneCollapsed = initial?.chartPaneCollapsed ?? false; this.lanesExpanded = initial?.chartLanesExpanded === true;
-    host.innerHTML = `<div class="chart-layout"><aside class="signal-pane chart-pane"><div class="chart-source-actions"><button class="import-external-csv">+ ${t('External CSV…', '外部CSV…')}</button></div><div class="external-import-host"></div><div class="chart-selector"></div></aside><div class="pane-separator"></div><section class="signal-main chart-main"><div class="view-toolbar"><button class="pane-toggle">${t('Signals', 'シグナル')}</button><div class="segmented choice-group" role="group" aria-label="${t('Display mode', '表示形式')}"><button class="mode-raw">${t('Actual (converted units)', '実値（単位換算）')}</button><button class="mode-normalized">${t('Normalized 0–100%', '正規化 0–100%')}</button></div><label class="chart-option"><input class="connect-gaps" type="checkbox">${t('Connect gaps', '欠損区間を接続')}</label><span class="chart-axis-global"><label class="chart-axis-mode">${t('Y axis', 'Y軸')}<select class="axis-range-mode" aria-label="${t('Y-axis range', 'Y軸範囲')}"><option value="visible">${t('Visible interval', '表示区間')}</option><option value="global">${t('All data', '全データ')}</option></select></label><label class="chart-option"><input class="axis-include-zero" type="checkbox">${t('Include 0', '0を含める')}</label></span><button class="save-chart-image">${t('Save Image…', '画像を保存…')}</button><span class="spacer"></span><span class="chart-status muted">${t('Select Signals', 'シグナルを選択')}</span><button class="analysis-cancel" hidden>${t('Cancel analysis', '解析を中止')}</button></div><div class="view-toolbar chart-navigation"><div class="segmented"><button class="zoom-out">−</button><button class="zoom-in">＋</button></div><button class="zoom-reset" disabled>${t('Reset Zoom', 'ズームをリセット')}</button><span class="view-range muted"></span><span class="spacer"></span><button class="chart-marker-clear" disabled>${t('Clear Markers', 'マーカーを全解除')}</button></div><div class="view-toolbar range-controls" hidden><strong>${t('Selected range', '選択範囲')}</strong><span class="clip-range muted"></span><span class="spacer"></span><span class="range-edge"><span class="clip-edge-label">${t('Start', '開始')}</span><span class="segmented"><button class="clip-start-prev" title="${t('Previous CAN Timestamp', '前のCANタイムスタンプ')}">◀</button><button class="clip-start-next" title="${t('Next CAN Timestamp', '次のCANタイムスタンプ')}">▶</button></span></span><span class="range-edge"><span class="clip-edge-label">${t('End', '終了')}</span><span class="segmented"><button class="clip-end-prev" title="${t('Previous CAN Timestamp', '前のCANタイムスタンプ')}">◀</button><button class="clip-end-next" title="${t('Next CAN Timestamp', '次のCANタイムスタンプ')}">▶</button></span></span><div class="range-actions segmented"><button class="range-zoom primary">${t('Zoom to Range', '選択範囲を拡大')}</button><button class="clip-create">${t('Create Clip', 'クリップ作成')}</button></div><button class="clip-clear" title="${t('Clear selected range', '選択範囲を解除')}" aria-label="${t('Clear selected range', '選択範囲を解除')}">×</button></div><div class="chart-canvas-wrap"><canvas aria-label="${t('Time-series graph. Click to add a marker; drag to select a range.', '時系列グラフ。クリックでマーカー追加、ドラッグで範囲選択。')}"></canvas><div class="chart-legend"></div><div class="chart-markers"></div></div></section></div>`;
+    host.innerHTML = `<div class="chart-layout"><aside class="signal-pane chart-pane"><div class="chart-selector"></div></aside><div class="pane-separator"></div><section class="signal-main chart-main"><div class="view-toolbar"><button class="pane-toggle">${t('Signals', 'シグナル')}</button><div class="segmented choice-group" role="group" aria-label="${t('Display mode', '表示形式')}"><button class="mode-raw">${t('Actual (converted units)', '実値（単位換算）')}</button><button class="mode-normalized">${t('Normalized 0–100%', '正規化 0–100%')}</button></div><label class="chart-option"><input class="connect-gaps" type="checkbox">${t('Connect gaps', '欠損区間を接続')}</label><span class="chart-axis-global"><label class="chart-axis-mode">${t('Y axis', 'Y軸')}<select class="axis-range-mode" aria-label="${t('Y-axis range', 'Y軸範囲')}"><option value="visible">${t('Visible interval', '表示区間')}</option><option value="global">${t('All data', '全データ')}</option></select></label><label class="chart-option"><input class="axis-include-zero" type="checkbox">${t('Include 0', '0を含める')}</label></span><button class="save-chart-image">${t('Save Image…', '画像を保存…')}</button><span class="spacer"></span><span class="chart-status muted">${t('Select Signals', 'シグナルを選択')}</span><button class="analysis-cancel" hidden>${t('Cancel analysis', '解析を中止')}</button></div><div class="view-toolbar chart-navigation"><div class="segmented"><button class="zoom-out">−</button><button class="zoom-in">＋</button></div><button class="zoom-reset" disabled>${t('Reset Zoom', 'ズームをリセット')}</button><span class="view-range muted"></span><span class="spacer"></span><button class="chart-marker-clear" disabled>${t('Clear Markers', 'マーカーを全解除')}</button></div><div class="view-toolbar range-controls" hidden><strong>${t('Selected range', '選択範囲')}</strong><span class="clip-range muted"></span><span class="spacer"></span><span class="range-edge"><span class="clip-edge-label">${t('Start', '開始')}</span><span class="segmented"><button class="clip-start-prev" title="${t('Previous CAN Timestamp', '前のCANタイムスタンプ')}">◀</button><button class="clip-start-next" title="${t('Next CAN Timestamp', '次のCANタイムスタンプ')}">▶</button></span></span><span class="range-edge"><span class="clip-edge-label">${t('End', '終了')}</span><span class="segmented"><button class="clip-end-prev" title="${t('Previous CAN Timestamp', '前のCANタイムスタンプ')}">◀</button><button class="clip-end-next" title="${t('Next CAN Timestamp', '次のCANタイムスタンプ')}">▶</button></span></span><div class="range-actions segmented"><button class="range-zoom primary">${t('Zoom to Range', '選択範囲を拡大')}</button><button class="clip-create">${t('Create Clip', 'クリップ作成')}</button></div><button class="clip-clear" title="${t('Clear selected range', '選択範囲を解除')}" aria-label="${t('Clear selected range', '選択範囲を解除')}">×</button></div><div class="chart-canvas-wrap"><canvas aria-label="${t('Time-series graph. Click to add a marker; drag to select a range.', '時系列グラフ。クリックでマーカー追加、ドラッグで範囲選択。')}"></canvas><div class="chart-legend"></div><div class="chart-markers"></div></div></section></div>`;
     this.canvas = this.elements.querySelector('canvas')!; this.pane = this.elements.querySelector('.chart-pane')!; this.separator = this.elements.querySelector('.pane-separator')!; this.status = this.elements.querySelector('.chart-status')!; this.saveImageButton = this.elements.querySelector('.save-chart-image')!;
     const mainToolbar = this.elements.querySelector<HTMLElement>('.chart-main>.view-toolbar')!; const paneToggle = iconButton(this.elements.querySelector<HTMLButtonElement>('.pane-toggle')!, 'layout-sidebar-left', t('Toggle Signal selection', 'シグナル選択を表示／非表示')); iconButton(this.saveImageButton, 'export', t('Save image', '画像を保存')); const secondary = secondaryToolbar(paneToggle, this.saveImageButton); secondary.setAttribute('aria-label', t('Secondary actions', '補助操作')); mainToolbar.appendChild(secondary);
     this.laneToggle = createLaneToggle(() => { this.lanesExpanded = !this.lanesExpanded; this.persist(); this.draw(false); });
@@ -194,7 +191,6 @@ export class TimeSeriesView {
       host: this.elements.querySelector('.chart-selector')!, selected: this.selected, colors: this.colors,
       grouping: initial?.chartSignalGrouping, onGroupingChange: () => this.persist(),
       onSelectionChange: () => this.selectionChanged(), onColorChange: () => { this.persist(); this.draw(); },
-      onRemoveSignal: (definition, group) => this.removeExternalSignal(definition, group),
       onHighlightChange: (id) => this.highlightSignal(id),
     });
     this.elements.querySelector('.pane-toggle')!.addEventListener('click', () => { this.paneCollapsed = !this.paneCollapsed; this.applyPane(); this.persist(); });
@@ -209,7 +205,6 @@ export class TimeSeriesView {
     const zoomReset = this.elements.querySelector<HTMLButtonElement>('.zoom-reset')!; iconButton(zoomReset, 'discard', t('Reset zoom', 'ズームをリセット')); this.elements.querySelector('.chart-navigation .segmented')!.appendChild(zoomReset); zoomReset.addEventListener('click', () => this.requestSeries(this.fullRange, true));
     iconButton(this.elements.querySelector<HTMLButtonElement>('.chart-marker-clear')!, 'clear-all', t('Clear markers', 'マーカーを全解除'));
     this.elements.querySelector('.analysis-cancel')!.addEventListener('click', () => this.post({ type: 'cancelAnalysis' }));
-    this.elements.querySelector('.import-external-csv')!.addEventListener('click', () => this.beginExternalImport());
     iconButton(this.elements.querySelector<HTMLButtonElement>('.clip-clear')!, 'close', t('Clear selected range', '選択範囲を解除'));
     this.elements.querySelector('.clip-clear')!.addEventListener('click', () => this.clearRangeSelection());
     const rangeZoom = this.elements.querySelector<HTMLButtonElement>('.range-zoom')!; iconButton(rangeZoom, 'zoom-in', t('Zoom to selected range', '選択範囲を拡大')); rangeZoom.classList.remove('primary'); rangeZoom.addEventListener('click', () => this.zoomToSelectedRange());
@@ -243,8 +238,6 @@ export class TimeSeriesView {
     if (optionsHost) {
       const settings = document.createElement('details'); settings.className = 'display-settings';
       const summary = document.createElement('summary'); summary.textContent = t('Drawing settings', '描画設定'); settings.append(summary, mainToolbar);
-      const sourceActions = this.elements.querySelector('.chart-source-actions')!;
-      this.pane.append(sourceActions, this.elements.querySelector('.external-import-host')!);
       optionsHost.append(settings, this.pane);
       this.status.hidden = true;
       const cancel = this.elements.querySelector('.analysis-cancel')!;
@@ -304,9 +297,6 @@ export class TimeSeriesView {
   handle(message: ToWebviewMessage): void {
     if (message.type === 'measuredSignals') {
       this.measured.receive(message.requestId, message.samples);
-    } else if (message.type === 'externalCsvPreview') {
-      this.pendingImport = { ...message, timestampColumn: message.suggestedTimestampColumn ?? message.headers[0] ?? '', timestampUnit: message.suggestedTimestampUnit, timeBase: message.logStartKnown || message.suggestedTimeBase === 'datetime' ? message.suggestedTimeBase : 'relative', timeBaseChosen: false, selectedColumns: new Set(), units: new Map() };
-      this.renderImportWizard();
     } else if (message.type === 'signalCatalog' && message.requestId === this.latestCatalogRequest) {
       message.definitions.forEach((definition, index) => { if (!this.colors.has(definition.id)) this.colors.set(definition.id, SIGNAL_COLOR_PRESETS[index % SIGNAL_COLOR_PRESETS.length]); });
       this.catalogDefinitions = message.definitions; this.applyDisplayPolicy();
@@ -356,65 +346,6 @@ export class TimeSeriesView {
     const prior = this.groupLayout?.flat() ?? [];
     this.groupLayout = [[...new Set([...prior.filter((key) => policy.axisKeys.includes(key)), ...policy.axisKeys])]];
     this.updateModeButtons();
-  }
-  private beginExternalImport(): void {
-    if (this.pendingImport) this.post({ type: 'cancelExternalCsvImport', importId: this.pendingImport.importId });
-    this.pendingImport = undefined; this.renderImportWizard(); this.post({ type: 'importExternalCsv' });
-  }
-  /** The import choice that rebuilt the dialog, to keep keyboard focus on it. */
-  private importFocus?: 'timeBase' | 'unit';
-  private renderImportWizard(): void {
-    const host = this.elements.querySelector('.external-import-host')!; host.replaceChildren(); const pending = this.pendingImport;
-    if (!pending) return;
-    const box = document.createElement('section'); box.className = 'external-import-card';
-    const title = document.createElement('strong'); title.textContent = pending.fileName; title.title = pending.fileName; box.appendChild(title);
-    box.appendChild(fieldLabel(t('Timestamp column', '時刻列')));
-    const timestamp = document.createElement('select'); timestamp.setAttribute('aria-label', t('CSV Timestamp column', 'CSVの時刻列'));
-    for (const header of pending.headers) { const option = document.createElement('option'); option.value = header; option.textContent = header || t('(unnamed column)', '(名前なしの列)'); option.selected = header === pending.timestampColumn; timestamp.appendChild(option); }
-    timestamp.addEventListener('change', () => { pending.timestampColumn = timestamp.value; pending.selectedColumns.delete(timestamp.value); this.renderImportWizard(); }); box.appendChild(timestamp);
-    // One choice of how the CSV's times are written; a unit only where they are numbers. Proposed from the first row until chosen.
-    const firstTime = pending.firstRow?.[pending.headers.indexOf(pending.timestampColumn)];
-    if (!pending.timeBaseChosen) { const suggested = suggestCsvTimeBase(firstTime, pending.timestampUnit); pending.timeBase = pending.logStartKnown || suggested === 'datetime' ? suggested : 'relative'; }
-    box.appendChild(fieldLabel(t('Time format', '時刻の形式')));
-    const timeBase = document.createElement('select'); timeBase.setAttribute('aria-label', t('How the CSV times are written', 'CSVの時刻の書き方'));
-    // `log` (the log's own time) stays readable for CSVs added by older versions, but is not offered: it is the elapsed time of a log without a start, and of no use otherwise.
-    for (const [value, label] of [['datetime', t('Date and time', '日時')], ['relative', t('Elapsed from start', '開始からの経過時間')], ['unix', t('Unix time', 'Unix時刻')]] as const) { const option = document.createElement('option'); option.value = value; option.textContent = label; option.disabled = !pending.logStartKnown && value !== 'relative'; option.selected = value === pending.timeBase; timeBase.appendChild(option); }
-    timeBase.title = pending.logStartKnown ? (firstTime ? `${t('First time in the CSV', 'CSVの最初の時刻')}: ${firstTime}` : '') : t('This log does not record its start date and time, so CSV dates, times and Unix times cannot be placed on it.', 'このログには計測開始日時が記録されていないため、CSVの日時・Unix時刻は合わせられません。');
-    timeBase.addEventListener('change', () => { pending.timeBase = timeBase.value as ExternalCsvTimeBase; pending.timeBaseChosen = true; this.importFocus = 'timeBase'; this.renderImportWizard(); }); box.appendChild(timeBase); enhanceChoiceSelect(timeBase); if (this.importFocus === 'timeBase') focusChoiceSelect(timeBase);
-    if (pending.timeBase !== 'datetime') {
-      box.appendChild(fieldLabel(t('Unit', '単位')));
-      const timestampUnit = document.createElement('select'); timestampUnit.setAttribute('aria-label', t('CSV Timestamp unit', 'CSVの時刻単位'));
-      for (const [value, label] of [['seconds', 'seconds (s)'], ['milliseconds', 'milliseconds (ms)'], ['microseconds', 'microseconds (µs)']] as const) { const option = document.createElement('option'); option.value = value; option.textContent = label; option.selected = value === pending.timestampUnit; timestampUnit.appendChild(option); }
-      timestampUnit.addEventListener('change', () => { pending.timestampUnit = timestampUnit.value as typeof pending.timestampUnit; if (!pending.timeBaseChosen) { this.importFocus = 'unit'; this.renderImportWizard(); } }); box.appendChild(timestampUnit); enhanceChoiceSelect(timestampUnit); if (this.importFocus === 'unit') focusChoiceSelect(timestampUnit);
-    }
-    this.importFocus = undefined;
-    const columnsLabel = fieldLabel(t('Value columns and units', '値の列と単位')); columnsLabel.classList.add('external-columns-label'); box.appendChild(columnsLabel);
-    const columns = document.createElement('div'); columns.className = 'external-column-list'; box.appendChild(columns);
-    const actions = document.createElement('div'); actions.className = 'external-import-actions';
-    const add = document.createElement('button'); add.type = 'button'; add.className = 'primary'; add.textContent = t('Add to graph', 'グラフへ追加');
-    const updateAdd = () => { add.disabled = pending.selectedColumns.size === 0 || !pending.timestampColumn || (!pending.logStartKnown && (pending.timeBase === 'datetime' || pending.timeBase === 'unix')); }; updateAdd();
-    for (const header of pending.headers) {
-      if (header === pending.timestampColumn) continue;
-      const row = document.createElement('div'); row.className = 'external-column-row'; const label = document.createElement('label');
-      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = pending.selectedColumns.has(header);
-      checkbox.addEventListener('change', () => { checkbox.checked ? pending.selectedColumns.add(header) : pending.selectedColumns.delete(header); updateAdd(); });
-      const name = document.createElement('span'); name.textContent = header || t('(unnamed column)', '(名前なしの列)'); name.title = name.textContent; label.append(checkbox, name);
-      const unit = document.createElement('input'); unit.type = 'text'; unit.placeholder = t('Unit', '単位'); unit.setAttribute('aria-label', t(`Unit for ${header}`, `${header}の単位`)); unit.value = pending.units.get(header) ?? '';
-      unit.addEventListener('input', () => pending.units.set(header, unit.value)); row.append(label, unit); columns.appendChild(row);
-    }
-    add.addEventListener('click', () => {
-      this.post({ type: 'commitExternalCsv', importId: pending.importId, timestampColumn: pending.timestampColumn, timestampUnit: pending.timestampUnit, timeBase: pending.timeBase, valueColumns: [...pending.selectedColumns].map((column) => ({ column, name: column, unit: pending.units.get(column)?.trim() || undefined })) });
-      this.pendingImport = undefined; this.renderImportWizard();
-    });
-    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = t('Cancel', 'キャンセル'); cancel.addEventListener('click', () => { this.post({ type: 'cancelExternalCsvImport', importId: pending.importId }); this.pendingImport = undefined; this.renderImportWizard(); });
-    actions.append(add, cancel); box.appendChild(actions);
-    const note = document.createElement('p'); note.className = 'muted external-import-note'; note.textContent = t('Original timestamps are retained and normalized to seconds.', '元の時刻を保持し、秒単位へ正規化します。'); box.appendChild(note); host.appendChild(box);
-  }
-  private removeExternalSignal(definition: SignalDefinition, group: { readonly remove?: { readonly type: 'external-csv'; readonly sourceId: string } }): void {
-    if (group.remove?.type !== 'external-csv' || definition.source.type !== 'external-csv') return;
-    this.selected.delete(definition.id); this.colors.delete(definition.id);
-    this.series = this.series.filter((item) => item.definition.id !== definition.id);
-    this.persist(); this.draw(); this.post({ type: 'removeExternalCsvSignal', sourceId: group.remove.sourceId, column: definition.source.column });
   }
   /**
    * Requests the series for a time span. Every graph shows the same span (one time axis for the whole log): a navigation
@@ -845,6 +776,5 @@ function initialAxisRange(initial: LogViewState | undefined): ChartAxisRangeSett
   const previous = Object.values(initial?.chartAxisRanges ?? {});
   return { mode: previous.length > 0 && previous.every((setting) => setting.mode === 'global') ? 'global' : 'visible', includeZero: previous.length > 0 && previous.every((setting) => setting.includeZero === true) };
 }
-function fieldLabel(text: string): HTMLLabelElement { const label = document.createElement('label'); label.className = 'external-field-label'; label.textContent = text; return label; }
 function hash(value: string): number { let result = 0; for (const character of value) result = ((result << 5) - result + character.charCodeAt(0)) | 0; return result; }
 function nearestFromSlice(samples: readonly SignalSample[], timestamp: number): SignalSample | undefined { let best: SignalSample | undefined; let distance = Infinity; for (const sample of samples) { const next = Math.abs(sample.timestamp - timestamp); if (next < distance) { best = sample; distance = next; } } return best; }

@@ -140,7 +140,8 @@ export function stepAnchor(times: FrameTimes, anchor: number, direction: -1 | 1)
   return times.adjacent(anchor, direction) ?? anchor;
 }
 
-export interface SignalListGroup { readonly id: string; readonly label: string; readonly signalIds: readonly string[] }
+/** `section`: the heading the group is listed under (for example the logs that alone have it), when it has one. */
+export interface SignalListGroup { readonly id: string; readonly label: string; readonly signalIds: readonly string[]; readonly section?: { readonly id: string; readonly label: string }; readonly unnamed?: boolean }
 
 /**
  * Splits Signal groups by which targets have each Signal, so targets with different Frame definitions
@@ -163,8 +164,10 @@ export function splitSignalGroupsByTarget(groups: readonly SignalListGroup[], ta
       const missing = targets.filter((target) => !owners.includes(target.id)).map((target) => target.name);
       // Name the shorter side: "only in A" for a few owners, "not in C" when only a few targets lack it.
       const order = Math.min(...owners.map((id) => targets.findIndex((target) => target.id === id))) * 1000 + owners.length;
-      partial.push({ order, group: { id: `${group.id}|${key}`, label: `${missing.length < owners.length ? notIn(missing.join('・')) : onlyIn(names.join('・'))} · ${group.label}`, signalIds } });
+      const section = missing.length < owners.length ? notIn(missing.join('・')) : onlyIn(names.join('・'));
+      partial.push({ order, group: { id: `${group.id}|${key}`, label: group.label, signalIds, section: { id: key, label: section }, ...(group.unnamed ? { unnamed: true } : {}) } });
     }
   }
-  return [...common, ...partial.sort((a, b) => a.order - b.order).map((item) => item.group)];
+  // The groups of one section stay together, so it is listed once.
+  return [...common, ...partial.sort((a, b) => a.order - b.order || (a.group.section!.id < b.group.section!.id ? -1 : a.group.section!.id > b.group.section!.id ? 1 : 0)).map((item) => item.group)];
 }

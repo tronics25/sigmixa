@@ -56,12 +56,29 @@ test('ASC rows read from bytes give the frames the full rules give', () => {
   for (const line of ['   1.25 1 0x1A3 Rx d 1 01', '1.2.3 1 1A3 Rx d 1 01', '1.25 1 1A3 Rx d 2 01 G1', '1.25 1 1A3 Rx d 1 1é']) { const bytes = Buffer.from(line); assert.equal(parseAscFrameBytes(bytes, 0, bytes.length, { sourceId: 's', line: 1, sequence: 0, base: 'hex' }), undefined, line); }
 });
 
-test('Plugin tags of every frame are kept as numbers and spelled as the Plugin gave them', () => {
-  const tags = new PluginFrameTags();
-  tags.set(3, [{ name: 'Speed', unit: 'km/h', value: 0.1 + 0.2 }, { name: 'Speed', unit: 'km/h', value: 2 }, { name: 'Mode', value: 1 }], []);
-  tags.set(1, [{ name: 'Late', value: 5 }], []);
+/** Plugin values of frames, stored as the RAW log stores them (in the Signal store) and spelled by PluginFrameTags. */
+function pluginTags(frames: readonly [number, readonly { readonly id: string; readonly name: string; readonly unit?: string; readonly value: number }[]][]) {
+  const store = new InMemorySignalStore(); const tags = new PluginFrameTags((frame) => store.pluginSamplesOfFrame(frame));
+  const definitions = new Map<string, unknown>();
+  const definition = (item: { readonly id: string; readonly name: string; readonly unit?: string }) => {
+    const key = JSON.stringify([item.id, item.name, item.unit ?? null]);
+    if (!definitions.has(key)) definitions.set(key, { id: item.id, name: item.name, unit: item.unit, source: { type: 'plugin', pluginId: 'p', bindingId: 'b' } });
+    return definitions.get(key) as never;
+  };
+  for (const [frame, decoded] of frames) {
+    store.appendFrame(frame, frame, decoded.map((item) => ({ definition: definition(item), sample: { timestamp: frame, value: item.value } })));
+    tags.set(frame, decoded, []);
+  }
+  return tags;
+}
+
+test('Plugin tags of every frame are spelled from the stored values as the Plugin gave them', () => {
+  const tags = pluginTags([[1, [{ id: 'late', name: 'Late', value: 5 }]], [3, [{ id: 's', name: 'Speed', unit: 'km/h', value: 0.1 + 0.2 }, { id: 's', name: 'Speed', unit: 'km/h', value: 2 }, { id: 'm', name: 'Mode', value: 1 }]]]);
   assert.deepEqual(tags.get(3)?.tags, ['Speed=0.30000000000000004 km/h', 'Speed=2 km/h', 'Mode=1']);
   assert.deepEqual(tags.get(1)?.tags, ['Late=5']); assert.equal(tags.get(2), undefined);
+  // A Plugin giving many values for one frame, repeating Signals among them.
+  const many = Array.from({ length: 40 }, (_, index) => ({ id: `s${index % 3}`, name: `S${index % 3}`, value: index }));
+  assert.deepEqual(pluginTags([[7, many]]).get(7)?.tags, many.map((item) => `${item.name}=${item.value}`));
 });
 
 test('rows of frame ordinals carry the frame ID and survive sorting', () => {
@@ -98,11 +115,11 @@ test('a long series is drawn with its peaks, breaks and invalid values, and the 
   assert.deepEqual(zoomed, fresh.seriesSlice(['v'], { start: 120, end: 130 }, 50)[0]);
 });
 
-test('the width of Plugin tags is counted without spelling them', () => {
-  const tags = new PluginFrameTags(); const cells = (text: string) => text.length;
-  tags.set(3, [{ name: 'Speed', unit: 'km/h', value: 12.5 }, { name: 'Speed', unit: 'km/h', value: -3 }], []);
+test('the width of Plugin tags is counted without spelling them', async () => {
+  const { textCells, TAG_SPACING } = await import('../src/core/frame/widestText');
+  const tags = pluginTags([[3, [{ id: 's', name: 'Speed', unit: 'km/h', value: 12.5 }, { id: 's', name: 'Speed', unit: 'km/h', value: -3 }, { id: 'j', name: '速度', unit: '😀', value: 1e21 }]]]);
   tags.set('x', [{ name: 'A', value: 1 }], []);
-  for (const frame of [3, 'x', 4]) assert.equal(tags.cells(frame, cells, 7), (tags.get(frame)?.tags ?? []).reduce((sum, tag) => sum + tag.length + 7, 0));
+  for (const frame of [3, 'x', 4]) assert.equal(tags.cells(frame), (tags.get(frame)?.tags ?? []).reduce((sum, tag) => sum + textCells(tag) + TAG_SPACING, 0));
 });
 
 test('the Trace index built in steps is the index built at once', async () => {
@@ -209,4 +226,20 @@ test('a Table width scan takes in a selected Signal that gets its first sample b
   for (let index = 120_001; index < 120_010; index++) store.appendFrame(index, index, [{ definition: w, sample: { timestamp: index, value: 1 } }]);
   let step = scan.next(); while (!step.done) step = scan.next();
   assert.ok(step.value.some((row) => row.values.get('late')?.value === 123456789));
+});
+
+test('Plugin output names are kept per sample without a column for the whole history or a search through every name', () => {
+  // One rename after many samples, then a new name on every frame: tags still spell each frame's own name.
+  const frames: [number, { id: string; name: string; value: number }[]][] = [];
+  for (let frame = 0; frame < 5_000; frame++) frames.push([frame, [{ id: 's', name: frame === 4_000 ? 'Renamed' : frame > 4_500 ? `N${frame}` : 'S', value: frame }]]);
+  const tags = pluginTags(frames);
+  assert.deepEqual(tags.get(3_999)?.tags, ['S=3999']); assert.deepEqual(tags.get(4_000)?.tags, ['Renamed=4000']);
+  assert.deepEqual(tags.get(4_001)?.tags, ['S=4001']); assert.deepEqual(tags.get(4_999)?.tags, ['N4999=4999']);
+  const started = performance.now(); const many: typeof frames = [];
+  for (let frame = 0; frame < 30_000; frame++) many.push([frame, [{ id: 's', name: `N${frame}`, value: frame }]]);
+  const manyTags = pluginTags(many);
+  // Names and units that would run together when joined stay apart.
+  const joined = pluginTags([[0, [{ id: 'j', name: 'J', value: 0 }]], [1, [{ id: 'j', name: 'a\u0000b', unit: 'c', value: 1 }]], [2, [{ id: 'j', name: 'a', unit: 'b\u0000c', value: 2 }]]]);
+  assert.deepEqual(joined.get(1)?.tags, ['a\u0000b=1 c']); assert.deepEqual(joined.get(2)?.tags, ['a=2 b\u0000c']);
+  assert.ok(performance.now() - started < 5_000); assert.deepEqual(manyTags.get(29_999)?.tags, ['N29999=29999']);
 });

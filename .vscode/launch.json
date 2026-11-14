@@ -10,12 +10,12 @@
         "--disable-extension=openai.chatgpt",
         "--disable-extension=fill-labs.dependi",
         "--extensionDevelopmentPath=${workspaceFolder}",
-        "${workspaceFolder}/sample"
+        "${workspaceFolder}/work/debug-sample"
       ],
       "outFiles": [
         "${workspaceFolder}/out/**/*.js"
       ],
-      "preLaunchTask": "npm: watch",
+      "preLaunchTask": "SigMixa: debug",
       "noDebug": true
     },
     {
@@ -27,12 +27,12 @@
         "--disable-extension=openai.chatgpt",
         "--disable-extension=fill-labs.dependi",
         "--extensionDevelopmentPath=${workspaceFolder}",
-        "${workspaceFolder}/sample"
+        "${workspaceFolder}/work/debug-sample"
       ],
       "outFiles": [
         "${workspaceFolder}/out/**/*.js"
       ],
-      "preLaunchTask": "npm: watch"
+      "preLaunchTask": "SigMixa: debug"
     }
   ]
 }

@@ -15,6 +15,28 @@
         }
       },
       "label": "npm: watch"
+    },
+    {
+      "label": "SigMixa: copy sample for debug",
+      "detail": "Debugging opens a fresh copy of sample/ (work/debug-sample, git-ignored), so view settings saved while debugging never change the sample itself. Large logs are linked, not copied.",
+      "type": "shell",
+      "command": "rm -rf work/debug-sample && mkdir -p work && rsync -a --exclude large-logs sample/ work/debug-sample/ && { [ ! -d sample/large-logs ] || ln -s ../../sample/large-logs work/debug-sample/large-logs; }",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "silent"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "SigMixa: debug",
+      "dependsOn": [
+        "SigMixa: copy sample for debug",
+        "npm: watch"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
     }
   ]
 }

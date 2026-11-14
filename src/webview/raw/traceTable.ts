@@ -1,5 +1,5 @@
 import { t } from '../shared/i18n';
-import { bindColumnHover, bindResizeKeyboard, widthToFit } from '../shared/tableBehavior';
+import { bindColumnHover, bindHeadingMenu, bindResizeKeyboard, fitColumnAction, widthToFit } from '../shared/tableBehavior';
 import { FRAME_TABLE_LABELS, measureTableText, appendTableValue } from '../shared/dataTableStyle';
 import { autoFitColumns } from '../shared/columnSizing';
 import type { LastFrameDto, ToExtensionMessage, TraceColumn, TraceDisplaySettings, TraceSort } from '../../extension/editors/rawLogProtocol';
@@ -191,6 +191,10 @@ export class TraceTableView {
       .filter((item) => item.count > 0 || this.isPinned(item) || (this.modeFor(item) === 'decoded' && item.signals.some((signal) => signal.carried)));
   }
   private showMenu(x: number, y: number): void {
+    this.menu(this.menuActions(), t('Trace columns and display format', 'トレースの表示列・表示形式'), x, y, this.host);
+  }
+  /** The Trace's columns and display format, as its right-click menu lists them. */
+  private menuActions(): (ViewContextAction | null)[] {
     const actions: (ViewContextAction | null)[] = [];
     for (const [id, label] of columns()) actions.push({ label, icon: 'blank', checked: (this.settings.columns ?? defaults).includes(id), run: () => {
       const active = new Set(this.settings.columns ?? defaults); if (active.has(id)) active.delete(id); else active.add(id); this.update({ columns: columns().map(([key]) => key).filter((key) => active.has(key)) });
@@ -200,7 +204,7 @@ export class TraceTableView {
       label: t(`Show all rows as ${label}`, `全行を${label}で表示`), icon, checked: (this.settings.defaultMode ?? 'decoded') === value,
       run: () => this.update({ defaultMode: value }),
     });
-    this.menu(actions, t('Trace columns and display format', 'トレースの表示列・表示形式'), x, y, this.host);
+    return actions;
   }
   private sortHeader(id: TraceSort, label: string, className = ''): HTMLTableCellElement {
     const cell = document.createElement('th'); cell.scope = 'col'; cell.className = className; cell.dataset.columnId = id;
@@ -226,6 +230,11 @@ export class TraceTableView {
       window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
     });
     handle.addEventListener('dblclick', (event) => { event.preventDefault(); event.stopPropagation(); fit(); });
+    // The heading's menu: what its edge and a click on it do, then the Trace's own menu.
+    bindHeadingMenu(cell, label, () => [fitColumnAction(fit), null,
+      { label: t('Sort ascending', '昇順で並べ替え'), icon: 'arrow-up', checked: selected && !this.settings.descending, run: () => this.update({ sort: id, descending: false }) },
+      { label: t('Sort descending', '降順で並べ替え'), icon: 'arrow-down', checked: selected && !!this.settings.descending, run: () => this.update({ sort: id, descending: true }) },
+      null, ...this.menuActions()], undefined, this.menu);
     cell.appendChild(handle); return cell;
   }
   private minimumWidth(id: TraceSort): number { return id === 'name' ? 90 : id === 'canId' ? 82 : id === 'content' ? 180 : 44; }

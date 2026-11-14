@@ -22,7 +22,7 @@ body{margin:0}
 #report-table[hidden],.report-shell #app[hidden]{display:none}
 /* A report shows results; it cannot open logs or change what is compared. */
 body[data-report] .target-open,body[data-report] .target-remove{display:none}
-body[data-report=log] .targets,body[data-report=log] .line-hint{display:none}
+body[data-report=log] .targets{display:none}
 ${REPORT_TABLE_STYLES}`;
 document.head.appendChild(style);
 

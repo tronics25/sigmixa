@@ -4,7 +4,8 @@ import { emphasizeSignal } from '../shared/signalEmphasis';
 import { crossesSeriesGap } from '../shared/chartSeries';
 import type { ComparisonGraphDefinition, ComparisonTrajectorySeries } from '../../core/project/comparison';
 import type { SignalDefinition } from '../../core/signal/signal';
-import { TRAJECTORY_FIT_MARGIN, TRAJECTORY_ZOOM_LIMITS, buildTrajectoryPoints, clipTrajectoryEdges, measureTrajectory, trajectorySceneFrame, defaultTrajectoryView, fitTrajectoryView, projectPoint3d, trailAt, trajectoryAxisDisplayValue, trajectoryAxisScale, trajectoryViewFrom, type TrajectoryCoordinateSystem, type TrajectoryPoint, type TrajectoryViewTransform } from '../../core/trajectory/trajectory';
+import { buildTrajectoryPoints, clipTrajectoryEdges, measureTrajectory, trajectorySceneFrame, defaultTrajectoryView, projectPoint3d, trailAt, trajectoryAxisDisplayValue, trajectoryAxisScale, trajectoryViewFrom, type TrajectoryCoordinateSystem, type TrajectoryPoint, type TrajectoryViewTransform } from '../../core/trajectory/trajectory';
+import { TrajectoryCamera, fitTrajectoryScene, trajectorySceneScale } from '../../core/trajectory/trajectoryCamera';
 import type { ComparisonSeriesDto } from '../../extension/comparison/comparisonProtocol';
 import type { SignalGroupDto } from '../../extension/editors/rawLogProtocol';
 import { commonDisplayUnit, convertDisplayUnit } from '../../core/units/displayUnit';
@@ -60,21 +61,19 @@ export class TrajectoryCard implements ComparisonCard {
   private samples = new Map<string, readonly ComparisonSeriesDto[]>();
   private latestRequest = 0;
   private pending = false;
-  private view: TrajectoryViewTransform = defaultTrajectoryView();
   /** Zoom and pan follow the data and the canvas size until the user zooms, pans or rotates. */
-  private fitted = true;
+  private readonly camera: TrajectoryCamera;
   private projected: Projected[] = [];
   private definitions: readonly SignalDefinition[] = [];
   private groups: readonly SignalGroupDto[] = [];
   private drawScheduled = false;
-  private drag?: { x: number; y: number; pan: boolean; moved: boolean; changed?: boolean };
   private pixelsPerUnit = 1;
   private highlightedKey?: string;
   private legendKey = '';
   private viewCommit?: ReturnType<typeof setTimeout>;
 
   constructor(private definitionValue: ComparisonGraphDefinition, private readonly host: GraphHost, list: HTMLElement, optionsHost: HTMLElement) {
-    this.view = trajectoryViewFrom(definitionValue.trajectoryView); this.fitted = fittedFrom(definitionValue);
+    this.camera = new TrajectoryCamera(trajectoryViewFrom(definitionValue.trajectoryView), fittedFrom(definitionValue));
     this.element = document.createElement('section'); this.element.className = 'visualize-card'; this.element.dataset.kind = 'trajectory';
     this.header = document.createElement('header'); this.header.className = 'visualize-card-header'; this.header.tabIndex = 0;
     this.title = document.createElement('input'); this.title.className = 'visualize-card-title'; this.title.value = definitionValue.name;
@@ -83,7 +82,7 @@ export class TrajectoryCard implements ComparisonCard {
     this.buttons = {
       zoomIn: make('zoom-in', t('Zoom in; hold to repeat', '拡大・長押しで連続'), () => undefined),
       zoomOut: make('zoom-out', t('Zoom out; hold to repeat', '縮小・長押しで連続'), () => undefined),
-      reset: make('discard', t('Reset view', '表示をリセット'), () => { clearTimeout(this.viewCommit); this.view = defaultTrajectoryView(); this.fitted = true; this.update({ trajectoryView: this.view, trajectoryViewFit: true }); this.draw(); }),
+      reset: make('discard', t('Reset view', '表示をリセット'), () => { clearTimeout(this.viewCommit); this.camera.reset(defaultTrajectoryView()); this.update({ trajectoryView: this.camera.view, trajectoryViewFit: true }); this.draw(); }),
       // Leaving measurement removes A and B, so no half-made selection is left on screen (as in Visualize).
       measure: make('symbol-ruler', t('Measure two points', '2点計測'), () => { this.measuring = !this.measuring; if (!this.measuring) this.measurement = undefined; this.draw(); }),
       clearMeasure: make('clear-all', t('Clear measurement', '計測を解除'), () => { this.measurement = undefined; this.draw(); }),
@@ -160,7 +159,7 @@ export class TrajectoryCard implements ComparisonCard {
 
   setDefinition(definition: ComparisonGraphDefinition): void {
     const axesChanged = JSON.stringify(seriesOf(definition).map((item) => item.axes)) !== JSON.stringify(this.series.map((item) => item.axes));
-    if (JSON.stringify(definition.trajectoryView) !== JSON.stringify(this.definitionValue.trajectoryView) || fittedFrom(definition) !== fittedFrom(this.definitionValue)) { this.view = trajectoryViewFrom(definition.trajectoryView); this.fitted = fittedFrom(definition); }
+    if (JSON.stringify(definition.trajectoryView) !== JSON.stringify(this.definitionValue.trajectoryView) || fittedFrom(definition) !== fittedFrom(this.definitionValue)) this.camera.restore(trajectoryViewFrom(definition.trajectoryView), fittedFrom(definition));
     this.definitionValue = definition; this.title.value = definition.name; this.syncSettings();
     if (axesChanged) this.request(); else this.draw();
   }
@@ -221,18 +220,12 @@ export class TrajectoryCard implements ComparisonCard {
   // ---- interaction ----------------------------------------------------------------------------
 
   private bindCanvas(): void {
-    this.canvas.addEventListener('pointerdown', (event) => { if (event.button !== 0 && event.button !== 1) return; this.drag = { x: event.clientX, y: event.clientY, pan: event.button === 1 || event.shiftKey || !this.is3d, moved: false }; this.canvas.setPointerCapture(event.pointerId); });
+    this.canvas.addEventListener('pointerdown', (event) => { if (event.button !== 0 && event.button !== 1) return; this.camera.beginDrag(event.clientX, event.clientY, event.button === 1 || event.shiftKey || !this.is3d); this.canvas.setPointerCapture(event.pointerId); });
     this.canvas.addEventListener('pointermove', (event) => {
-      if (!this.drag) { this.hover(event); return; }
-      const dx = event.clientX - this.drag.x; const dy = event.clientY - this.drag.y; this.drag.x = event.clientX; this.drag.y = event.clientY; if (Math.abs(dx) + Math.abs(dy) > 1) this.drag.moved = true;
-      // Any movement takes the camera over, also a slow drag made of one-pixel steps.
-      if (dx || dy) { this.fitted = false; this.drag.changed = true; }
-      if (this.drag.pan) this.view = { ...this.view, panX: this.view.panX + dx / (this.pixelsPerUnit * this.view.zoom), panY: this.view.panY - dy / (this.pixelsPerUnit * this.view.zoom) };
-      // A left-handed scene is the mirror image, so its yaw turns the other way to make a drag look the same in both.
-      else { const perPixel = 2 * Math.PI / Math.max(1, this.canvas.clientHeight); this.view = { ...this.view, yaw: this.view.yaw + (this.coordinateSystem === 'left' ? -dx : dx) * perPixel, pitch: Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.view.pitch + dy * perPixel)) }; }
+      if (!this.camera.dragTo(event.clientX, event.clientY, { pixelsPerUnit: this.pixelsPerUnit, height: this.canvas.clientHeight, coordinateSystem: this.coordinateSystem })) { this.hover(event); return; }
       this.scheduleDraw();
     });
-    const end = (event: PointerEvent) => { if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId); if (this.drag?.changed) this.update({ trajectoryView: this.view, trajectoryViewFit: false }); const click = event.type === 'pointerup' && this.drag && !this.drag.moved; this.drag = undefined; if (click && this.measuring) this.pick(event); };
+    const end = (event: PointerEvent) => { if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId); const drag = this.camera.endDrag(); if (drag?.changed) this.update({ trajectoryView: this.camera.view, trajectoryViewFit: this.camera.fitted }); const click = event.type === 'pointerup' && drag && !drag.moved; if (click && this.measuring) this.pick(event); };
     this.canvas.addEventListener('pointerup', end); this.canvas.addEventListener('pointercancel', end);
     this.canvas.addEventListener('mouseleave', () => this.host.setHoverTime(undefined));
     this.canvas.addEventListener('wheel', (event) => { const gesture = chartWheelGesture(event, this.canvas.clientHeight); if (gesture.kind !== 'zoom') return; event.preventDefault(); this.zoom(Math.exp(-Math.max(-40, Math.min(40, gesture.delta)) * .01)); }, { passive: false });
@@ -282,8 +275,8 @@ export class TrajectoryCard implements ComparisonCard {
 
   /** Wheel and press-repeat zoom fire many times in a row: redraw each time, but report the view once it settles. */
   private zoom(factor: number): void {
-    this.fitted = false; this.view = { ...this.view, zoom: Math.max(TRAJECTORY_ZOOM_LIMITS.minimum, Math.min(TRAJECTORY_ZOOM_LIMITS.maximum, this.view.zoom * factor)) }; this.draw();
-    clearTimeout(this.viewCommit); this.viewCommit = setTimeout(() => this.update({ trajectoryView: this.view, trajectoryViewFit: false }), 200);
+    this.camera.zoom(factor); this.draw();
+    clearTimeout(this.viewCommit); this.viewCommit = setTimeout(() => this.update({ trajectoryView: this.camera.view, trajectoryViewFit: false }), 200);
   }
 
   // ---- data & drawing ---------------------------------------------------------------------------
@@ -392,10 +385,9 @@ export class TrajectoryCard implements ComparisonCard {
     if (this.is3d) {
       // Centred on the data, whose widest extent spans 68% of the shorter side at zoom 1.
       const frame = trajectorySceneFrame(tracks.flatMap((track) => track.points)); const center = frame.center;
-      const scale = Math.max(1, Math.min(width, height)) * .68 / frame.span; if (top === 0) this.pixelsPerUnit = scale;
+      const scale = trajectorySceneScale(frame.span, width, height); if (top === 0) this.pixelsPerUnit = scale;
       // A fitted camera is fitted again to every size it is drawn at: the card after a resize, or an exported image.
-      const view = this.fitted ? fitTrajectoryView(this.view, tracks.flatMap((track) => track.points).map((point) => ({ x: point.x - center[0], y: point.y - center[1], z: (point.z ?? 0) - center[2] })), Math.max(1, width - 2 * TRAJECTORY_FIT_MARGIN) / scale, Math.max(1, height - 2 * TRAJECTORY_FIT_MARGIN) / scale, this.coordinateSystem) : this.view;
-      if (top === 0) this.view = view;
+      const view = this.camera.frame((camera) => fitTrajectoryScene(camera, tracks.flatMap((track) => track.points), center, scale, width, height, this.coordinateSystem), top === 0);
       project = (point) => { const value = projectPoint3d({ x: point.x - center[0], y: point.y - center[1], z: (point.z ?? 0) - center[2] }, view, this.coordinateSystem); return { x: width / 2 + value.x * scale, y: top + height / 2 - value.y * scale, depth: value.depth }; };
       this.paint3dAxes(context, s, project, label(axes.x), label(axes.y), label(axes.z), width, height, top);
     } else {
@@ -403,7 +395,7 @@ export class TrajectoryCard implements ComparisonCard {
       let kx = plotW / spanX; let ky = plotH / spanY; if (this.definitionValue.equalAspect !== false) kx = ky = Math.min(kx, ky);
       if (top === 0) this.pixelsPerUnit = Math.min(kx, ky);
       // In 2D the whole plot already fits at zoom 1.
-      const view2d = this.fitted ? { ...this.view, zoom: 1, panX: 0, panY: 0 } : this.view; if (top === 0) this.view = view2d;
+      const view2d = this.camera.frame((camera) => ({ ...camera, zoom: 1, panX: 0, panY: 0 }), top === 0);
       const zoom = view2d.zoom; const cx = (s.x.minimum + s.x.maximum) / 2 - view2d.panX; const cy = (s.y.minimum + s.y.maximum) / 2 - view2d.panY;
       project = (point) => ({ x: PAD.left + plotW / 2 + (point.x - cx) * kx * zoom, y: top + PAD.top + plotH / 2 - (point.y - cy) * ky * zoom, depth: 0 });
       this.paint2dAxes(context, s, project, width, height, top, label(axes.x), label(axes.y));

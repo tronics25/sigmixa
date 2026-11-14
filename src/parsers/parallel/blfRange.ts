@@ -1,6 +1,6 @@
-import * as zlib from 'zlib';
 import type { Diagnostic } from '../../core/diagnostics/diagnostic';
-import { findObjectOffset, LOG_CONTAINER, parseBlfObjects, readBaseObjectHeader } from '../blf/parseBlf';
+import { containerContents, ContainerTail, findObjectOffset, LOG_CONTAINER, parseBlfObjects, readBaseObjectHeader } from '../blf/parseBlf';
+import { ReadBudget } from '../readBudget';
 import { FramePacker, type PackedFrames } from './packedFrames';
 
 /**
@@ -20,6 +20,8 @@ export interface BlfRangeResult {
   readonly events: readonly BlfEvent[];
   /** What the last container left for the next one. */
   readonly tail: Uint8Array;
+  /** Bytes of an object too large to read that the next containers still hold, to be skipped (see `ContainerTail`). */
+  readonly tailSkip: number;
   /**
    * When the piece was read without what came before it: where reading started in the first container whose objects
    * were read (`anchorPrefix`: its bytes before that point), and `anchorEvents` events were reported before it. The
@@ -36,9 +38,12 @@ export interface BlfRangeResult {
  * `parseBlfBuffer` reads them. `tail`: what the container before them left; undefined when unknown, and then the
  * first container is read from the first place where its objects line up (see `anchorPrefix`).
  */
-export function parseBlfRange(buffer: Buffer, fileOffset: number, objects: ArrayLike<number>, startTimestamp: number, tail: Uint8Array | undefined): BlfRangeResult {
+export function parseBlfRange(buffer: Buffer, fileOffset: number, objects: ArrayLike<number>, startTimestamp: number, tail: Uint8Array | undefined, tailSkip = 0): BlfRangeResult {
   const packer = new FramePacker(); const events: BlfEvent[] = [];
-  let known = tail !== undefined; let rest: Buffer = tail ? Buffer.from(tail.buffer, tail.byteOffset, tail.byteLength) : Buffer.alloc(0);
+  const budget = new ReadBudget();
+  let known = tail !== undefined; const rest = new ContainerTail(budget);
+  if (tail) rest.keep(Buffer.from(tail.buffer, tail.byteOffset, tail.byteLength));
+  if (tail && tailSkip) rest.skipNext(tailSkip);
   let anchorPrefix: Uint8Array | undefined; let anchorEvents: number | undefined; let unsure = false;
   let shifted = false;
   const report = (code: string, severity: Diagnostic['severity'], message: string, offset?: number, details?: Diagnostic['details']) => {
@@ -56,10 +61,8 @@ export function parseBlfRange(buffer: Buffer, fileOffset: number, objects: Array
       const expectedSize = buffer.readUInt32LE(containerOffset + 8);
       const compressed = buffer.subarray(containerOffset + 16, offset + header.objectSize);
       try {
-        let contents: Buffer;
-        if (method === 0) contents = compressed;
-        else if (method === 2) contents = zlib.inflateSync(compressed);
-        else {
+        let contents = containerContents(method, compressed, budget);
+        if (!contents) {
           fileReport('BLF_COMPRESSION_UNSUPPORTED', 'warning', `LogContainer compression method ${method} is not supported.`, offset, { compressionMethod: method });
           contents = Buffer.alloc(0);
           // What is left before an empty container would be read again by itself: leave that to the main thread's order.
@@ -69,8 +72,8 @@ export function parseBlfRange(buffer: Buffer, fileOffset: number, objects: Array
           fileReport('BLF_CONTAINER_SIZE', 'warning', 'The expanded LogContainer size differs from the declared size.', offset, { expectedSize, actualSize: contents.length });
         }
         if (known) {
-          const combined = rest.length ? Buffer.concat([rest, contents]) : contents;
-          rest = parseBlfObjects(combined, startTimestamp, undefined, report, append).rest;
+          const combined = rest.add(contents, report);
+          if (combined) rest.keep(parseBlfObjects(combined, startTimestamp, undefined, report, append).rest);
         } else {
           const start = firstAlignedObject(contents);
           if (start < 0 || packer.size) { unsure = true; break; }
@@ -78,7 +81,7 @@ export function parseBlfRange(buffer: Buffer, fileOffset: number, objects: Array
           // Offsets reported for this container count from `start`; the main thread adds what came before.
           shifted = true;
           const result = parseBlfObjects(contents.subarray(start), startTimestamp, undefined, (code, severity, message, at, details) => report(code, severity, message, at === undefined ? undefined : at + start, details), append);
-          shifted = false; rest = result.rest;
+          shifted = false; rest.keep(result.rest);
         }
       } catch (error) {
         fileReport('BLF_CONTAINER_DECOMPRESSION', 'error', `LogContainer decompression failed: ${(error as Error).message}`, offset);
@@ -87,7 +90,8 @@ export function parseBlfRange(buffer: Buffer, fileOffset: number, objects: Array
       parseBlfObjects(buffer.subarray(offset, offset + header.objectSize), startTimestamp, undefined, report, append);
     }
   }
-  return { frames: packer.finish(), events, tail: Uint8Array.from(rest), ...(anchorPrefix ? { anchorPrefix, anchorEvents } : {}), unsure };
+  const tailSkipAfter = rest.skipping;
+  return { frames: packer.finish(), events, tail: Uint8Array.from(rest.take()), tailSkip: tailSkipAfter, ...(anchorPrefix ? { anchorPrefix, anchorEvents } : {}), unsure };
 }
 
 /** The first offset in `contents` from which a chain of valid objects runs to its end, or -1. */

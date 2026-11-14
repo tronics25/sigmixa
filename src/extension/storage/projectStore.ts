@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { CURRENT_PROJECT_SCHEMA_VERSION, emptyProject, migrateProject, parseProjectJson, serializeProject, clipRange, type AnalysisGroup, type ClipDefinition, type SigMixaProject } from '../../core/project/schema';
-import { clipViewKey, composeWorkspace, addedLogsOf, GROUP_VIEW_KEY, LEVEL_DIRECTORY, LEVEL_FILE, locationLevel, logViewKey, parseLogViewKey, splitWorkspace, type LevelFile, type WorkspaceLog } from '../../core/project/folderLevels';
+import { clipViewKey, composeWorkspace, addedLogsOf, isAddedOnlyLogFileName, GROUP_VIEW_KEY, LEVEL_DIRECTORY, LEVEL_FILE, locationLevel, logViewKey, parseLogViewKey, splitWorkspace, type LevelFile, type WorkspaceLog } from '../../core/project/folderLevels';
 import { findClip, type ClipRef, type LogMove } from '../../core/project/clipIdentity';
 import { scanWorkspace } from './workspaceScan';
 import { t, errorText } from '../i18n';
@@ -217,7 +217,8 @@ export class ProjectStore implements vscode.Disposable {
    */
   async addLogs(level: string, files: readonly string[]): Promise<void> {
     const listed = (file: string) => this.workspaceLogs.some((log) => log.level === level && log.path === file);
-    const located = [...new Set(files.map((file) => this.locate(file)))].filter((file) => !listed(file) && (path.isAbsolute(file) || locationLevel(this.levelFolders, file) !== level));
+    // A CSV file is shown only where it is added, so it is also added to the level of its own folder.
+    const located = [...new Set(files.map((file) => this.locate(file)))].filter((file) => !listed(file) && (path.isAbsolute(file) || isAddedOnlyLogFileName(file) || locationLevel(this.levelFolders, file) !== level));
     if (!located.length) return;
     // The level files are written from the composed project, so the new entries must be known as logs before the split.
     this.workspaceLogs = [...this.workspaceLogs, ...located.map((file) => ({ path: file, level }))];
@@ -285,8 +286,9 @@ export class ProjectStore implements vscode.Disposable {
     const clipsChange = listChange || this.project.clips.some((clip) => moved(clip.sourcePath) !== undefined);
     const keysChange = Object.keys(this.project.viewStates).some((key) => { const parsed = parseLogViewKey(key); return !!parsed && placed(parsed.level, parsed.path) !== undefined; });
     if (!clipsChange && !keysChange && !sourcesChange) return;
-    // A log moved into the group it was added to no longer needs the link: it is listed there as the file itself.
-    const needed = (level: string) => (file: string) => path.isAbsolute(file) || locationLevel(this.levelFolders, file) !== level;
+    // A log moved into the group it was added to no longer needs the link: it is listed there as the file itself. A CSV
+    // file is listed only where it is added, so its link is always kept.
+    const needed = (level: string) => (file: string) => path.isAbsolute(file) || isAddedOnlyLogFileName(file) || locationLevel(this.levelFolders, file) !== level;
     const follow = (list: readonly string[] | undefined, level: string) => list?.map((file) => placed(level, file) ?? file).filter(needed(level));
     if (listChange) this.workspaceLogs = this.workspaceLogs.map((log) => log.level !== undefined ? { ...log, path: placed(log.level, log.path) ?? log.path } : log).filter((log) => log.level === undefined || needed(log.level)(log.path));
     await this.update((project) => ({ ...project, addedLogs: follow(project.addedLogs, ''), analysisGroups: project.analysisGroups?.map((group) => ({ ...group, addedLogs: follow(group.addedLogs, group.id),

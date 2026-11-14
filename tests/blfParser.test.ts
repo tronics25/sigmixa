@@ -185,3 +185,13 @@ test('CAN objects outside any LogContainer are imported too', () => {
   assert.deepEqual(frames.map((frame) => [frame.timestamp, frame.canId, frame.direction, frame.dataLength]), [[1.5, 0x55, 'Tx', 2]]);
   assert.deepEqual(diagnostics.map((item) => item.code), ['BLF_ERROR_FRAME']);
 });
+
+test('a worker range given the rest of a too-large object to skip reads the frames after it', async () => {
+  const { parseBlfRange } = await import('../src/parsers/parallel/blfRange');
+  // The rest of the object holds bytes that look like a broken object, which would stop the container if read.
+  const rest = Buffer.alloc(64); rest.write('LOBJ', 8, 'ascii'); rest.writeUInt16LE(4, 12);
+  const buffer = blfContainers([Buffer.concat([rest, object(1, classic(1, 0, 0x123, [1, 2]), 10n)])], false);
+  const skipped = parseBlfRange(buffer, 0, [144], 0, new Uint8Array(0), rest.length);
+  assert.equal(skipped.frames.count, 1); assert.deepEqual(skipped.events, []); assert.equal(skipped.tailSkip, 0);
+  assert.equal(parseBlfRange(buffer, 0, [144], 0, new Uint8Array(0)).frames.count, 0);
+});

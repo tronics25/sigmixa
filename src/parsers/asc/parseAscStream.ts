@@ -3,6 +3,8 @@ import type { CanFrame } from '../../core/frame/canFrame';
 import type { Diagnostic } from '../../core/diagnostics/diagnostic';
 import type { TimeReference } from '../../core/time/timeFormat';
 import { parseAscFrameBytes, parseAscLine, type AscNumericBase } from './ascLineParser';
+import { chunkCut, lastLines, LineCursor } from '../lineBreaks';
+import { ByteGather, ReadBudget } from '../readBudget';
 
 export interface AscParseProgress {
   readonly bytesRead: number;
@@ -43,7 +45,8 @@ export async function parseAscFile(filePath: string, options: AscStreamOptions):
   let frames: CanFrame[] = [];
   let diagnostics: Diagnostic[] = [];
 
-  // The loop checks the signal for every line; the stream is closed when it stops.
+  // The loop checks for cancellation at every line; the stream is closed when it stops.
+  const budget = new ReadBudget(options.signal);
   const abort = () => { cancelled = true; };
   options.signal?.addEventListener('abort', abort, { once: true });
 
@@ -77,42 +80,37 @@ export async function parseAscFile(filePath: string, options: AscStreamOptions):
   };
 
   try {
-    // Lines end at \n, \r\n or a lone \r, as with readline. A chunk is cut after its last \n, which never splits a
-    // UTF-8 character; the rest waits for the next chunk.
-    let carry: Buffer = Buffer.alloc(0); let consumed = 0;
+    // Lines are cut as `lineBreaks` cuts them; the bytes after a chunk's last whole line wait for the next chunk.
+    const carry = new ByteGather(); let consumed = 0;
     reading: for await (const chunk of input as AsyncIterable<Buffer>) {
-      const buffer = carry.length ? Buffer.concat([carry, chunk]) : chunk;
-      let cut = buffer.lastIndexOf(10);
-      // A log with lone \r endings: cut after a \r that is not the last byte (the last one may be half of a \r\n).
-      // A \r just before it is used when the last byte is one, so a log whose chunks all end in \r never piles up.
-      if (cut < 0 && buffer.length > 1) cut = buffer.lastIndexOf(13, buffer.length - 2);
-      if (cut < 0) { carry = buffer; continue; }
-      carry = buffer.subarray(cut + 1);
-      const chunkStart = consumed; consumed += cut + 1;
-      // Line by line on the bytes: a common frame row is read from them directly; any other line is decoded and read by
-      // the full rules (split at every line break it holds, so a lone \r inside still ends a line).
-      let position = 0;
-      while (position <= cut) {
-        if (options.signal?.aborted) { cancelled = true; break reading; }
-        let next = buffer.indexOf(10, position); if (next < 0 || next > cut) next = cut;
-        const lineEnd = buffer[next] === 10 && next > position && buffer[next - 1] === 13 ? next - 1 : next;
-        bytesRead = Math.min(totalBytes, chunkStart + next + 1);
-        const frame = buffer[next] === 10 ? parseAscFrameBytes(buffer, position, lineEnd, { sourceId: options.sourceId, line: lineNumber + 1, sequence, base }) : undefined;
-        if (frame) { lineNumber++; if (take({ type: 'frame', frame })) await flush(); }
-        else {
-          const lines = buffer.toString('utf8', position, next + 1).split(/\r\n|\n|\r/); lines.pop();
-          for (const line of lines) { if (options.signal?.aborted) { cancelled = true; break reading; } if (handle(line)) await flush(); }
-        }
-        position = next + 1;
+      // Until a piece brings a line break, no line can end (a \r last kept may end one): the pieces are only gathered,
+      // so a long line costs its length, not its length times the pieces it spans.
+      if (carry.length && carry.lastByte !== 13 && chunk.indexOf(10) < 0 && chunk.indexOf(13) < 0) {
+        carry.append(chunk);
+        if (!budget.fitsPiece(carry.length)) throw new Error(`An ASC line is longer than ${budget.limits.pieceBytes} bytes.`);
+        continue;
       }
+      carry.append(chunk);
+      const buffer = carry.take();
+      const cut = chunkCut(buffer);
+      if (cut < 0) { carry.keep(buffer, 0); continue; }
+      carry.keep(buffer.subarray(cut + 1), 0);
+      const chunkStart = consumed; consumed += cut + 1;
+      // A common frame row is read from the bytes directly; any other line is decoded and read by the full rules.
+      const cursor = new LineCursor(buffer, cut);
+      while (cursor.next()) {
+        if (budget.cancelled) { cancelled = true; break reading; }
+        bytesRead = Math.min(totalBytes, chunkStart + cursor.last + 1);
+        const frame = cursor.newline ? parseAscFrameBytes(buffer, cursor.start, cursor.end, { sourceId: options.sourceId, line: lineNumber + 1, sequence, base }) : undefined;
+        if (frame) { lineNumber++; if (take({ type: 'frame', frame })) await flush(); }
+        else for (const line of cursor.lines()) { if (budget.cancelled) { cancelled = true; break reading; } if (handle(line)) await flush(); }
+      }
+      await budget.pause();
     }
-    if (!cancelled && !options.signal?.aborted && carry.length) {
-      const lines = carry.toString('utf8').split(/\r\n|\n|\r/);
-      // A last line ending in a lone \r gives an empty piece after it, which readline does not report as a line.
-      if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
-      for (const line of lines) { if (options.signal?.aborted) break; bytesRead = totalBytes; if (handle(line)) await flush(); }
+    if (!cancelled && !budget.cancelled && carry.length) {
+      for (const line of lastLines(carry.take().toString('utf8'))) { if (budget.cancelled) break; bytesRead = totalBytes; if (handle(line)) await flush(); }
     }
-    if (options.signal?.aborted) cancelled = true;
+    if (budget.cancelled) cancelled = true;
     await flush();
   } finally {
     options.signal?.removeEventListener('abort', abort);

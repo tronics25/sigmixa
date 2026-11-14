@@ -12,9 +12,9 @@ import { PluginHost, PluginRegistry } from '../src/core/plugin/pluginHost';
 import type { SigMixaPlugin } from '../src/plugin-sdk';
 import { InMemorySignalStore } from '../src/core/signal/signalStore';
 import { signalDefinitionFor } from '../src/core/manual/manualDefinition';
-import { importExternalCsvText } from '../src/core/external/csv';
+import { parseCsvLogFile } from '../src/parsers/csv/parseCsvLog';
+import type { MdfSignalSeries } from '../src/parsers/mdf/parseMdf';
 import { buildTrajectoryPoints } from '../src/core/trajectory/trajectory';
-import { externalSignalId } from '../src/core/external/csv';
 import { importDbc } from '../src/core/dbc/dbc';
 import { addedLogsOf, composeWorkspace } from '../src/core/project/folderLevels';
 import { resolveGroupProject } from '../src/core/project/analysisGroups';
@@ -157,32 +157,15 @@ test('basic log runs two public Plugins on one Frame and isolates the deliberate
   assert.deepEqual(diagnostics, ['PLUGIN_PROCESS_THROW']);
 });
 
-test('basic log overlays non-zero External CSV timestamps without Table merging', async () => {
+test('the reference values are a CSV log listed in the workspace, read with their units', async () => {
   const project = migrateProject(JSON.parse(readFileSync(path.join(workspace, '.sigmixa/project.json'), 'utf8')));
-  assert.equal(project.externalCsvSources.length, 1); assert.equal(project.calculations.length, 0); assert.equal(project.lookupTables.length, 0);
-  const store = new InMemorySignalStore();
-  store.registerDefinitions(project.frames.flatMap((frame) => [...frame.signals, ...(frame.derivedSignals ?? [])].map((signal) => signalDefinitionFor(frame, signal))));
-  const definitions = new Map(project.frames.map((frame) => [`${frame.extended ? 'e' : 's'}:${frame.canId}`, frame]));
-  const summary = await parseAscFile(path.join(workspace, 'sigmixa-basic.asc'), {
-    sourceId: 'csv-basic',
-    onFrames: (frames) => {
-      for (const frame of frames) {
-        const definition = definitions.get(`${frame.extended ? 'e' : 's'}:${frame.canId}`);
-        if (!definition) continue;
-        store.appendFrame(frame.id, frame.timestamp, decodeManualFrame(frame, definition).decoded);
-      }
-    },
-  });
-  assert.equal(summary.diagnostics, 2);
-
-  const source = project.externalCsvSources[0];
-  const external = importExternalCsvText(readFileSync(path.join(workspace, source.path), 'utf8'), source);
-  assert.equal(external.diagnostics.length, 0); assert.equal(external.series.length, 2);
-  assert.equal(external.series[0].samples[0].timestamp, 5);
-  assert.deepEqual(external.series[0].samples[0].originalTimestamp, { value: 5000, unit: 'milliseconds' });
-  for (const series of external.series) store.appendSeries(series.definition, series.samples);
-  store.finalize();
-  assert.equal(store.tablePage([external.series[0].definition.id], 0, 10).total, 0);
+  assert.deepEqual(project.addedLogs, ['sigmixa-basic-decoded.csv']); assert.equal(project.externalCsvSources.length, 0);
+  const diagnostics: unknown[] = []; let series: readonly MdfSignalSeries[] = [];
+  await parseCsvLogFile(path.join(workspace, 'sigmixa-basic-decoded.csv'), { sourceId: 'csv', onFrames: () => undefined, onDiagnostics: (items) => diagnostics.push(...items), onSignals: (items) => { series = items; } });
+  assert.deepEqual(diagnostics, []);
+  assert.deepEqual(series.map((item) => [item.group, item.channel, item.unit, item.times.length, item.times[0], item.values[0]]), [
+    ['', 'Vehicle Speed', 'm/s', 601, 0.001, 0], ['', 'Coolant Temperature', '°C', 601, 0.001, 72],
+  ]);
 });
 
 test('basic log decodes an effective synchronized 3D Trajectory', async () => {
@@ -309,11 +292,18 @@ test('every prepared view shows Signals that exist, on axes of their own unit sy
   const project = readLevel('');
   const units = new Map<string, string | undefined>();
   for (const folder of LEVELS) for (const frame of readLevel(folder).frames) for (const signal of [...frame.signals, ...(frame.derivedSignals ?? [])]) units.set(signal.id, signal.unit);
-  for (const source of project.externalCsvSources) for (const column of source.valueColumns) units.set(externalSignalId(source.id, column.column), column.unit);
   const registry = new PluginRegistry(); const runtimeRequire = createRequire(path.resolve('tests/sampleWorkspace.test.ts'));
   for (const registration of project.plugins) { const plugin = runtimeRequire(path.join(workspace, registration.source)) as SigMixaPlugin; plugin.setConfig?.(registration.config); registry.register(plugin, registration.source); }
   const host = new PluginHost(registry, project.frames, project.plugins, project.pluginBindings);
   await parseAscFile(path.join(workspace, 'sigmixa-basic.asc'), { sourceId: 'views-basic', onFrames: (frames) => { for (const frame of frames) for (const item of host.processFrame(frame).decoded) units.set(item.definition.id, item.definition.unit); } });
+  // The measured signals of the sample's MF4, MDF and CSV logs, as their logs name them.
+  const { mdfSignalDefinitions } = await import('../src/extension/editors/rawLogDocument');
+  const { parseMdfFile } = await import('../src/parsers/mdf/parseMdf');
+  for (const file of ['sigmixa-basic.mf4', 'sigmixa-basic-decoded.mdf', 'sigmixa-basic-decoded.csv']) {
+    let series: readonly MdfSignalSeries[] = []; const options = { sourceId: file, onFrames: () => undefined, onSignals: (items: readonly MdfSignalSeries[]) => { series = items; } };
+    await (file.endsWith('.csv') ? parseCsvLogFile(path.join(workspace, file), options) : parseMdfFile(path.join(workspace, file), options));
+    for (const { definition } of mdfSignalDefinitions(series)) units.set(definition.id, definition.unit);
+  }
   const states = LEVELS.flatMap((folder) => Object.entries(readLevel(folder).viewStates).map(([key, state]) => [`${folder || '(common)'} ${key}`, state] as const))
     .filter(([, state]) => (state as { visualizeViews?: unknown }).visualizeViews) as Array<readonly [string, { visualizeViews: Array<{ kind: string; name: string; settings: Record<string, any> }>; tableSelectedIds?: string[] }]>;
   // The basic log's own views and the two groups' shared views. Clips have no views of their own.

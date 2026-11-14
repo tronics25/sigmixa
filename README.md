@@ -9,7 +9,7 @@
 
 **Open-source CAN / CAN FD log analyzer that runs locally inside VS Code.**
 
-Decode ASC or BLF captures with DBC, plot Signals, compare intervals across recordings and replay 2D/3D trajectories. SigMixa's built-in analysis runs offline and does not upload your captures.
+Decode ASC, BLF, MF4 or MDF captures with DBC, open CSV measurements alongside them, plot Signals, compare intervals across recordings and replay 2D/3D trajectories. SigMixa's built-in analysis runs offline and does not upload your captures.
 
 [![SigMixa in VS Code: define Signals and watch the bit layout, pin graph values, follow the trace, create and compare Clips, and rotate a 3D trajectory](media/demo.gif)](media/demo.mp4)
 
@@ -19,7 +19,7 @@ A free, open-source alternative for offline CAN log analysis.
 
 ## Features
 
-- Import Vector ASC and BLF for Classic CAN and CAN FD, with progress, cancellation and diagnostics.
+- Import Vector ASC and BLF for Classic CAN and CAN FD, ASAM MDF (MF4 CAN bus logging and measured signals, MDF 3 measured signals) and CSV files of measured values. Large logs load on several threads, with progress, cancellation and diagnostics.
 - Define Signals visually with Intel/Motorola byte order, signed values, Scale/Offset, value labels and Multiplexing; import or export DBC definitions.
 - Create Derived Signals with expressions, linear interpolation, low-pass filters and moving averages.
 - Inspect RAW Logs and Signal Tables with filtering, multi-row copy, VS Code text-editor integration and CSV export.
@@ -48,13 +48,13 @@ Filter Classic CAN and CAN FD Frames by keyword or regular expression, direction
 
 ### Compare decoded Signals as a table
 
-Choose Signals by Frame and inspect their values at the original event timestamps. Reorder or resize columns, copy selected rows, or export the displayed Signals to CSV.
+Choose Signals by Frame or by the channel group of an MF4, MDF or CSV log and inspect their values at their original timestamps, in time order. Reorder or resize columns, copy selected rows, or export the displayed Signals to CSV.
 
 [![SigMixa Signal Table showing decoded vehicle data](media/screenshots/signal-table.png)](media/screenshots/signal-table.png)
 
 ### Visualize graphs and trajectories together
 
-**Visualize** stacks any number of graph and trajectory views that share one time position. Each graph converts compatible units onto one axis (for example km/h from CAN and m/s from a CSV file) and shows up to two unit systems on real-value axes. Hover or pin markers to inspect original samples; hover a legend entry to emphasize a Signal. **Connect gaps** joins samples taken at different periods without changing the measured values.
+**Visualize** stacks any number of graph and trajectory views that share one time position. Each graph converts compatible units onto one axis (for example km/h and m/s) and shows up to two unit systems on real-value axes. Hover or pin markers to inspect original samples; hover a legend entry to emphasize a Signal. **Connect gaps** joins samples taken at different periods without changing the measured values.
 
 Trajectories draw X/Y and optional Z Signals in 2D or 3D, with several series in one view, such as the four wheels of a vehicle. Rotate, zoom, view along X, Y or Z, choose a right- or left-handed coordinate system, inspect points or measure between two points.
 
@@ -90,7 +90,7 @@ Use the database button in **FRAME DEFINITIONS** to import `BO_`/`SG_` definitio
 a DBC file. The export button writes one selected Frame or all registered Frames
 back to DBC. Existing CAN IDs are never overwritten without confirmation.
 
-Settings are saved in `.sigmixa/project.json`: the workspace root's file holds the workspace's definitions, Plugin registrations, CSV sources, Clips and view settings, and each analysis group's folder has its own. Workspaces from SigMixa 1.x open as they are.
+Settings are saved in `.sigmixa/project.json`: the workspace root's file holds the workspace's definitions, Plugin registrations, added logs, Clips and view settings, and each analysis group's folder has its own. Workspaces from SigMixa 1.x open as they are.
 
 ## CAN ID notation
 
@@ -106,15 +106,13 @@ Plugin authors can use the [SigMixa Plugin SDK](docs/plugin-sdk.md). Plugins are
 
 ## Sample workspace
 
-Open the [`sample`](sample) directory as a VS Code workspace. `sigmixa-basic.asc` (or `.blf`) shows the basic features: decoding, Plugins, External CSV, time series and the trace. `brake-analysis/` shows analysis groups and Clips, and `parking-drive/` shows 3D and 2D trajectories. See the [sample guide](sample/README.md).
+Open the [`sample`](sample) directory as a VS Code workspace. `sigmixa-basic.asc` (or `.blf`, `.mf4`) shows decoding, Plugins, time series and the trace. `sigmixa-basic-decoded.csv` (or `.mdf`) is a log of values converted from CAN data (speed and temperature), which you can view next to a CAN log on the comparison screen. `brake-analysis/` shows analysis groups and Clips, and `parking-drive/` shows 3D and 2D trajectories. See the [sample guide](sample/README.md).
 
 ## Compatibility notes
 
-- External CSV Signals are available in graphs, but are not merged into the event-row Table.
-- Trajectory axes must come from one source and have exactly matching timestamps.
-- Plugin configuration uses SigMixa's standard schema editor; Plugin-specific custom views are not supported.
+- A trajectory is drawn by combining three (or two) values within a frame.
 - DBC Signal value labels (`VAL_`) are imported and exported. Edit them from the value-label button beside a Signal name; labels match RAW integers before Scale/Offset. RAW Log, Table and chart markers show the label alongside the numeric value. CSV exports remain numeric.
-- DBC Frame/Signal definitions, Intel/Motorola byte order, signedness, Scale/Offset, limits, units, standard/extended IDs, Multiplexing and direct value labels are supported. DBC-only metadata such as comments, attributes and reusable named value tables (`VAL_TABLE_`) is not retained. Derived Signal operations cannot be represented in standard DBC and are reported during export.
+- DBC Frame/Signal definitions, Intel/Motorola byte order, signedness, Scale/Offset, limits, units, standard/extended IDs, Multiplexing and direct value labels are supported. DBC-only metadata such as comments, attributes and reusable named value tables (`VAL_TABLE_`) is not retained.
 
 ## License
 

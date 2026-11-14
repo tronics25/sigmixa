@@ -69,6 +69,10 @@ class OrdinalIndex {
     return this.chunks[Math.floor(index / this.chunkSize)][index % this.chunkSize];
   }
   *values(): IterableIterator<number> { for (let index = 0; index < this.count; index++) yield this.at(index)!; }
+  /** Copies the entries into `target` from `offset` on. */
+  copyTo(target: Uint32Array, offset: number): void {
+    for (let chunk = 0, left = this.count; left > 0; chunk++, left -= this.chunkSize) target.set(left >= this.chunkSize ? this.chunks[chunk] : this.chunks[chunk].subarray(0, left), offset + chunk * this.chunkSize);
+  }
 }
 
 const bytesToHex = (data: Uint8Array): string => Array.from(data, (byte) => byte.toString(16).padStart(2, '0')).join(' ');
@@ -428,6 +432,40 @@ export class ChunkedFrameStore implements FrameStore {
     }
   }
 
+  /** The ordinals of the frames of exact standard/extended CAN references, in order. */
+  ordinalsByCanRefs(refs: readonly { readonly canId: number; readonly extended: boolean }[]): Uint32Array {
+    const indexes = this.canRefIndexesFor(refs);
+    const result = new Uint32Array(this.countByCanRefs(refs)); let index = 0;
+    // One CAN reference (the usual case): its index is the list.
+    if (indexes.length === 1) { indexes[0].copyTo(result, 0); return result; }
+    for (const ordinal of mergeIndexes(indexes)) result[index++] = ordinal;
+    return index < result.length ? result.subarray(0, index) : result;
+  }
+
+  /**
+   * Frames `from..to-1` (or the frames at `ordinals`) as columns (`PackedFrameColumns`), for decoding on another thread
+   * without making an object per frame. Channels come as 32-bit numbers.
+   */
+  packedFrames(from: number, to: number, ordinals?: ArrayLike<number>): PackedFrameColumns {
+    const count = ordinals ? ordinals.length : Math.max(0, Math.min(to, this.count) - from);
+    const timestamps = new Float64Array(count); const canIds = new Uint32Array(count); const flags = new Uint8Array(count); const channels = new Uint32Array(count);
+    const dlcCodes = new Uint8Array(count); const lengths = new Uint8Array(count); const dataOffsets = new Uint32Array(count + 1);
+    let bytes = 0;
+    for (let index = 0; index < count; index++) { const ordinal = ordinals ? ordinals[index] : from + index; bytes += this.chunks[Math.floor(ordinal / this.chunkSize)].payloadLength(ordinal % this.chunkSize); }
+    const data = new Uint8Array(bytes); let used = 0;
+    for (let index = 0; index < count; index++) {
+      const ordinal = ordinals ? ordinals[index] : from + index;
+      const chunk = this.chunks[Math.floor(ordinal / this.chunkSize)]; const at = ordinal % this.chunkSize;
+      timestamps[index] = chunk.timestamps[at]; canIds[index] = chunk.canIds[at]; flags[index] = chunk.flags[at]; channels[index] = chunk.channels[at];
+      dlcCodes[index] = chunk.dlcCodes[at]; lengths[index] = chunk.lengths[at];
+      const offset = chunk.dataOffsets[at]; const length = chunk.payloadLength(at);
+      for (let byte = 0; byte < length; byte++) data[used + byte] = chunk.data[offset + byte];
+      dataOffsets[index] = used; used += length;
+    }
+    dataOffsets[count] = used;
+    return { count, timestamps, canIds, flags, channels, dlcCodes, lengths, dataOffsets, data };
+  }
+
   /** Number of frames matching exact standard/extended CAN references. */
   countByCanRefs(refs: readonly { readonly canId: number; readonly extended: boolean }[]): number {
     return this.canRefIndexesFor(refs).reduce((sum, index) => sum + index.length, 0);
@@ -482,13 +520,7 @@ export class ChunkedFrameStore implements FrameStore {
     if (this.timestampCacheGeneration !== this.version) {
       this.rebuildTimestampCache();
     }
-    const timestamps = this.timestampCache;
-    let index = direction < 0 ? lowerBound(timestamps, timestamp) - 1 : upperBound(timestamps, timestamp);
-    if (range && direction < 0 && timestamps[index] > range.end) index = upperBound(timestamps, range.end) - 1;
-    if (range && direction > 0 && timestamps[index] < range.start) index = lowerBound(timestamps, range.start);
-    const candidate = timestamps[index];
-    if (candidate === undefined || (range && (candidate < range.start || candidate > range.end))) return undefined;
-    return candidate;
+    return adjacentInSorted(this.timestampCache, timestamp, direction, range);
   }
 
   nearestTimestamp(timestamp: number, range?: { readonly start: number; readonly end: number }): number | undefined {
@@ -496,12 +528,7 @@ export class ChunkedFrameStore implements FrameStore {
     if (this.timestampCacheGeneration !== this.version) {
       this.rebuildTimestampCache();
     }
-    const start = range ? lowerBound(this.timestampCache, range.start) : 0;
-    const end = range ? upperBound(this.timestampCache, range.end) : this.timestampCache.length;
-    if (start >= end) return undefined;
-    const afterIndex = Math.min(end - 1, Math.max(start, lowerBound(this.timestampCache, timestamp)));
-    const beforeIndex = Math.max(start, afterIndex - 1); const before = this.timestampCache[beforeIndex]; const after = this.timestampCache[afterIndex];
-    return Math.abs(timestamp - before) <= Math.abs(after - timestamp) ? before : after;
+    return nearestInSorted(this.timestampCache, timestamp, range);
   }
 
   clear(): void {
@@ -580,6 +607,27 @@ export class ChunkedFrameStore implements FrameStore {
     for (const chunk of this.chunks) { timestamps.set(chunk.timestamps.subarray(0, chunk.length), index); index += chunk.length; }
     timestamps.sort(); this.timestampCache = timestamps; this.timestampCacheGeneration = this.version;
   }
+}
+
+/** The time next to `timestamp` in `direction` among sorted `timestamps` (inside `range`, when given). */
+export function adjacentInSorted(timestamps: ArrayLike<number>, timestamp: number, direction: -1 | 1, range?: { readonly start: number; readonly end: number }): number | undefined {
+  let index = direction < 0 ? lowerBound(timestamps, timestamp) - 1 : upperBound(timestamps, timestamp);
+  if (range && direction < 0 && timestamps[index] > range.end) index = upperBound(timestamps, range.end) - 1;
+  if (range && direction > 0 && timestamps[index] < range.start) index = lowerBound(timestamps, range.start);
+  const candidate = timestamps[index];
+  if (candidate === undefined || (range && (candidate < range.start || candidate > range.end))) return undefined;
+  return candidate;
+}
+
+/** The time nearest `timestamp` among sorted `timestamps` (inside `range`, when given). */
+export function nearestInSorted(timestamps: ArrayLike<number>, timestamp: number, range?: { readonly start: number; readonly end: number }): number | undefined {
+  if (!Number.isFinite(timestamp)) return undefined;
+  const start = range ? lowerBound(timestamps, range.start) : 0;
+  const end = range ? upperBound(timestamps, range.end) : timestamps.length;
+  if (start >= end) return undefined;
+  const afterIndex = Math.min(end - 1, Math.max(start, lowerBound(timestamps, timestamp)));
+  const beforeIndex = Math.max(start, afterIndex - 1); const before = timestamps[beforeIndex]; const after = timestamps[afterIndex];
+  return Math.abs(timestamp - before) <= Math.abs(after - timestamp) ? before : after;
 }
 
 function lowerBound(values: ArrayLike<number>, target: number): number { let low = 0; let high = values.length; while (low < high) { const middle = (low + high) >>> 1; if (values[middle] < target) low = middle + 1; else high = middle; } return low; }

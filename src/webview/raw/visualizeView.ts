@@ -1,4 +1,5 @@
 import { TraceTableView } from './traceTable';
+import { bindSidePanelResizer } from '../shared/sidePanelResizer';
 import type { ViewContextAction } from '../shared/viewContextAction';
 import { iconButton, labeledIconButton, type ViewCardState } from '../shared/iconButton';
 import { bindPressRepeat } from '../shared/pressRepeat';
@@ -58,7 +59,9 @@ export class VisualizeView {
     this.bindTraceResize();
     this.options = host.querySelector('.view-options-panels')!;
     this.traceTable = new TraceTableView(host.querySelector('.last-value-table')!, initial.traceSettings, (settings) => this.save({ traceSettings: settings }),
-      (actions, label, x, y, returnFocus) => this.showActionMenu(actions, label, x, y, returnFocus), (message) => this.post(message));
+      // The Trace's menus close when the Trace's own data scrolls, as its heading menus do.
+      (actions, label, x, y, returnFocus) => showActionMenu(actions, label, x, y, returnFocus, { scroller: host.querySelector<HTMLElement>('.trace-data') ?? this.list }), (message) => this.post(message));
+    bindSidePanelResizer(host.querySelector<HTMLElement>('.visualize-options')!);
     const closeOptions = iconButton(host.querySelector<HTMLButtonElement>('.close-view-options')!, 'close', t('Close graph settings', 'グラフ設定を閉じる'));
     closeOptions.addEventListener('click', () => { this.optionsCollapsed = true; this.updateOptionsVisibility(); this.persist(); this.entries.find((entry) => entry.definition.id === this.selectedId)?.element.querySelector<HTMLElement>('.visualize-card-header')?.focus({ preventScroll: true }); });
     this.updateOptionsVisibility();

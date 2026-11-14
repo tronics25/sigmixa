@@ -31,7 +31,7 @@ export function renderReportTable(host: HTMLElement, table: ReportTable, definit
   const empty = new Set(table.emptySignalIds ?? []);
   let query = ''; let sortColumn = -1; let descending = false; let order: number[] = table.timestamps.map((_, index) => index);
   host.classList.add('report-table');
-  host.innerHTML = `<div class="view-toolbar"><input type="search" placeholder="${t('Search Signals…', 'シグナルを検索…')}" aria-label="${t('Search Signals', 'シグナルを検索')}"><span class="muted"></span><span class="spacer"></span><span class="muted">${t('Click a heading to sort', '見出しをクリックで並べ替え')}</span></div><div class="report-table-scroll"><table><thead></thead><tbody></tbody></table></div>`;
+  host.innerHTML = `<div class="view-toolbar"><input type="search" placeholder="${t('Search Signals…', 'シグナルを検索…')}" aria-label="${t('Search Signals', 'シグナルを検索')}"><span class="muted"></span><span class="spacer"></span></div><div class="report-table-scroll"><table><thead></thead><tbody></tbody></table></div>`;
   const scroll = host.querySelector<HTMLElement>('.report-table-scroll')!; const head = host.querySelector('thead')!; const body = host.querySelector('tbody')!; const status = host.querySelector('.view-toolbar .muted')!;
   const columns = () => table.signalIds.map((id, index) => ({ id, index })).filter(({ id }) => { const definition = byId.get(id); return !query || `${definition?.name ?? id} ${definition?.unit ?? ''}`.toLowerCase().includes(query); });
   const cell = (column: number, row: number): string => {

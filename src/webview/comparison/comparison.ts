@@ -1,3 +1,5 @@
+import { installOverlayScrollbars } from '../shared/overlayScrollbars';
+import { bindSidePanelResizer } from '../shared/sidePanelResizer';
 import { isTextEditing } from '../shared/keyboard';
 import type { ComparisonDefinition, ComparisonGraphDefinition, ComparisonTarget } from '../../core/project/comparison';
 import type { SignalDefinition } from '../../core/signal/signal';
@@ -24,6 +26,7 @@ import { bindFindShortcut } from '../shared/findShortcut';
 declare function acquireVsCodeApi(): { postMessage(message: ComparisonToExtension): void };
 const vscode = acquireVsCodeApi();
 const app = document.getElementById('app')!;
+installOverlayScrollbars(document);
 
 let comparison: ComparisonDefinition | undefined;
 let targets: readonly ComparisonTargetStateDto[] = [];
@@ -46,11 +49,12 @@ const pendingSeries = new Map<number, string>();
 
 app.innerHTML = `<style>${DESIGN_TOKENS}${COMPARISON_STYLES}${ICON_BUTTON_STYLES}${CHOICE_GROUP_STYLES}${SIGNAL_LEGEND_STYLES}${CHART_LANES_STYLES}${COMPONENT_STYLES}</style>
 <section class="targets" aria-label="${t('Compared files and Clips', '比較するファイル／クリップ')}"><div class="targets-head"><strong>${t('Compared files and Clips', '比較するファイル／クリップ')}</strong><span class="targets-count muted"></span></div><div class="target-rows"></div></section>
-<div class="visualize-workspace"><div class="visualize-content"><div class="view-toolbar"><button class="add-graph" type="button"><span class="codicon codicon-add" aria-hidden="true"></span> ${t('Add graph', 'グラフを追加')}</button><span class="spacer"></span><span class="muted line-hint">${t('Line style = file/Clip; in time series, color = Signal', '線種＝ファイル／クリップ、時系列の線の色＝シグナル')}</span><div class="range-controls comparison-range" role="group" aria-label="${t('Selected range', '選択範囲')}" hidden><span class="clip-range muted"></span><button class="range-zoom" type="button"></button><button class="range-clear" type="button"></button></div><button class="zoom-all-in" type="button"></button><button class="zoom-all-out" type="button"></button><button class="zoom-all-reset" type="button"></button><button class="save-sheet" type="button"></button></div><div class="visualize-list"></div></div>
+<div class="visualize-workspace"><div class="visualize-content"><div class="view-toolbar"><button class="add-graph" type="button"><span class="codicon codicon-add" aria-hidden="true"></span> ${t('Add graph', 'グラフを追加')}</button><span class="spacer"></span><div class="range-controls comparison-range" role="group" aria-label="${t('Selected range', '選択範囲')}" hidden><span class="clip-range muted"></span><button class="range-zoom" type="button"></button><button class="range-clear" type="button"></button></div><button class="zoom-all-in" type="button"></button><button class="zoom-all-out" type="button"></button><button class="zoom-all-reset" type="button"></button><button class="save-sheet" type="button"></button></div><div class="visualize-list"></div></div>
 <aside class="visualize-options" aria-label="${t('Graph settings', 'グラフ設定')}" hidden><header><strong>${t('Graph settings', 'グラフ設定')}</strong><button class="close-view-options" type="button"></button></header><div class="options-view-name"></div><p class="options-empty muted">${t('Add a graph to configure it.', 'グラフを追加すると設定できます。')}</p><div class="view-options-panels"></div></aside></div>`;
 
 const list = app.querySelector<HTMLElement>('.visualize-list')!;
 const optionsPanel = app.querySelector<HTMLElement>('.visualize-options')!;
+bindSidePanelResizer(optionsPanel);
 const optionsHost = app.querySelector<HTMLElement>('.view-options-panels')!;
 iconButton(app.querySelector<HTMLButtonElement>('.close-view-options')!, 'close', t('Close graph settings', 'グラフ設定を閉じる')).addEventListener('click', () => { optionsOpen = false; updateOptions(); cards.find((card) => card.id === selectedGraphId)?.focusHeader(); });
 

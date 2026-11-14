@@ -1,3 +1,4 @@
+import { installOverlayScrollbars } from '../shared/overlayScrollbars';
 import { diagnosticText } from '../../shared/diagnosticText';
 import { stepperButtons } from '../shared/numberStepper';
 import { enhanceChoiceSelect } from '../shared/choiceGroup';
@@ -34,6 +35,7 @@ import { BREADCRUMB_STYLES, renderCrumbs } from '../shared/breadcrumb';
 declare function acquireVsCodeApi(): { postMessage(message: FrameEditorToExtension): void; getState(): unknown; setState(value: unknown): void };
 const vscode = acquireVsCodeApi();
 const app = document.getElementById('app')!;
+installOverlayScrollbars(document);
 /** Grid tables have no column attribute on cells, so a column is its position within the row. */
 const columnHover = bindColumnHover(app, (element) => {
   const cellElement = element.closest<HTMLElement>('.signal-row>*,.derived-row>*,.signal-header>.head,.derived-header>.head'); const row = cellElement?.parentElement;

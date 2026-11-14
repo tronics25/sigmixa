@@ -621,19 +621,11 @@ export class GraphCard implements ComparisonCard {
 
   private renderLegend(): void {
     clearLegend(this.legend, this.title); placeCardTitle(this.element, this.header, this.legend, this.title, this.shown.length > 0);
-    const entries = this.entries(); const bySignal = new Map<string, Entry[]>();
-    for (const entry of entries) bySignal.set(entry.signalId, [...(bySignal.get(entry.signalId) ?? []), entry]);
     const definitions = new Map(this.host.definitions().map((definition) => [definition.id, definition]));
-    const readyTargets = this.host.targets().filter((target) => target.status === 'ready' && !this.host.hidden(target.id));
     for (const signalId of this.shown) {
       const definition = definitions.get(signalId); const color = this.color(signalId);
       const entry = createLegendEntry(`${definition?.name ?? signalId}${definition?.unit ? ` (${definition.unit})` : ''}`, color, (active) => this.host.highlight(active ? signalId : undefined));
       entry.className = 'chart-legend-entry'; entry.dataset.signalId = signalId;
-      const missing = this.pending ? [] : readyTargets.filter((target) => !(bySignal.get(signalId) ?? []).some((item) => item.target.id === target.id));
-      if (missing.length) {
-        const warn = document.createElement('span'); warn.className = 'codicon codicon-warning legend-warning'; warn.setAttribute('aria-hidden', 'true'); entry.appendChild(warn);
-        entry.title = t(`Not in: ${missing.map((item) => item.name).join(', ')}`, `このシグナルがない対象: ${missing.map((item) => item.name).join('、')}`);
-      }
       emphasizeSignal(entry, this.host.highlighted() === signalId, color);
       this.legend.appendChild(entry);
     }

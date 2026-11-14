@@ -9,7 +9,7 @@ import * as fs from 'fs';
 import { clipboardFiles } from '../platform/clipboardFiles';
 import { parseClipRangeInput, withClipRange } from '../../core/project/clipRangeEdit';
 import { randomUUID } from 'crypto';
-import { isLogFileName, levelOf } from '../../core/project/folderLevels';
+import { isAddedOnlyLogFileName, isOpenableLogFileName, levelOf } from '../../core/project/folderLevels';
 import { clipKey, findClip, isClip } from '../../core/project/clipIdentity';
 import { refuseTransfer, type TransferRefusal } from '../../core/project/logTransfer';
 import { portableClipPath } from '../clips/clipPaths';
@@ -72,7 +72,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Levels, logs and links are found from the folders: reload when any of them appears, changes or disappears.
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
   const reload = () => { if (reloadTimer) clearTimeout(reloadTimer); reloadTimer = setTimeout(() => void projectStore.load(), 300); };
-  const watchers = workspaceRoot ? ['**/.sigmixa/project.json', '**/.sigmixa', '**/*.{asc,blf,ASC,BLF}'].map((pattern) => vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(workspaceRoot, pattern))) : [];
+  const watchers = workspaceRoot ? ['**/.sigmixa/project.json', '**/.sigmixa', '**/*.{asc,blf,mf4,mdf,csv,ASC,BLF,MF4,MDF,CSV}'].map((pattern) => vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(workspaceRoot, pattern))) : [];
   for (const watcher of watchers) { watcher.onDidChange(reload); watcher.onDidCreate(reload); watcher.onDidDelete(reload); }
   // Logs moved or renamed in VS Code keep their Clips and view settings.
   const renames = vscode.workspace.onDidRenameFiles((event) => void projectStore.followRenames(event.files.map((file) => ({ from: file.oldUri.fsPath, to: file.newUri.fsPath }))));
@@ -145,22 +145,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const refused: string[] = []; const links: string[] = []; const placed: string[] = []; let copied = false;
     for (const node of files) {
       const name = path.basename(node.filePath); const from = vscode.Uri.file(node.filePath); const to = vscode.Uri.joinPath(folder, name);
-      const refusal = refuseTransfer(picked.mode, { located: projectStore.locate(node.filePath), listed: !!node.listed, exists: await found(from) }, destination, projectStore.levels, projectStore.logs, picked.mode !== 'link' && await found(to));
+      const refusal = refuseTransfer(picked.mode, { located: projectStore.locate(node.filePath), listed: !!node.listed, exists: await found(from), addedOnly: isAddedOnlyLogFileName(node.filePath) }, destination, projectStore.levels, projectStore.logs, picked.mode !== 'link' && await found(to));
       if (refusal) { refused.push(`${name}: ${refusalText(refusal)}`); continue; }
       try {
         if (picked.mode === 'link') links.push(node.filePath);
         else if (picked.mode === 'copy') { await vscode.workspace.fs.copy(from, to, { overwrite: false }); copied = true; await projectStore.copyClips(from.fsPath, to.fsPath, () => `clip-${randomUUID()}`); placed.push(to.fsPath); }
         else {
+          // A CSV log is listed only where it is added: listed in its own group before, it is listed in the new one instead. Read before the
+          // move, as the rename event may update the store before the edit returns.
+          const own = projectStore.levelOfFile(from.fsPath); const ownListed = isAddedOnlyLogFileName(name) && projectStore.logs.some((log) => log.level === own && log.path === projectStore.locate(from.fsPath));
           // Moved like the Explorer does, so an open editor follows; Clips, view settings and links follow the file.
           const edit = new vscode.WorkspaceEdit(); edit.renameFile(from, to, { overwrite: false });
           if (!await vscode.workspace.applyEdit(edit)) throw new Error(t('VS Code did not move the file', 'VS Code がファイルを移動できませんでした'));
           await projectStore.followRenames([{ from: from.fsPath, to: to.fsPath }]); placed.push(to.fsPath);
+          if (ownListed && projectStore.levelOfFile(to.fsPath) !== own) await projectStore.removeAddedLog(to.fsPath, own);
         }
       } catch (error) { refused.push(`${name}: ${(error as Error).message}`); }
     }
     const level = levelOf(projectStore.levels, destination);
     if (links.length) await projectStore.addLogs(level, links);
     if (copied) await projectStore.load();
+    // A CSV log moved or copied into a folder is listed in that folder's group, as any other log there is.
+    for (const file of placed) if (isAddedOnlyLogFileName(file)) await projectStore.addLogs(projectStore.levelOfFile(file), [file]);
     if (options?.open) for (const file of [...links.map((file) => projectStore.logUri(file, level)), ...placed.map((file) => projectStore.logUri(file, projectStore.levelOfFile(file)))]) await vscode.commands.executeCommand('vscode.openWith', file, 'sigmixa.rawLog');
     if (refused.length) void vscode.window.showErrorMessage(t(`Not done. ${refused.join(' / ')}`, `実行できませんでした。${refused.join(' / ')}`));
   };
@@ -176,8 +182,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void transferLogs(logs, dropDestination(target));
   };
   dropFiles = (files, target) => {
-    const logs = files.filter((file) => isLogFileName(path.basename(file.fsPath)));
-    if (!logs.length) { void vscode.window.showErrorMessage(t('Only ASC and BLF logs can be added.', '追加できるのは ASC と BLF のログだけです。')); return; }
+    const logs = files.filter((file) => isOpenableLogFileName(path.basename(file.fsPath)));
+    if (!logs.length) { void vscode.window.showErrorMessage(t('Only ASC, BLF, MF4, MDF and CSV logs can be added.', '追加できるのは ASC、BLF、MF4、MDF、CSV のログだけです。')); return; }
     void transferLogs(logs.map((file) => ({ kind: 'file' as const, filePath: file.fsPath, located: projectStore.locate(file.fsPath) })), dropDestination(target));
   };
   const dbcOutput = vscode.window.createOutputChannel('SigMixa DBC');
@@ -215,11 +221,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('sigmixa.openLog', async (node?: AnalysisTreeNode) => {
       // A log that is already in the place it is opened from (a group, a folder, or - from the pane's title bar - anywhere in the
       // workspace) just opens. For any other log, the user chooses: add it as a link, move it or copy it there; then it opens there.
-      const files = await vscode.window.showOpenDialog({ canSelectMany: true, title: t('Open CAN Log', 'CANログを開く'), filters: { 'CAN logs (ASC and BLF)': ['asc', 'blf'] } });
+      const files = await vscode.window.showOpenDialog({ canSelectMany: true, title: t('Open CAN Log', 'CANログを開く'), filters: { 'Logs (ASC, BLF, MF4, MDF and CSV)': ['asc', 'blf', 'mf4', 'mdf', 'csv'] } });
       if (!files?.length) return;
       if (projectStore.requireWorkspace()) {
         const place = placeOf(node) || undefined; const destination = place ?? ''; const level = levelOf(projectStore.levels, destination);
-        const isHere = (file: vscode.Uri) => { const located = projectStore.locate(file.fsPath); return place === undefined ? !path.isAbsolute(located) : refuseTransfer('link', { located, listed: false, exists: true }, destination, projectStore.levels, projectStore.logs, false) === 'already-in-group'; };
+        // A CSV file opened from anywhere in the workspace is added to the level of its folder, so it is listed there.
+        if (place === undefined) for (const file of files) if (isAddedOnlyLogFileName(file.fsPath) && !path.isAbsolute(projectStore.locate(file.fsPath))) await projectStore.addLogs(projectStore.levelOfFile(file.fsPath), [file.fsPath]);
+        const isHere = (file: vscode.Uri) => { const located = projectStore.locate(file.fsPath); return place === undefined ? !path.isAbsolute(located) && (!isAddedOnlyLogFileName(located) || projectStore.logs.some((log) => log.path === located)) : refuseTransfer('link', { located, listed: false, exists: true, addedOnly: isAddedOnlyLogFileName(located) }, destination, projectStore.levels, projectStore.logs, false) === 'already-in-group'; };
         for (const file of files.filter(isHere)) await vscode.commands.executeCommand('vscode.openWith', projectStore.logUri(file.fsPath, place === undefined ? projectStore.levelOfFile(file.fsPath) : level), 'sigmixa.rawLog');
         const others = files.filter((file) => !isHere(file));
         if (others.length) await transferLogs(others.map((file) => ({ kind: 'file' as const, filePath: file.fsPath, located: projectStore.locate(file.fsPath) })), destination, { open: true });

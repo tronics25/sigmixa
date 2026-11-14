@@ -149,10 +149,38 @@ const propertyConfig = {
     { id: 4, name: 'Display Brightness', unit: '%', scale: 0.5, offset: 0 },
   ],
 };
-const externalSignalId = (sourceId, column) => `external:${encodeURIComponent(sourceId)}:${encodeURIComponent(column)}`;
-const externalSourceId = 'reference-signals';
-const referenceSpeedId = externalSignalId(externalSourceId, 'Reference Speed');
-const ambientTemperatureId = externalSignalId(externalSourceId, 'Ambient Temperature');
+// The views of the basic CAN log (and its BLF and MF4 copies).
+const basicViews = logView([
+      graph('view-speed-engine', 'Speed and Engine', ['sig-speed', 'sig-smoothed-speed', 'sig-engine-speed'], ['family:speed', 'family:rotational-speed']),
+      graph('view-torque-brake', 'Torque and Brake', ['sig-engine-torque', 'sig-brake-pressure'], ['family:torque', 'family:pressure']),
+      graph('view-temperatures', 'Temperatures', ['sig-temp', 'sig-coolant-temp'], ['family:temperature']),
+      graph('view-states', 'Drive and Module States', ['sig-gear-position', 'sig-drive-state', 'sig-door-module-state'], ['empty'], 200),
+      graph('view-property-service', 'Property Service', [propertyResponseSignal('p1-value'), propertyRequestSignal('p1-requested'), propertyResponseSignal('p4-value'), propertyRequestSignal('p4-requested')], ['family:temperature', 'family:percentage']),
+      trajectory('view-path-3d', 'Vehicle Path (3D)', [{ id: 'series-vehicle', name: 'Vehicle Position', xId: 'sig-position-x', yId: 'sig-position-y', zId: 'sig-position-z' }], { view: { yaw: 5.374, pitch: 0.419, zoom: 1.49, panX: -4.11, panY: 0.58 } }),
+    ], {
+      tableSelectedIds: ['sig-speed', 'sig-engine-speed', 'sig-engine-torque', 'sig-mechanical-power', 'sig-brake-pressure', 'sig-wheel-speed-difference', 'sig-headlight', 'sig-gear-position', 'sig-object-distance', 'sig-time-to-collision', counterId, metricId,
+        'sig-door-module-state', propertyRequestSignal('request'), propertyResponseSignal('p2-value'), propertyResponseSignal('p2-result'), propertyResponseSignal('p2-response-time')],
+      traceSettings: { pinnedIds: pinned(0x3c0, 0x6a0, 0x6a8), defaultMode: 'decoded', columns: TRACE_COLUMNS, sort: 'canId', descending: false },
+    });
+
+// Measured signals are named mdf:<group>:<channel>; a CSV log's group is empty.
+const measured = (group, channel) => `mdf:${encodeURIComponent(group)}:${encodeURIComponent(channel)}`;
+const decodedViews = {
+  'log:sigmixa-basic-decoded.csv': { ...logView([
+    graph('view-decoded', 'Decoded Speed and Coolant Temperature', [measured('', 'Vehicle Speed'), measured('', 'Coolant Temperature')], ['family:speed', 'family:temperature']),
+  ], { tableSelectedIds: [measured('', 'Vehicle Speed'), measured('', 'Coolant Temperature')] }), viewStateScope: 'file' },
+  'log:sigmixa-basic-decoded.mdf': { ...logView([
+    graph('view-decoded', 'Decoded Speed and Coolant Temperature', [measured('Reference', 'Vehicle Speed'), measured('Reference', 'Coolant Temperature')], ['family:speed', 'family:temperature']),
+    graph('view-speed-band', 'Speed Band', [measured('Reference', 'Speed Band')], ['empty'], 200),
+  ], { tableSelectedIds: [measured('Reference', 'Vehicle Speed'), measured('Reference', 'Coolant Temperature'), measured('Reference', 'Speed Band')] }), viewStateScope: 'file' },
+  // The MF4 log holds the CAN frames and the decoded values: the speed decoded from CAN and the stored one lie on each other.
+  'log:sigmixa-basic.mf4': { ...logView([
+    graph('view-speed-check', 'CAN Speed and Stored Speed', ['sig-speed', measured('Reference', 'Vehicle Speed')], ['family:speed']),
+    graph('view-wheels', 'Wheel Speeds (Array)', [0, 1, 2, 3].map((wheel) => measured('Chassis', `WheelSpeed[${wheel}]`)), ['family:speed']),
+    trajectory('view-position', 'Position (Structure)', [{ id: 'series-position', name: 'Position', xId: measured('Chassis', 'Position.X'), yId: measured('Chassis', 'Position.Y') }]),
+  ], { tableSelectedIds: ['sig-speed', measured('Reference', 'Vehicle Speed'), measured('Reference', 'Coolant Temperature')] }), viewStateScope: 'file' },
+};
+
 const project = {
   schemaVersion: 4,
   frames,
@@ -162,17 +190,9 @@ const project = {
     { id: 'sample.property-service', version: '1.0.0', source: '.sigmixa/plugins/property-service', enabled: true, configSchemaVersion: '1', config: propertyConfig },
   ],
   pluginBindings,
-  externalCsvSources: [{
-    id: externalSourceId,
-    path: 'reference-signals.csv',
-    fileName: 'reference-signals.csv',
-    timestampColumn: 'Time_ms',
-    timestampUnit: 'milliseconds',
-    valueColumns: [
-      { column: 'Reference Speed', name: 'Reference Speed', unit: 'm/s' },
-      { column: 'Ambient Temperature', name: 'Ambient Temperature', unit: '°C' },
-    ],
-  }],
+  externalCsvSources: [],
+  // The reference values are a CSV log of their own: compare it with the basic log on the comparison screen.
+  addedLogs: ['sigmixa-basic-decoded.csv'],
   // The basic log has no Clips: Clips are shown on brake-analysis/road-test.asc, which holds three trials.
   clips: [],
   lookupTables: [],
@@ -180,18 +200,11 @@ const project = {
   viewStates: {
     'frame-definition-columns': { name: 203, unit: 112, byte: 48, bit: 44, length: 58, signed: 96, endian: 92, scale: 100, offset: 74, minimum: 74, maximum: 74, activation: 136, actions: 32, derivedName: 235, derivedUnit: 112, derivedType: 140, definition: 520, derivedActions: 32 },
     // Opened at the workspace level, every log starts from these views (2.0.0: several graphs and trajectories).
-    'log-view-default': logView([
-      graph('view-speed-engine', 'Speed and Engine', ['sig-speed', 'sig-smoothed-speed', referenceSpeedId, 'sig-engine-speed'], ['family:speed', 'family:rotational-speed']),
-      graph('view-torque-brake', 'Torque and Brake', ['sig-engine-torque', 'sig-brake-pressure'], ['family:torque', 'family:pressure']),
-      graph('view-temperatures', 'Temperatures', ['sig-temp', 'sig-coolant-temp', ambientTemperatureId], ['family:temperature']),
-      graph('view-states', 'Drive and Module States', ['sig-gear-position', 'sig-drive-state', 'sig-door-module-state'], ['empty'], 200),
-      graph('view-property-service', 'Property Service', [propertyResponseSignal('p1-value'), propertyRequestSignal('p1-requested'), propertyResponseSignal('p4-value'), propertyRequestSignal('p4-requested')], ['family:temperature', 'family:percentage']),
-      trajectory('view-path-3d', 'Vehicle Path (3D)', [{ id: 'series-vehicle', name: 'Vehicle Position', xId: 'sig-position-x', yId: 'sig-position-y', zId: 'sig-position-z' }], { view: { yaw: 5.374, pitch: 0.419, zoom: 1.49, panX: -4.11, panY: 0.58 } }),
-    ], {
-      tableSelectedIds: ['sig-speed', 'sig-engine-speed', 'sig-engine-torque', 'sig-mechanical-power', 'sig-brake-pressure', 'sig-wheel-speed-difference', 'sig-headlight', 'sig-gear-position', 'sig-object-distance', 'sig-time-to-collision', counterId, metricId,
-        'sig-door-module-state', propertyRequestSignal('request'), propertyResponseSignal('p2-value'), propertyResponseSignal('p2-result'), propertyResponseSignal('p2-response-time')],
-      traceSettings: { pinnedIds: pinned(0x3c0, 0x6a0, 0x6a8), defaultMode: 'decoded', columns: TRACE_COLUMNS, sort: 'canId', descending: false },
-    }),
+    'log-view-default': basicViews,
+    // The workspace root is a group like any other: its logs of the same CAN data share these views ("Shared in group").
+    'group-view': basicViews,
+    // Logs of decoded values show their own signals ("This file").
+    ...decodedViews,
   },
 };
 

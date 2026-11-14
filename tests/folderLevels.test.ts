@@ -121,3 +121,12 @@ test('a held log path follows a move of the log or of a folder above it; other p
   assert.equal(movedSource('AB/run.asc', moves), 'AB/run.asc', 'a folder whose name only starts the same is another folder');
   assert.equal(movedSource('C/run.asc', moves), 'C/run.asc'); assert.equal(movedSource('A/run.asc', []), 'A/run.asc');
 });
+
+test('the shared view settings of the workspace root are read and written with the root', () => {
+  const shared = { traceSettings: { columns: ['count'] } };
+  const project = composeWorkspace([level('', { viewStates: { 'group-view': shared } }), level('A', { viewStates: { 'group-view': { other: true } } })], []);
+  assert.deepEqual(project.viewStates['group-view'], shared, 'a subfolder level keeps its own as its group\'s');
+  assert.deepEqual(project.analysisGroups?.[0].viewState, { other: true });
+  const split = splitWorkspace(project, ['', 'A'], []);
+  assert.deepEqual(split.get('')!.viewStates['group-view'], shared); assert.deepEqual(split.get('A')!.viewStates['group-view'], { other: true });
+});

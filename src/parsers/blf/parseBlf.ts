@@ -3,6 +3,7 @@ import * as zlib from 'zlib';
 import type { Diagnostic } from '../../core/diagnostics/diagnostic';
 import type { CanFrame } from '../../core/frame/canFrame';
 import type { TimeReference } from '../../core/time/timeFormat';
+import { ByteGather, ReadBudget } from '../readBudget';
 
 export const LOG_CONTAINER = 10;
 const CAN_MESSAGE = 1;
@@ -72,7 +73,9 @@ export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfPar
   let diagnosticCount = 0;
   let sequence = 0;
   let bytesRead = 0;
-  let containerTail: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  const budget = new ReadBudget(options.signal);
+  // What a container leaves for the next one (an object that continues there), gathered until it is whole.
+  const containerTail = new ContainerTail(budget);
   const startTimestamp = fileStartTimestamp(buffer);
   // BLF timestamps already include the header's start time, so they are clock seconds as they are.
   const timeReference: TimeReference | undefined = startTimestamp ? { start: startTimestamp, offset: 0 } : undefined;
@@ -106,7 +109,7 @@ export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfPar
   }
 
   let offset = findObjectOffset(buffer, fileHeaderSize) ?? fileHeaderSize;
-  while (offset + 16 <= buffer.length && !options.signal?.aborted) {
+  while (offset + 16 <= buffer.length && !budget.cancelled) {
     const header = readBaseObjectHeader(buffer, offset);
     if (!header) {
       report('BLF_OBJECT_HEADER', 'error', 'A BLF object header is invalid; parsing stopped to avoid misreading later bytes.', offset);
@@ -125,18 +128,16 @@ export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfPar
         const expectedSize = buffer.readUInt32LE(containerOffset + 8);
         const compressed = buffer.subarray(containerOffset + 16, offset + header.objectSize);
         try {
-          let contents: Buffer;
-          if (method === 0) contents = compressed;
-          else if (method === 2) contents = zlib.inflateSync(compressed);
-          else {
+          let contents = containerContents(method, compressed, budget);
+          if (!contents) {
             report('BLF_COMPRESSION_UNSUPPORTED', 'warning', `LogContainer compression method ${method} is not supported.`, offset, { compressionMethod: method });
             contents = Buffer.alloc(0);
           }
           if (expectedSize && contents.length !== expectedSize) {
             report('BLF_CONTAINER_SIZE', 'warning', 'The expanded LogContainer size differs from the declared size.', offset, { expectedSize, actualSize: contents.length });
           }
-          const combined = containerTail.length ? Buffer.concat([containerTail, contents]) : contents;
-          containerTail = parseObjects(combined, startTimestamp, options, report, appendFrame);
+          const combined = containerTail.add(contents, report);
+          if (combined) containerTail.keep(parseObjects(combined, startTimestamp, options, report, appendFrame));
         } catch (error) {
           report('BLF_CONTAINER_DECOMPRESSION', 'error', `LogContainer decompression failed: ${(error as Error).message}`, offset);
         }
@@ -152,20 +153,71 @@ export function parseBlfBuffer(buffer: Buffer, options: BlfParseOptions): BlfPar
     if (nextOffset === undefined) { offset = objectEnd; break; }
     offset = nextOffset;
   }
-  if (!options.signal?.aborted && containerTail.some((byte) => byte !== 0)) {
-    report('BLF_INNER_OBJECT_TRUNCATED', 'error', 'The final LogContainer ends with an incomplete BLF object.', undefined, { remainingBytes: containerTail.length });
+  const tail = containerTail.take();
+  if (!budget.cancelled && tail.some((byte) => byte !== 0)) {
+    report('BLF_INNER_OBJECT_TRUNCATED', 'error', 'The final LogContainer ends with an incomplete BLF object.', undefined, { remainingBytes: tail.length });
   }
-  if (!options.signal?.aborted && offset < buffer.length && buffer.subarray(offset).some((byte) => byte !== 0)) {
+  if (!budget.cancelled && offset < buffer.length && buffer.subarray(offset).some((byte) => byte !== 0)) {
     report('BLF_TRAILING_BYTES', 'warning', 'Non-padding bytes remain after the last complete BLF object.', offset);
   }
   flushFrames();
-  return summary(buffer.length, bytesRead, framesParsed, diagnosticCount, options.signal?.aborted === true, timeReference);
+  return summary(buffer.length, bytesRead, framesParsed, diagnosticCount, budget.cancelled, timeReference);
 }
 
 export async function parseBlfFile(filePath: string, options: BlfParseOptions): Promise<BlfParseSummary> {
   if (options.signal?.aborted) return summary(0, 0, 0, 0, true);
   const buffer = await fs.readFile(filePath);
   return parseBlfBuffer(buffer, options);
+}
+
+/** A LogContainer's objects, expanded: undefined for a compression method SigMixa cannot read. */
+export function containerContents(method: number, compressed: Buffer, budget: ReadBudget): Buffer | undefined {
+  if (method === 0) return compressed;
+  // A container is expanded whole: never beyond what one piece may take, whatever its data claims.
+  if (method === 2) return zlib.inflateSync(compressed, { maxOutputLength: budget.limits.pieceBytes });
+  return undefined;
+}
+
+/**
+ * The bytes a LogContainer leaves for the next one (an object that continues there), gathered with the containers after
+ * it until the object is whole, and then read with them: so an object spanning many containers costs its size once. An
+ * object larger than one piece may be is reported, and its bytes are let go.
+ */
+export class ContainerTail {
+  private readonly gather = new ByteGather();
+  /** The size of the object the gathered bytes start (16 while its header is not whole). */
+  private need = 0;
+  /** Bytes of an object too large to read that are still to come, to be skipped. */
+  private skip = 0;
+  constructor(private readonly budget: ReadBudget) {}
+  get length(): number { return this.gather.length; }
+  /** Starts again with `rest`, what reading the joined bytes left. */
+  keep(rest: Buffer): void { const header = rest.length >= 16 ? readBaseObjectHeader(rest, 0) : undefined; this.need = header ? header.objectSize : 16; this.gather.keep(rest, this.need); }
+  /** Adds a container's contents: the bytes to read now (what was left, followed by them), or undefined to wait for more. */
+  add(contents: Buffer, report: BlfReport): Buffer | undefined {
+    if (this.skip) {
+      if (contents.length <= this.skip) { this.skip -= contents.length; return undefined; }
+      contents = contents.subarray(this.skip); this.skip = 0;
+    }
+    // An object larger than a piece is let go before its bytes are joined; what follows it is read as usual.
+    if (this.gather.length > 0 && !this.budget.fitsPiece(this.need)) {
+      report('BLF_INNER_OBJECT_TRUNCATED', 'error', 'An object inside the LogContainers is larger than SigMixa reads; its bytes were skipped.', undefined, { remainingBytes: this.gather.length, objectSize: this.need });
+      this.skip = this.need - this.gather.length; this.gather.keep(Buffer.alloc(0), 0); this.need = 0;
+      return this.add(contents, report);
+    }
+    const joined = this.gather.add(contents);
+    if (!joined && !this.budget.fitsPiece(this.gather.length)) {
+      report('BLF_INNER_OBJECT_TRUNCATED', 'error', 'An object inside the LogContainers is larger than SigMixa reads; its bytes were skipped.', undefined, { remainingBytes: this.gather.length });
+      this.gather.keep(Buffer.alloc(0), 0); this.need = 0;
+    }
+    return joined;
+  }
+  /** What is left, joined (at the end). */
+  take(): Buffer { return this.gather.take(); }
+  /** Bytes of an object too large to read still to be skipped in the containers that follow (see `skipNext`). */
+  get skipping(): number { return this.skip; }
+  /** Skips the next `bytes` bytes of the containers to come: the rest of a too-large object a reader before this one found. */
+  skipNext(bytes: number): void { this.skip = bytes; }
 }
 
 export type BlfReport = (code: string, severity: Diagnostic['severity'], message: string, offset?: number, details?: Diagnostic['details']) => void;
@@ -196,7 +248,8 @@ export function parseBlfObjects(
     if (offset + 16 > buffer.length) return { rest: buffer.subarray(offset), stopped: false };
     const objectOffset = findObjectOffset(buffer, offset);
     if (objectOffset === undefined) {
-      if (buffer.length - offset > 7) { report('BLF_INNER_OBJECT_HEADER', 'error', 'An object inside a LogContainer is invalid; this container was stopped.', offset); return { rest: buffer.subarray(offset), stopped: true }; }
+      // The rest of a stopped container is let go, as below: the next container is read from its own start.
+      if (buffer.length - offset > 7) { report('BLF_INNER_OBJECT_HEADER', 'error', 'An object inside a LogContainer is invalid; this container was stopped.', offset); return { rest: Buffer.alloc(0), stopped: true }; }
       return { rest: buffer.subarray(offset), stopped: false };
     }
     offset = objectOffset;

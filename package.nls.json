@@ -1,5 +1,5 @@
 {
-  "sigmixa.description": "Free, open-source CAN/CAN FD log analyzer for VS Code. Decode ASC/BLF with DBC, plot signals, compare clips, and replay 2D/3D trajectories offline—an alternative to CANalyzer for log analysis.",
+  "sigmixa.description": "Free, open-source CAN/CAN FD log analyzer for VS Code. Decode ASC/BLF/MF4 with DBC, open MDF and CSV measurements, plot signals, compare clips, and replay 2D/3D trajectories offline—an alternative to CANalyzer for log analysis.",
   "sigmixa.views.frames": "FRAME DEFINITIONS",
   "sigmixa.views.plugins": "PLUGINS",
   "sigmixa.command.openLog": "Open CAN Log",

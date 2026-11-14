@@ -210,7 +210,7 @@ class ComparisonSession implements vscode.Disposable {
       for (const group of signalCatalogGroups(catalog, sourceProject(this.store, item.uri ?? item.filePath), true)) {
         const label = groupName && group.id.startsWith('frame:') && !commonFrames.has(group.id) ? `${group.label} · ${groupName}` : group.label;
         const existing = groups.get(group.id);
-        groups.set(group.id, existing ? { ...existing, signalIds: [...new Set([...existing.signalIds, ...group.signalIds])] } : { ...group, label, remove: undefined });
+        groups.set(group.id, existing ? { ...existing, signalIds: [...new Set([...existing.signalIds, ...group.signalIds])] } : { ...group, label });
       }
     }
     // Targets resolve different definitions (e.g. other analysis groups): list what only some of them have separately.

@@ -33,16 +33,18 @@ test('targets with different Frame definitions list common Signals first, then "
     { id: 'b', name: 'B', signalIds: new Set(['speed', 'brake-b']) },
   ];
   const split = splitSignalGroupsByTarget(groups, targets, (names) => `${names} only`);
-  assert.deepEqual(split.map((group) => [group.label, group.signalIds]), [
-    ['2A0 Powertrain', ['speed']],
-    ['A only · 2A0 Powertrain', ['rpm']],
-    ['A only · 300 Brake · Group A', ['brake-a']],
-    ['B only · 300 Brake · Group B', ['brake-b']],
+  assert.deepEqual(split.map((group) => [group.section?.label, group.label, group.signalIds]), [
+    [undefined, '2A0 Powertrain', ['speed']],
+    ['A only', '2A0 Powertrain', ['rpm']],
+    ['A only', '300 Brake · Group A', ['brake-a']],
+    ['B only', '300 Brake · Group B', ['brake-b']],
   ]);
+  // Groups of the same logs share one section.
+  assert.equal(split[1].section?.id, split[2].section?.id); assert.notEqual(split[2].section?.id, split[3].section?.id);
   assert.equal(new Set(split.map((group) => group.id)).size, split.length);
   const three = splitSignalGroupsByTarget(groups, [...targets, { id: 'c', name: 'C', signalIds: new Set(['speed', 'rpm']) }], (names) => `${names} only`, (names) => `not in ${names}`);
   assert.equal(three[0].label, '2A0 Powertrain');
-  assert.ok(three.some((group) => group.label === 'not in B · 2A0 Powertrain' && group.signalIds.join() === 'rpm'));
+  assert.ok(three.some((group) => group.section?.label === 'not in B' && group.label === '2A0 Powertrain' && group.signalIds.join() === 'rpm'));
 });
 
 test('a time shift moves both ways in steps of the target own frames, past either end of the log', () => {
@@ -69,4 +71,22 @@ test('a report steps its time shift like the comparison screen, also to before t
   assert.deepEqual(walk(10, -1, 3), [9.5, 9, 8], 'a negative shift is possible, as on the comparison screen');
   assert.deepEqual(walk(12, 1, 2), [13, 13.5]);
   assert.equal(snapAnchor(times, 9.3), 9.5, 'a dragged shift before the start is kept');
+});
+
+test('groups of the same section are listed together, so each section heading appears once', () => {
+  const groups = [{ id: 'f1', label: 'F1', signalIds: ['x', 'y'] }, { id: 'f2', label: 'F2', signalIds: ['p', 'q'] }];
+  const targets = [
+    { id: 'a', name: 'A', signalIds: new Set(['x', 'y', 'p', 'q']) },
+    { id: 'b', name: 'B', signalIds: new Set(['x', 'p']) },
+    { id: 'c', name: 'C', signalIds: new Set(['y', 'q']) },
+  ];
+  const split = splitSignalGroupsByTarget(groups, targets, (names) => `${names} only`, (names) => `not in ${names}`);
+  const sections = split.map((group) => group.section?.id).filter(Boolean);
+  assert.deepEqual(sections, [...new Set(sections)].flatMap((id) => sections.filter((item) => item === id)));
+});
+
+test('a CSV log\'s group, which has no name of its own, stays marked as unnamed in a common list and in an "only in" section', () => {
+  const groups = [{ id: 'mdf:', label: 'CSV', signalIds: ['speed', 'lat'], unnamed: true }, { id: 'frame:1', label: '100 Engine', signalIds: ['rpm'] }];
+  const split = splitSignalGroupsByTarget(groups, [{ id: 'csv', name: 'csv', signalIds: new Set(['speed', 'lat']) }, { id: 'asc', name: 'asc', signalIds: new Set(['speed', 'rpm']) }], (names) => `${names} only`);
+  assert.deepEqual(split.map((group) => [group.section?.label, group.label, group.unnamed]), [[undefined, 'CSV', true], ['csv only', 'CSV', true], ['asc only', '100 Engine', undefined]]);
 });

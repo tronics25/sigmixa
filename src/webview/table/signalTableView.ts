@@ -4,9 +4,9 @@ import type { SignalDefinition } from '../../core/signal/signal';
 import type { LogViewState, SignalTableRowDto, ToExtensionMessage, ToWebviewMessage } from '../../extension/editors/rawLogProtocol';
 import { autoFitColumns, fitColumnsToView, type SizingColumn } from '../shared/columnSizing';
 import { SignalSelector } from '../shared/signalSelector';
-import { computeVirtualRange } from '../shared/virtualization';
+import { computeScaledVirtualRange, scaledScroll } from '../shared/virtualization';
 import { emphasizeSignal } from '../shared/signalEmphasis';
-import { bindResizeKeyboard, blurTableFocus, widthToFit } from '../shared/tableBehavior';
+import { bindColumnHover, bindHeadingMenu, bindResizeKeyboard, blurTableFocus, fitColumnAction, widthToFit } from '../shared/tableBehavior';
 import { closeActionMenu, showActionMenu } from '../shared/contextMenu';
 import { t } from '../shared/i18n';
 import { chosenTimeMode, onTimeDisplayChange, timeCellText, timeColumnHeading, timeColumnTitle, timeCopyText, timeFormatActions } from '../shared/timeDisplay';
@@ -32,6 +32,10 @@ export class SignalTableView {
   private latestCatalogRequest = 0;
   private visible = false;
   private readonly grid: HTMLElement;
+  /** Made once the grid exists; the header can be built before. */
+  private columnHover?: { refresh(): void };
+  /** The column the Signal list emphasizes, if any. */
+  private listHighlight?: string;
   private readonly header: HTMLElement;
   private readonly sizer: HTMLElement;
   private readonly rowWindow: HTMLElement;
@@ -64,17 +68,21 @@ export class SignalTableView {
   ) {
     this.selected = new Set(initial?.tableSelectedIds ?? []);
     this.columnOrder = [...(initial?.tableColumnOrder ?? initial?.tableSelectedIds ?? [])];
-    this.widths = { time: 118, ...(initial?.tableWidths ?? {}) };
+    this.widths = { time: 118 };
     onTimeDisplayChange(() => { this.buildHeader(); this.draw(); });
-    this.fittedWidths = new Set(Object.keys(initial?.tableWidths ?? {}));
+    this.fittedWidths = new Set();
     this.paneWidth = Math.max(180, Math.min(440, initial?.tablePaneWidth ?? 250)); this.paneCollapsed = initial?.tablePaneCollapsed ?? false;
-    host.innerHTML = `<div class="signal-layout"><aside class="signal-pane table-pane"><div class="table-selector"></div></aside><div class="pane-separator table-pane-separator"></div><section class="signal-main"><div class="view-toolbar"><button class="table-pane-toggle">${t('Signals', 'シグナル')}</button><button class="table-clip" disabled>✂ ${t('Create Clip from selection', '選択範囲からクリップ作成')}</button><button class="table-export">${t('Export CSV…', 'CSVへ出力…')}</button><span class="spacer"></span><span class="table-selection-status status selection-status" hidden></span><span class="table-status muted">${t('Select Signals', 'シグナルを選択')}</span><button class="table-analysis-cancel" hidden>${t('Cancel analysis', '解析を中止')}</button></div><div class="signal-grid" role="table" aria-multiselectable="true" tabindex="0"><div class="signal-grid-header" role="row"></div><div class="signal-grid-sizer"><div class="signal-grid-window"></div></div><div class="table-empty raw-empty" hidden><span></span></div></div></section></div><div class="context-menu table-context-menu" hidden></div>`;
+    host.innerHTML = `<div class="signal-layout"><aside class="signal-pane table-pane"><div class="table-selector"></div></aside><div class="pane-separator table-pane-separator"></div><section class="signal-main"><div class="view-toolbar"><button class="table-pane-toggle">${t('Signals', 'シグナル')}</button><button class="table-clip" disabled>✂ ${t('Create Clip from selection', '選択範囲からクリップ作成')}</button><button class="table-export">${t('Export CSV…', 'CSVへ出力…')}</button><span class="spacer"></span><span class="table-selection-status status selection-status" hidden></span><span class="table-status muted">${t('Select Signals', 'シグナルを選択')}</span><button class="table-analysis-cancel" hidden>${t('Cancel analysis', '解析を中止')}</button></div><div class="signal-grid" data-scrollbar="editor" role="table" aria-multiselectable="true" tabindex="0"><div class="signal-grid-header" role="row"></div><div class="signal-grid-sizer"><div class="signal-grid-window"></div></div><div class="table-empty raw-empty" hidden><span></span></div></div></section></div><div class="context-menu table-context-menu" hidden></div>`;
     this.grid = host.querySelector('.signal-grid')!; this.header = host.querySelector('.signal-grid-header')!; this.sizer = host.querySelector('.signal-grid-sizer')!; this.rowWindow = host.querySelector('.signal-grid-window')!;
     this.exportButton = host.querySelector('.table-export')!; this.status = host.querySelector('.table-status')!; this.selectionStatus = host.querySelector('.table-selection-status')!; this.empty = host.querySelector('.table-empty')!; this.pane = host.querySelector('.table-pane')!; this.separator = host.querySelector('.table-pane-separator')!; this.contextMenu = host.querySelector('.table-context-menu')!; this.analysisCancel = host.querySelector('.table-analysis-cancel')!;
     this.selector = new SignalSelector({ host: host.querySelector('.table-selector')!, selected: this.selected, grouping: initial?.tableSignalGrouping, onGroupingChange: () => this.persist(), onSelectionChange: () => this.selectionChanged(), onHighlightChange: (id) => this.highlightColumn(id) });
-    this.grid.addEventListener('scroll', () => { this.highlightColumn(undefined); requestAnimationFrame(() => this.draw()); });
-    this.grid.addEventListener('mouseover', (event) => { const cell = (event.target as HTMLElement).closest<HTMLElement>('[data-column-id]'); this.highlightColumn(cell?.dataset.columnId); });
-    this.grid.addEventListener('mouseleave', () => this.highlightColumn(undefined));
+    this.grid.addEventListener('scroll', () => requestAnimationFrame(() => this.draw()));
+    // The column under the pointer is emphasized as in the RAW log and the Trace, the time column included. Using the
+    // grid ends an emphasis the Signal list made, so only one column is ever emphasized.
+    const endListHighlight = () => { if (this.listHighlight !== undefined) { this.highlightColumn(undefined); this.columnHover?.refresh(); } };
+    for (const type of ['mouseover', 'mouseleave'] as const) this.grid.addEventListener(type, endListHighlight);
+    this.grid.addEventListener('scroll', endListHighlight, true);
+    this.columnHover = bindColumnHover(this.grid, (element) => element.closest<HTMLElement>('[data-column-id]')?.dataset.columnId, (column) => this.columnElements(column));
     window.addEventListener('resize', () => { if (this.visible) { this.applyWidths(); this.draw(); } });
     host.querySelector('.table-clip')!.addEventListener('click', () => { const range = this.selectionRanges[0]; if (this.selectionRanges.length === 1 && range.end > range.start && !this.parsing && !this.analysisProgress) this.post({ type: 'createTableClip', startRow: range.start, endRow: range.end, generation: this.rowsGeneration, signalIds: [...this.selected] }); });
     iconButton(this.exportButton, 'export', t('Export CSV', 'CSVへ出力'));
@@ -108,13 +116,13 @@ export class SignalTableView {
     } else if (message.type === 'definitionsChanged') {
       this.catalogRequested = false; this.selector.expectCatalog(); this.rows.clear(); this.rowWindow.replaceChildren(); this.total = 0; this.pagePending = this.shownIds().length > 0; this.clearSelection(); if (this.visible) this.show();
     } else if (message.type === 'progress') {
-      this.parsing = true; if (this.visible && this.shownIds().length) this.requestPage(true, Math.floor(this.grid.scrollTop / ROW_HEIGHT)); this.updatePresentation();
+      this.parsing = true; if (this.visible && this.shownIds().length) this.requestPage(true, this.topRowIndex()); this.updatePresentation();
     } else if (message.type === 'parseComplete') {
-      this.parsing = false; if (this.visible && this.shownIds().length) this.requestPage(true, Math.floor(this.grid.scrollTop / ROW_HEIGHT)); this.updatePresentation();
+      this.parsing = false; if (this.visible && this.shownIds().length) this.requestPage(true, this.topRowIndex()); this.updatePresentation();
     } else if (message.type === 'analysisProgress') {
       this.analysisProgress = { processed: message.processed, total: message.total }; this.analysisCancel.hidden = false; this.updatePresentation();
     } else if (message.type === 'analysisComplete') {
-      this.analysisProgress = undefined; this.analysisCancel.hidden = true; if (this.visible && this.shownIds().length) this.requestPage(true, Math.floor(this.grid.scrollTop / ROW_HEIGHT)); else this.updatePresentation();
+      this.analysisProgress = undefined; this.analysisCancel.hidden = true; if (this.visible && this.shownIds().length) this.requestPage(true, this.topRowIndex()); else this.updatePresentation();
     } else if (message.type === 'signalTableRowsCopied') {
       this.showCopyFeedback(message.count);
     }
@@ -142,9 +150,16 @@ export class SignalTableView {
   }
 
 
+  /** A column's heading, and its Signal in the list. */
+  private columnElements(id: string): HTMLElement[] {
+    return Array.from(this.host.querySelectorAll<HTMLElement>('.signal-head,.selector-signal')).filter((element) => element.dataset.columnId === id || element.dataset.signalId === id);
+  }
+
+  /** Emphasizes a column from the Signal list (the grid's own hover is `columnHover`). */
   private highlightColumn(id: string | undefined): void {
+    this.listHighlight = id;
     this.host.querySelectorAll<HTMLElement>('.signal-head,.selector-signal').forEach((element) => {
-      emphasizeSignal(element, !!id && id !== 'time' && (element.dataset.columnId === id || element.dataset.signalId === id), 'var(--vscode-focusBorder)');
+      emphasizeSignal(element, !!id && (element.dataset.columnId === id || element.dataset.signalId === id), 'var(--vscode-focusBorder)', element.classList.contains('signal-head'));
     });
   }
 
@@ -152,7 +167,7 @@ export class SignalTableView {
     this.header.replaceChildren(); this.header.style.gridTemplateColumns = this.template(); this.header.style.width = `${this.totalWidth()}px`;
     for (const column of this.columns()) {
       const cell = document.createElement('div'); cell.className = `signal-head${column.id === 'time' ? ' sticky-time' : ''}`; cell.setAttribute('role', 'columnheader'); cell.dataset.columnId = column.id;
-      if (column.id === 'time') { cell.textContent = timeColumnHeading(); cell.title = `${timeColumnTitle()}\n${t('Right-click to change the time format', '右クリックで時刻の表示形式を変更')}`; cell.addEventListener('contextmenu', (event) => { event.preventDefault(); showActionMenu(timeFormatActions((mode) => this.save({ timeDisplay: mode })), t('Time format', '時刻の表示形式'), event.clientX, event.clientY, cell, { scroller: this.grid }); }); }
+      if (column.id === 'time') { cell.textContent = timeColumnHeading(); cell.title = `${timeColumnTitle()}\n${t('Right-click to change the time format', '右クリックで時刻の表示形式を変更')}`;  }
       else {
         const name = document.createElement('span'); name.textContent = column.definition!.name; name.className = 'signal-column-drag'; name.dataset.fitContent = 'true'; name.draggable = true;
         name.addEventListener('dragstart', (event) => { event.dataTransfer?.setData('text/plain', column.id); if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'; cell.classList.add('dragging'); });
@@ -164,17 +179,23 @@ export class SignalTableView {
       }
       const handle = document.createElement('span'); handle.className = 'resize'; handle.addEventListener('mousedown', (event) => this.startResize(event, column.id)); handle.addEventListener('dblclick', () => this.requestSample(new Set([column.id])));
       bindResizeKeyboard(handle, { label: column.id === 'time' ? timeColumnHeading() : column.definition!.name, width: () => this.displayWidths()[column.id], setWidth: (width) => this.setColumnWidth(column.id, width), fit: () => this.requestSample(new Set([column.id])) });
+      const label = column.id === 'time' ? timeColumnHeading() : column.definition!.name;
+      bindHeadingMenu(cell, label, () => [fitColumnAction(() => this.requestSample(new Set([column.id]))), null, ...(column.id === 'time'
+        ? timeFormatActions((mode) => this.save({ timeDisplay: mode }))
+        : [{ label: t('Remove column', '列を外す'), icon: 'close', run: () => { this.selected.delete(column.id); this.selector.render(); this.selectionChanged(); } }])], this.grid);
       cell.appendChild(handle); this.header.appendChild(cell);
     }
     this.applyWidths();
+    // The emphasis follows the new header cells.
+    this.columnHover?.refresh();
   }
 
   private draw(): void {
     if (!this.visible) return;
     this.grid.setAttribute('aria-rowcount', String(this.total)); this.grid.setAttribute('aria-colcount', String(this.columns().length)); this.updatePresentation();
-    this.sizer.style.height = `${this.total * ROW_HEIGHT}px`; this.sizer.style.width = `${this.totalWidth()}px`;
-    const range = computeVirtualRange(this.total, this.grid.scrollTop, this.grid.clientHeight - this.header.clientHeight, ROW_HEIGHT);
-    this.rowWindow.style.transform = `translateY(${range.start * ROW_HEIGHT}px)`; this.rowWindow.style.width = `${this.totalWidth()}px`; this.rowWindow.replaceChildren();
+    const range = computeScaledVirtualRange(this.total, this.grid.scrollTop, this.viewportHeight(), ROW_HEIGHT);
+    this.sizer.style.height = `${range.scrollHeight}px`; this.sizer.style.width = `${this.totalWidth()}px`;
+    this.rowWindow.style.transform = `translateY(${range.windowTop}px)`; this.rowWindow.style.width = `${this.totalWidth()}px`; this.rowWindow.replaceChildren();
     const columns = this.columns();
     for (let index = range.start; index < range.end; index++) {
       const data = this.rows.get(index); const selected = selectionContains(this.selectionRanges, index); const row = document.createElement('div'); row.className = `signal-grid-row${selected ? ' selected' : ''}`; row.style.gridTemplateColumns = this.template(); row.dataset.rowIndex = String(index); row.setAttribute('role', 'row'); row.setAttribute('aria-selected', String(selected)); row.tabIndex = this.focusedIndex === index ? 0 : -1;
@@ -265,7 +286,17 @@ export class SignalTableView {
     this.focusedIndex = index; this.refreshSelectionStyles();
   }
 
-  private rowIndexAt(clientY: number): number { const bounds = this.grid.getBoundingClientRect(); return Math.max(0, Math.min(this.total - 1, Math.floor((this.grid.scrollTop + clientY - bounds.top - this.header.offsetHeight) / ROW_HEIGHT))); }
+  private viewportHeight(): number { return this.grid.clientHeight - this.header.clientHeight; }
+  private scrollMap() { return scaledScroll(this.total, ROW_HEIGHT, this.viewportHeight()); }
+  private topRowIndex(): number { return Math.floor(this.scrollMap().contentOffset(this.grid.scrollTop) / ROW_HEIGHT); }
+  /** Scroll by unscaled content pixels; a compressed scroll range still moves at least one scroll pixel. */
+  private scrollContentBy(delta: number): void {
+    const map = this.scrollMap(); const current = this.grid.scrollTop; let next = map.scrollTopFor(map.contentOffset(current) + delta);
+    if (Math.abs(next - current) < 1) next = current + Math.sign(delta);
+    this.grid.scrollTop = next;
+  }
+
+  private rowIndexAt(clientY: number): number { const bounds = this.grid.getBoundingClientRect(); return Math.max(0, Math.min(this.total - 1, Math.floor((this.scrollMap().contentOffset(this.grid.scrollTop) + clientY - bounds.top - this.header.offsetHeight) / ROW_HEIGHT))); }
 
   private updateRowDrag(): void {
     if (!this.rowDrag?.moved || this.total < 1) return; const index = this.rowIndexAt(this.rowDrag.clientY);
@@ -275,7 +306,7 @@ export class SignalTableView {
   private continueRowDrag(): void {
     if (!this.rowDrag?.moved) return; const bounds = this.grid.getBoundingClientRect(); const top = bounds.top + this.header.offsetHeight;
     const overflow = this.rowDrag.clientY < top ? this.rowDrag.clientY - top : this.rowDrag.clientY > bounds.bottom ? this.rowDrag.clientY - bounds.bottom : 0;
-    if (overflow) { this.grid.scrollTop += Math.sign(overflow) * Math.min(20, Math.max(4, Math.abs(overflow) * .35)); this.updateRowDrag(); }
+    if (overflow) { this.scrollContentBy(Math.sign(overflow) * Math.min(20, Math.max(4, Math.abs(overflow) * .35))); this.updateRowDrag(); }
     this.rowDrag.frame = requestAnimationFrame(() => this.continueRowDrag());
   }
 
@@ -337,8 +368,8 @@ export class SignalTableView {
     if (this.total < 1) return; const next = Math.max(0, Math.min(this.total - 1, nextIndex));
     if (extend) { if (this.selectionAnchor === undefined) this.selectionAnchor = this.focusedIndex ?? next; this.selectionRanges = [{ start: Math.min(this.selectionAnchor, next), end: Math.max(this.selectionAnchor, next) }]; }
     else { this.selectionRanges = [{ start: next, end: next }]; this.selectionAnchor = next; }
-    this.focusedIndex = next; const top = this.grid.scrollTop; const bottom = top + this.grid.clientHeight - this.header.clientHeight; const rowTop = next * ROW_HEIGHT; const rowBottom = rowTop + ROW_HEIGHT;
-    if (rowTop < top) this.grid.scrollTop = rowTop; else if (rowBottom > bottom) this.grid.scrollTop = rowBottom - this.grid.clientHeight + this.header.clientHeight;
+    this.focusedIndex = next; const map = this.scrollMap(); const top = map.contentOffset(this.grid.scrollTop); const bottom = top + this.viewportHeight(); const rowTop = next * ROW_HEIGHT; const rowBottom = rowTop + ROW_HEIGHT;
+    if (rowTop < top) this.grid.scrollTop = Math.floor(map.scrollTopFor(rowTop)); else if (rowBottom > bottom) this.grid.scrollTop = Math.ceil(map.scrollTopFor(rowBottom - this.viewportHeight()));
     this.requestPage(false, next, next + PAGE_SIZE); this.draw(); requestAnimationFrame(() => this.rowWindow.querySelector<HTMLElement>(`.signal-grid-row[data-row-index="${next}"]`)?.focus({ preventScroll: true }));
   }
 
@@ -356,14 +387,14 @@ export class SignalTableView {
   private totalWidth(): number { const visible = this.displayWidths(); return this.columns().reduce((sum, column) => sum + visible[column.id], 0); }
   private applyWidths(): void { const value = this.template(); const width = `${this.totalWidth()}px`; this.header.style.gridTemplateColumns = value; this.header.style.width = width; this.sizer.style.width = width; this.rowWindow.style.width = width; this.rowWindow.querySelectorAll<HTMLElement>('.signal-grid-row').forEach((row) => row.style.gridTemplateColumns = value); }
   private startResize(event: MouseEvent, id: string): void { event.preventDefault(); const start = event.clientX; const displayed = this.displayWidths(); Object.assign(this.widths, displayed); const initial = displayed[id]; const column = this.sizingColumns().find((item) => item.id === id)!; const move = (next: MouseEvent) => { this.widths[id] = Math.max(column.minWidth, Math.min(column.maxWidth, initial + next.clientX - start)); this.applyWidths(); }; const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); for (const visible of this.columns()) this.fittedWidths.add(visible.id); this.persistWidths(); }; window.addEventListener('mousemove', move); window.addEventListener('mouseup', up); }
-  private persist(): void { this.save({ tableSignalGrouping: this.selector.groupingMode, tableSelectedIds: [...this.selected], tableColumnOrder: [...this.columnOrder], tableWidths: { ...this.widths }, tablePaneWidth: this.paneWidth, tablePaneCollapsed: this.paneCollapsed }); }
+  private persist(): void { this.save({ tableSignalGrouping: this.selector.groupingMode, tableSelectedIds: [...this.selected], tableColumnOrder: [...this.columnOrder], tablePaneWidth: this.paneWidth, tablePaneCollapsed: this.paneCollapsed }); }
   private persistWidths(): void { this.persist(); }
   private setColumnWidth(id: string, width: number): void {
     const column = this.sizingColumns().find((item) => item.id === id); if (!column) return;
     Object.assign(this.widths, this.displayWidths()); this.widths[id] = Math.max(column.minWidth, Math.min(column.maxWidth, width)); this.fittedWidths.add(id);
     this.applyWidths(); this.draw(); this.persistWidths();
   }
-  private pruneRows(): void { if (this.rows.size <= PAGE_SIZE * 6) return; const center = Math.floor(this.grid.scrollTop / ROW_HEIGHT); for (const index of this.rows.keys()) if (Math.abs(index - center) > PAGE_SIZE * 3) this.rows.delete(index); }
+  private pruneRows(): void { if (this.rows.size <= PAGE_SIZE * 6) return; const center = this.topRowIndex(); for (const index of this.rows.keys()) if (Math.abs(index - center) > PAGE_SIZE * 3) this.rows.delete(index); }
 }
 
 function formatNumber(value: number, digits = 9): string { if (!Number.isFinite(value)) return '—'; if (Number.isInteger(value)) return String(value); return Number(value.toPrecision(digits)).toString(); }

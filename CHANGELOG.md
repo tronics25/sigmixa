@@ -1,5 +1,27 @@
 # Change Log
 
+## 2.4.0 - 2026-11-14
+
+- Added ASAM MDF 4 (.mf4) support for CAN bus logging and measured Signals, and MDF 3 (.mdf) support for measured Signals. Measured Signals are listed by channel group, with structure members and array elements grouped under their structure or array.
+- CSV files of measured values now open directly as logs and can be viewed in the Table, Visualize and comparison screen. This replaces External CSV, which overlaid a CSV file's columns on another log's Signals.
+- Added MF4, MDF and CSV logs to the sample workspace.
+- In the Signal lists of Visualize and the comparison screen, a CSV log's Signals are listed directly, without a "CSV" heading above them, also under "Only in …" on the comparison screen.
+- Right-clicking a column heading in the RAW log, the Table or the Trace now opens a menu with options such as fitting the column width and the time format.
+- The graph settings can now be made wider or narrower by dragging their left edge.
+- In the comparison screen's Signal list, Signals that only some logs have are listed under the names of those logs.
+- Fixed a log losing its own view settings when it was switched from **Shared in group** back to **This file**.
+- Column widths of the RAW log, the Table and the Trace are no longer saved: every column is fitted to its content each time a log opens. Before, saved widths were used again even when the log's content needed other widths.
+- Fixed the RAW log and the Table not scrolling to the end of large logs: past about 1.2 million rows, dragging the scroll bar to the bottom stopped short of the last frames. Every row can now be reached with the scroll bar, the keyboard and drag selection.
+- Scroll bars now work as in VS Code, the same on Windows and macOS: an area's scroll bar appears as soon as the pointer enters it or it scrolls, lies over the content without taking room, and fades out when the pointer leaves (or half a second after scrolling). Before, on macOS they showed only while scrolling and could not be brought back by moving the pointer to them, and on Windows they were always shown.
+- Fixed the Table's column headers overlapping the TIME header when scrolled sideways.
+- Fixed the Table's TIME heading not being emphasized when the pointer was over its column.
+- Fixed the Trace's right-click menus staying open when the Trace was scrolled.
+- Rotating a 3D trajectory from a preset view (X, Y, Z or Reset View) now zooms in and out automatically, so the trajectory is easier to keep in sight in large graphs.
+- Reworked how 3D trajectories are displayed, so rotating, zooming and panning work the same way in Visualize and on the comparison screen. Moving the mouse does less needless work, and the zoom buttons no longer stop working with some saved views.
+- Fixed VS Code pausing for seconds after a Frame definition or Plugin was changed on a large log. Decoding again is also faster: about 2.3 to 2.8 times on a log of 50 million frames.
+- Fixed memory use growing without limit while reading a damaged BLF file. Parts that cannot be read are shown in the diagnostics.
+- Logs at the top of the workspace (outside any analysis group's folder) can now share their view settings too, as the logs of an analysis group do: the workspace root is a group like any other. Before, their view settings could only be saved per file, so the Signal lists of these logs had no button for showing the Signals a log does not have.
+
 ## 2.3.2 - 2026-11-03
 
 - Logs of 16 MB or more are now read and decoded on several threads at once: in testing, a log of 10 million frames opened about 4 times as fast (75% less time). The screens stay usable while a log is read, and graphs keep growing as before. The results are the same as before.

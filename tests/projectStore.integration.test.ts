@@ -386,3 +386,16 @@ test('a workspace that cannot be written opens all the same when a group was cop
   try { const store = new ProjectStore(); await store.load(); assert.equal(store.current.clips.length, 2); assert.equal(store.findClip('c1', path.join(root, 'B/run.asc'))?.sourcePath, 'B/run.asc'); }
   finally { locked.forEach((folder) => fs.chmodSync(folder, 0o755)); }
 });
+test('a CSV log added to its own level stays listed there when it is renamed or moved within the level', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sigmixa-csv-rename-'));
+  (vscode.workspace as any).workspaceFolders = [{ uri: vscode.Uri.file(root) }];
+  w(root, '.sigmixa/project.json', JSON.stringify({ schemaVersion: 4, frames: [] })); w(root, 'log.csv', 'Time,A\n0,1\n');
+  const store = new ProjectStore(); await store.load();
+  await store.addLogs('', [path.join(root, 'log.csv')]);
+  assert.deepEqual(r(root, '.sigmixa/project.json').addedLogs, ['log.csv']);
+  fs.mkdirSync(path.join(root, 'sub')); fs.renameSync(path.join(root, 'log.csv'), path.join(root, 'sub/renamed.csv'));
+  await store.followRenames([{ from: path.join(root, 'log.csv'), to: path.join(root, 'sub/renamed.csv') }]);
+  assert.deepEqual(r(root, '.sigmixa/project.json').addedLogs, ['sub/renamed.csv']);
+  assert.ok(store.logs.some((log) => log.path === 'sub/renamed.csv'));
+  fs.rmSync(root, { recursive: true, force: true });
+});

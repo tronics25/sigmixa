@@ -7,12 +7,15 @@ import { describeLogReadError, notifyLogReadError } from '../storage/logReadErro
 import type { Diagnostic } from '../../core/diagnostics/diagnostic';
 import { DiagnosticTally, type DiagnosticGroup } from '../../core/diagnostics/diagnosticTally';
 import { runScan } from './widthScan';
-import { textCells } from '../../core/frame/widestText';
+import { watchedSteps } from '../../core/storage/steps';
 
-import { ChunkedFrameStore, type FrameFilter, type FramePageQuery } from '../../core/frame/frameStore';
+import { adjacentInSorted, ChunkedFrameStore, nearestInSorted, type FrameFilter, type FramePageQuery, type PackedFrameColumns } from '../../core/frame/frameStore';
 import { parseAscFile, type AscParseSummary } from '../../parsers/asc/parseAscStream';
 import { parseBlfFile, type BlfParseSummary } from '../../parsers/blf/parseBlf';
-import { canLoadInParallel, loadAscInParallel, loadBlfInParallel, type LoadedChunk, type ParallelLoadOptions } from '../../parsers/parallel/parallelLoad';
+import { isCsvLogFileName, parseCsvLogFile } from '../../parsers/csv/parseCsvLog';
+import { isMdfFileName, parseMdfFile, seriesLabel, type MdfParseSummary, type MdfSignalSeries } from '../../parsers/mdf/parseMdf';
+import { canDecodeInParallel, canDecodeStoredInParallel, canLoadInParallel, decodeStoredInParallel, loadAscInParallel, loadBlfInParallel, loadMdfInParallel, parallelLoadSettings, type LoadedChunk, type ParallelLoadOptions } from '../../parsers/parallel/parallelLoad';
+import type { PackedSignals } from '../../parsers/parallel/packedFrames';
 import { ROW_DONE, ROW_SIGNALS, type DecodeSpec } from '../../parsers/parallel/chunkDecoder';
 import type { RawRowDto } from './rawLogProtocol';
 import type { ManualFrameDefinition } from '../../core/manual/manualDefinition';
@@ -24,15 +27,16 @@ import { PluginFrameTags } from './pluginFrameTags';
 import { signalDefinitionFor } from '../../core/manual/manualDefinition';
 import { isSignalActive } from '../../core/manual/manualDefinition';
 import { extractBits } from '../../core/manual/bits';
-import type { SignalDefinition } from '../../core/signal/signal';
+import type { SignalDefinition, SignalSample } from '../../core/signal/signal';
 import { once } from 'events';
 import { createWriteStream } from 'fs';
 import type { SigMixaProject } from '../../core/project/schema';
 import { PluginHost, type PluginRegistry } from '../../core/plugin/pluginHost';
-import { loadExternalCsv } from '../external/externalCsvLoader';
 import { formatCsvSignalValue, formatCsvTimestamp } from '../../core/export/csvNumber';
 import { manualAnalysisDelta, type ManualAnalysisDelta } from '../../core/project/analysisDelta';
 import { formatExportTime, timeColumnLabel, type TimeDisplayMode, type TimeReference } from '../../core/time/timeFormat';
+
+type LogParseSummary = AscParseSummary | BlfParseSummary | MdfParseSummary;
 
 export type DocumentUpdate =
   | { readonly type: 'progress'; readonly frames: number; readonly bytesRead: number; readonly totalBytes: number }
@@ -43,7 +47,7 @@ export type DocumentUpdate =
   | { readonly type: 'searchProgress'; readonly complete: boolean }
   | { readonly type: 'analysisComplete'; readonly processed: number; readonly cancelled: boolean }
   | { readonly type: 'timeReference'; readonly reference: TimeReference }
-  | { readonly type: 'complete'; readonly summary: AscParseSummary | BlfParseSummary };
+  | { readonly type: 'complete'; readonly summary: LogParseSummary };
 
 const LAST_FRAME_REFRESH_MS = 1000;
 /** Shortest time between progress updates while a log is read. */
@@ -95,10 +99,12 @@ export class RawLogDocument implements vscode.CustomDocument {
   private manualDecodeContexts = new Map<string, ReturnType<typeof createManualDecodeContext>>();
   private analysisToken = 0;
   private analysisRunning = false;
-  private parseTask: Promise<AscParseSummary | BlfParseSummary>;
-  private workerSpec?: { readonly owner: object; readonly definitions: ReadonlyMap<string, ManualFrameDefinition>; readonly pluginHost: PluginHost; readonly spec: DecodeSpec; readonly series: readonly SignalDefinition[]; readonly names: readonly string[]; readonly numbers: WeakMap<InMemorySignalStore, Int32Array> };
+  private parseTask: Promise<LogParseSummary>;
+  private workerSpec?: WorkerSpec;
   private readErrorMessage?: string;
   private reference?: TimeReference;
+  /** Measured signals stored in an MF4 log: added to the Signal store with External CSV sources, after the frames. */
+  private mdfSignals: readonly MdfSignalSeries[] = [];
 
   /** `filePath`: the log file itself (`uri` names what is opened: the log from some place, or one of its Clips). */
   constructor(readonly uri: vscode.Uri, readonly filePath: string, project: SigMixaProject, revision: number, private readonly pluginRegistry: PluginRegistry, readonly scope?: { readonly start: number; readonly end: number }) {
@@ -125,7 +131,7 @@ export class RawLogDocument implements vscode.CustomDocument {
         // Once the rate of frames per byte is known, room is made for the whole log's rows and samples at once, and again
         // (as far as more is needed) at an eighth, a quarter, half and three quarters of the log, so columns of tens of millions of entries
         // are not copied again and again as they grow, each time pausing everything.
-        if (progress.framesParsed >= 50_000 && progress.bytesRead >= this.reserveAt && progress.totalBytes > progress.bytesRead) {
+        if (progress.framesParsed >= 50_000 && progress.bytesRead > 0 && progress.bytesRead >= this.reserveAt && progress.totalBytes > progress.bytesRead) {
           // Never more than one row per frame, and at first at most 8 Signals per row in advance, so an unusual start of the
           // log cannot make room for far more than the log holds; anything beyond grows as usual.
           const scale = progress.totalBytes / progress.bytesRead * 1.03;
@@ -151,12 +157,21 @@ export class RawLogDocument implements vscode.CustomDocument {
         this.publishAnalysisDiagnostics(this.analysisDiagnostics);
       },
     };
-    const inParallel = canLoadInParallel(filePath);
-    const parse: Promise<AscParseSummary | BlfParseSummary> = blf ? (inParallel ? loadBlfInParallel(filePath, parallel) : parseBlfFile(filePath, sequential))
+    // MDF records are read here, in order; a large log's frames are decoded on worker threads meanwhile.
+    const mdf = isMdfFileName(filePath); const csv = isCsvLogFileName(filePath);
+    const inParallel = csv ? false : mdf ? canDecodeInParallel(filePath) : canLoadInParallel(filePath);
+    const onSignals = (series: readonly MdfSignalSeries[]) => {
+      this.mdfSignals = series; this.measuredTimes = undefined;
+      let start = Infinity; let end = -Infinity;
+      for (const item of series) for (const time of item.times) if (Number.isFinite(time)) { if (time < start) start = time; if (time > end) end = time; }
+      if (start <= end) this.mdfRange = { start, end };
+    };
+    // A CSV log holds measured signals only, as an MDF file without frames: read here, its columns as Signals.
+    const parse: Promise<LogParseSummary> = csv ? parseCsvLogFile(filePath, { ...sequential, onSignals }) : mdf ? (inParallel ? loadMdfInParallel(filePath, { ...parallel, onSignals }) : parseMdfFile(filePath, { ...sequential, onSignals })) : blf ? (inParallel ? loadBlfInParallel(filePath, parallel) : parseBlfFile(filePath, sequential))
       : (inParallel ? loadAscInParallel(filePath, parallel) : parseAscFile(filePath, sequential));
     this.parseTask = parse.then(async (summary) => {
       this.parsing = false;
-      if (!summary.cancelled) await this.appendExternal(this.signalStore, this.analyzedProject);
+      if (!summary.cancelled) this.appendMeasured(this.signalStore);
       // On a large log, giving back the columns' spare room takes seconds: it is done in steps afterwards.
       const store = this.signalStore; store.finalize({ deferTrim: true }); void runScan(store.trimSteps());
       this.publishAnalysisDiagnostics(this.analysisDiagnostics, true);
@@ -180,7 +195,26 @@ export class RawLogDocument implements vscode.CustomDocument {
   }
 
   get isParsing(): boolean { return this.parsing; }
-  get timelineRange(): { readonly start: number; readonly end: number } | undefined { return this.store.timeRange && intersectRange(this.store.timeRange, this.scope); }
+  /** The time range of the frames and of the measured signals (of an MDF or CSV log) together. */
+  get timelineRange(): { readonly start: number; readonly end: number } | undefined { const range = this.wholeRange(); return range && intersectRange(range, this.scope); }
+  /** The frames' and the measured signals' time range together, before any Clip limits it. */
+  private wholeRange(): { readonly start: number; readonly end: number } | undefined {
+    const frames = this.store.timeRange; const measured = this.mdfRange;
+    return frames && measured ? { start: Math.min(frames.start, measured.start), end: Math.max(frames.end, measured.end) } : frames ?? measured;
+  }
+  /** Every time a measured signal has a sample, sorted, once (for stepping through a log without frames). */
+  private measuredTimes?: Float64Array;
+  private measuredTimeList(): Float64Array {
+    if (this.measuredTimes) return this.measuredTimes;
+    let count = 0; for (const item of this.mdfSignals) count += item.times.length;
+    const all = new Float64Array(count); let at = 0;
+    for (const item of this.mdfSignals) for (const time of item.times) if (Number.isFinite(time)) all[at++] = time;
+    const sorted = all.subarray(0, at).sort(); let unique = 0;
+    for (let index = 0; index < sorted.length; index++) if (index === 0 || sorted[index] !== sorted[unique - 1]) sorted[unique++] = sorted[index];
+    return this.measuredTimes = sorted.slice(0, unique);
+  }
+  /** The time range of an MDF log's measured signals, worked out once they are read. */
+  private mdfRange?: { readonly start: number; readonly end: number };
   get diagnosticCount(): number { return this.sourceDiagnostics.total; }
   get sourceDiagnosticGroups(): readonly DiagnosticGroup[] { return this.sourceDiagnostics.snapshot(); }
   get analysisDiagnosticGroups(): readonly DiagnosticGroup[] { return this.labelDiagnosticGroups(this.analysisDiagnostics.snapshot()); }
@@ -191,7 +225,7 @@ export class RawLogDocument implements vscode.CustomDocument {
   get analysisDiagnosticCount(): number { return this.analysisDiagnostics.total; }
   get channelValues(): readonly number[] { return [...this.channels].sort((left, right) => left - right); }
   get isAnalyzing(): boolean { return this.analysisRunning; }
-  whenReady(): Promise<AscParseSummary | BlfParseSummary> { return this.parseTask; }
+  whenReady(): Promise<LogParseSummary> { return this.parseTask; }
   /** Where the log's timestamps sit on its recording clock; undefined while unknown or when the file does not say. */
   get timeReference(): TimeReference | undefined { return this.reference; }
   private exportTime(timestamp: number, mode: TimeDisplayMode | undefined, seconds: (value: number) => string): string { return formatExportTime(timestamp, mode ?? 'datetime', this.reference, seconds); }
@@ -234,13 +268,18 @@ export class RawLogDocument implements vscode.CustomDocument {
     const filter = this.scopedFilter(query.filter);
     const key = JSON.stringify([filter, this.store.generation, this.signalStore.generation, this.displayRevision, this.analysisRevision]);
     if (this.widthCache?.key !== key) {
-      const decodedCells = this.signalStore.frameTextCounter();
-      const contentCells = (frame: CanFrame, ordinal: number): readonly number[] => {
-        const raw = frame.dataLength > 0 ? frame.dataLength * 3 - 1 : 0;
-        const decoded = decodedCells(ordinal) + this.pluginDisplay.cells(ordinal, textCells, 7);
-        return [raw, decoded || raw];
+      // The values it reads belong to this Signal store and these definitions: when either changes between steps, it is
+      // made again from the start.
+      const scan = () => {
+        const decodedCells = this.signalStore.frameTextCounter();
+        const contentCells = (frame: CanFrame, ordinal: number): readonly number[] => {
+          const raw = frame.dataLength > 0 ? frame.dataLength * 3 - 1 : 0;
+          const decoded = decodedCells(ordinal) + this.pluginDisplay.cells(ordinal);
+          return [raw, decoded || raw];
+        };
+        return this.store.widthScan(filter, contentCells, this.queryContext(filter));
       };
-      this.widthCache = { key, frames: runScan(this.store.widthScan(filter, contentCells, this.queryContext(filter))) };
+      this.widthCache = { key, frames: runScan(watchedSteps(() => [this.signalStore, this.pluginDisplay, this.displayRevision, this.analysisRevision], scan, 'restart')).then((frames) => frames ?? []) };
     }
     return (await this.widthCache.frames).map((frame) => this.toRow(frame));
   }
@@ -314,15 +353,11 @@ export class RawLogDocument implements vscode.CustomDocument {
       catch { return { name: selector.name }; }
     }, (ordinal) => frames.frame(ordinal), store);
     this.traceBuild = (async () => {
-      for (;;) {
-        if (this.disposed || epoch !== this.traceEpoch) return;
-        const step = steps.next(); const layout = store.layout;
-        if (step.done) { this.lastFrameIndex = step.value; break; }
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        // Samples put in another order meanwhile (a graph sorting a Signal while the log is read): the sample numbers
-        // read so far no longer hold, so this index is dropped and the next request builds it again.
-        if (store.layout !== layout) return;
-      }
+      // Samples put in another order meanwhile (a graph sorting a Signal while the log is read): the sample numbers
+      // read so far no longer hold, so this index is dropped and the next request builds it again.
+      const index = await runScan(watchedSteps(() => [store.layout], () => steps, 'drop'), () => this.disposed || epoch !== this.traceEpoch);
+      if (!index) return;
+      this.lastFrameIndex = index;
       this.lastFrameGeneration = frameGeneration; this.lastSignalGeneration = signalGeneration; this.lastSignalStore = store;
       this.lastFrameBuiltAt = Date.now(); this.lastFrameBuildMs = this.lastFrameBuiltAt - started;
     })().finally(() => { this.traceBuild = undefined; });
@@ -348,7 +383,11 @@ export class RawLogDocument implements vscode.CustomDocument {
     const nextPluginDisplay = new PluginFrameTags((frame) => next.pluginSamplesOfFrame(frame));
     const nextDiagnostics = new DiagnosticTally();
     let processed = 0; let batch: CanFrame[] = [];
-    for (const frame of this.store.frames()) {
+    // A large log is decoded on worker threads, piece by piece in order; what is read meanwhile follows below.
+    if (canDecodeStoredInParallel(this.store.size)) {
+      const target: DecodeTarget = { store: next, definitions: nextDefinitions, contexts: nextContexts, pluginHost: nextPluginHost, pluginDisplay: nextPluginDisplay, diagnostics: nextDiagnostics };
+      processed = await this.decodeStored(target, workerSpec(nextDefinitions, nextPluginHost), token, undefined, this.store.size);
+    } else for (const frame of this.store.frames()) {
       if (token !== this.analysisToken) break;
       batch.push(frame); if (batch.length < 1000) continue;
       this.decodeInto(next, batch, undefined, nextDefinitions, nextContexts, nextPluginHost, nextPluginDisplay, nextDiagnostics);
@@ -365,11 +404,12 @@ export class RawLogDocument implements vscode.CustomDocument {
     }
     const cancelled = token !== this.analysisToken;
     if (!cancelled) {
-      // While parsing, the completion path appends External CSV to whichever
-      // store is current after this atomic swap. Avoid importing it twice.
-      if (!this.parsing) await this.appendExternal(next, project);
+      // While parsing, the completion path adds the measured signals to whichever
+      // store is current after this atomic swap. Avoid adding them twice.
+      if (!this.parsing) this.appendMeasured(next);
       if (token !== this.analysisToken) { nextPluginHost.dispose(); this.updates.fire({ type: 'analysisComplete', processed, cancelled: true }); return; }
-      next.finalize();
+      // As after reading a log: the columns' spare room is given back in steps afterwards.
+      next.finalize({ deferTrim: true }); void runScan(next.trimSteps());
       this.pluginHost.dispose();
       this.pluginHost = nextPluginHost;
       this.pluginDisplay = nextPluginDisplay;
@@ -394,7 +434,13 @@ export class RawLogDocument implements vscode.CustomDocument {
     const contexts = new Map<string, ReturnType<typeof createManualDecodeContext>>();
     const replacementDiagnostics = new DiagnosticTally();
     let processed = 0; let batch: CanFrame[] = [];
-    for (const frame of this.store.framesByCanRefs(delta.canRefs)) {
+    const total = this.store.countByCanRefs(delta.canRefs);
+    if (canDecodeStoredInParallel(total)) {
+      // Only the changed definitions, without Plugins, as `decodeManualInto` decodes them.
+      const target = { store: replacement, definitions: nextDefinitions, contexts, pluginHost: this.pluginHost, pluginDisplay: this.pluginDisplay, diagnostics: replacementDiagnostics };
+      const ordinals = this.store.ordinalsByCanRefs(delta.canRefs);
+      processed = await this.decodeStored(target, workerSpec(nextDefinitions, undefined, delta.frameIds), token, ordinals, ordinals.length, delta.frameIds);
+    } else for (const frame of this.store.framesByCanRefs(delta.canRefs)) {
       if (token !== this.analysisToken) break;
       batch.push(frame); if (batch.length < 1000) continue;
       this.decodeManualInto(replacement, batch, nextDefinitions, contexts, delta.frameIds, replacementDiagnostics);
@@ -410,8 +456,19 @@ export class RawLogDocument implements vscode.CustomDocument {
     }
     const cancelled = token !== this.analysisToken;
     if (!cancelled) {
-      replacement.finalize();
-      this.signalStore.replaceDefinitions((definition) => definition.source.type === 'manual-can' && delta.frameIds.has(definition.source.frameDefinitionId), replacement);
+      const predicate = (definition: SignalDefinition) => definition.source.type === 'manual-can' && delta.frameIds.has(definition.source.frameDefinitionId);
+      // While the log is still read, rows keep coming: the new values are put in place at once, as before.
+      if (this.parsing) { replacement.finalize(); this.signalStore.replaceDefinitions(predicate, replacement); }
+      else {
+        // Otherwise in steps, the store reading as before until the last one. Its columns move into the store as they
+        // are, so their spare room is not given back first.
+        replacement.finalize({ deferTrim: true });
+        const placed = await runScan(this.signalStore.replaceDefinitionsSteps(predicate, replacement, true), () => token !== this.analysisToken);
+        // Replaced by a newer change meanwhile: that one finishes the work.
+        if (placed === undefined) { this.updates.fire({ type: 'analysisComplete', processed, cancelled: true }); return; }
+        // The store changed between the steps (a graph put a Signal's samples in order): decoded again and placed anew.
+        if (!placed) { await this.rebuildManualDelta(project, revision, delta, token); return; }
+      }
       for (const key of this.manualDecodeContexts.keys()) if (delta.frameIds.has(JSON.parse(key)[0])) this.manualDecodeContexts.delete(key);
       for (const [id, context] of contexts) this.manualDecodeContexts.set(id, context);
       contextShortcuts.delete(this.manualDecodeContexts);
@@ -451,8 +508,9 @@ export class RawLogDocument implements vscode.CustomDocument {
 
   private signalSeriesNow(selectedIds: readonly string[], range: { start: number; end: number } | undefined, maxPoints: number, joined: boolean, bounds?: { start: number; end: number }) {
     const boundedMaxPoints = Math.max(2, Math.min(10_000, Math.floor(maxPoints)));
-    // The time axis also covers the whole Trace range (first to last frame), so the Trace position can always be drawn at its true time.
-    const extent = this.signalStore.fullRange(selectedIds); const log = this.store.timeRange;
+    // The time axis also covers the whole log (its frames and measured signals), so every graph of a log has the same axis
+    // and the Trace position can always be drawn at its true time.
+    const extent = this.signalStore.fullRange(selectedIds); const log = this.wholeRange();
     const fullRange = intersectRange(extent && log ? { start: Math.min(extent.start, log.start), end: Math.max(extent.end, log.end) } : extent, this.scope);
     const requestedRange = intersectRange(range, this.scope);
     if (range && this.scope && !requestedRange) return { range: fullRange, series: [] };
@@ -465,8 +523,22 @@ export class RawLogDocument implements vscode.CustomDocument {
     if (bounded && (bounded.end < bounded.start || timestamp < bounded.start || timestamp > bounded.end)) return [];
     return this.signalStore.measured(selectedIds, timestamp, bounded);
   }
-  adjacentFrameTimestamp(timestamp: number, direction: -1 | 1): number | undefined { return this.store.adjacentTimestamp(timestamp, direction, this.scope); }
-  nearestFrameTimestamp(timestamp: number): number | undefined { return this.store.nearestTimestamp(timestamp, this.scope); }
+  /**
+   * The next time of a frame or of a measured signal's sample (an MF4, MDF or CSV log), over the same span as
+   * `timelineRange`: so a log without frames can be stepped through too.
+   */
+  adjacentFrameTimestamp(timestamp: number, direction: -1 | 1): number | undefined {
+    const frame = this.store.adjacentTimestamp(timestamp, direction, this.scope);
+    if (!this.mdfSignals.length) return frame;
+    const measured = adjacentInSorted(this.measuredTimeList(), timestamp, direction, this.scope);
+    return frame === undefined ? measured : measured === undefined ? frame : direction > 0 ? Math.min(frame, measured) : Math.max(frame, measured);
+  }
+  nearestFrameTimestamp(timestamp: number): number | undefined {
+    const frame = this.store.nearestTimestamp(timestamp, this.scope);
+    if (!this.mdfSignals.length) return frame;
+    const measured = nearestInSorted(this.measuredTimeList(), timestamp, this.scope);
+    return frame === undefined ? measured : measured === undefined ? frame : Math.abs(timestamp - frame) <= Math.abs(measured - timestamp) ? frame : measured;
+  }
 
   selectedRowsText(ranges: readonly { readonly start: number; readonly end: number }[], filter: FrameFilter | undefined, project: SigMixaProject, revision: number, contentMode: 'raw' | 'decoded', includeHeader: boolean, timeDisplay?: TimeDisplayMode): { readonly text: string; readonly count: number } {
     this.setProject(project, revision); const normalized = normalizeRanges(ranges); const selectedCount = normalized.reduce((sum, range) => sum + range.end - range.start + 1, 0);
@@ -572,23 +644,22 @@ export class RawLogDocument implements vscode.CustomDocument {
       const plugin = pluginHost.processFrame(frame);
       store.appendFrame(ref, frame.timestamp, plugin.decoded.length ? [...manual.decoded, ...plugin.decoded] : manual.decoded);
       for (const [signalId, events] of plugin.events) store.appendEvents(signalId, events);
-      if (plugin.decoded.length || plugin.diagnostics.length) pluginDisplay.set(ref, plugin.decoded.map((item) => ({ id: item.definition.id, name: item.definition.name, unit: item.definition.unit, value: item.sample.value })), plugin.diagnostics);
+      if (plugin.decoded.length || plugin.diagnostics.length) pluginDisplay.set(ref, plugin.decoded.map((item) => ({ name: item.definition.name, unit: item.definition.unit, value: item.sample.value })), plugin.diagnostics);
       if (plugin.diagnostics.length) analysisDiagnostics.add(frame.timestamp, plugin.diagnostics);
     }
   }
 
   /** What workers decode for the current definitions and Plugins (made again when either changes). */
-  private decodeSpec(): NonNullable<RawLogDocument['workerSpec']> {
+  private decodeSpec(): WorkerSpec {
     const current = this.workerSpec;
     if (current && current.definitions === this.analysisDefinitions && current.pluginHost === this.pluginHost) return current;
-    const definitions = [...this.analysisDefinitions.values()];
-    const signals = definitions.flatMap((frame) => [...frame.signals, ...(frame.derivedSignals ?? [])].map((signal) => ({ signal, definition: signalDefinitionFor(frame, signal) })));
-    const series = signals.map((item) => item.definition);
-    this.workerSpec = {
-      owner: {}, definitions: this.analysisDefinitions, pluginHost: this.pluginHost, series, names: signals.map((item) => item.signal.name), numbers: new WeakMap(),
-      spec: { definitions, signalIds: series.map((item) => item.id), pluginKeys: this.pluginHost.boundCanKeys() },
-    };
+    this.workerSpec = workerSpec(this.analysisDefinitions, this.pluginHost);
     return this.workerSpec;
+  }
+
+  /** Where decoded values go: the document's own state, or what a rebuild makes before it takes its place. */
+  private liveTarget(): DecodeTarget {
+    return { store: this.signalStore, definitions: this.analysisDefinitions, contexts: this.manualDecodeContexts, pluginHost: this.pluginHost, pluginDisplay: this.pluginDisplay, diagnostics: this.analysisDiagnostics };
   }
 
   /** Stores a piece read on a worker: its frames, then each frame's values in order, as `onFrames` does for a batch. */
@@ -597,43 +668,77 @@ export class RawLogDocument implements vscode.CustomDocument {
     this.store.appendPacked(frames, this.uri.toString(), chunk.idPrefix, chunk.firstSequence);
     let channel = -1; for (let index = 0; index < frames.count; index++) if (frames.channels[index] !== channel) { channel = frames.channels[index]; this.channels.add(channel); }
     const spec = this.decodeSpec(); const signals = chunk.signals;
-    const store = this.signalStore;
     if (!signals || chunk.decodedWith !== spec.owner) {
       // Decoded with definitions that have changed since (or not at all): decode it here.
       const batch: CanFrame[] = [];
       for (let index = 0; index < frames.count; index++) batch.push(this.store.frame(first + index)!);
-      this.decodeInto(store, batch, first);
-    } else {
-      let map = spec.numbers.get(store);
-      if (!map) { map = Int32Array.from(spec.series, (definition) => store.seriesNumber(definition)); spec.numbers.set(store, map); }
-      let row = 0; let main = 0;
-      while (row < signals.rows || main < signals.mainFrames.length) {
-        if (main < signals.mainFrames.length && (row >= signals.rows || signals.mainFrames[main] < signals.rowFrames[row])) {
-          const ordinal = first + signals.mainFrames[main++];
-          this.decodeInto(store, [this.store.frame(ordinal)!], ordinal);
-          continue;
-        }
-        const index = signals.rowFrames[row]; const from = signals.rowStarts[row]; const to = signals.rowStarts[row + 1]; const kind = signals.rowKinds[row++];
-        if (kind === ROW_DONE) { store.appendValues(first + index, frames.timestamps[index], from, to, signals.signals, signals.values, signals.labels, map, signals.labelTexts); continue; }
-        // What `decodeInto` does after the worker's part: the derived Signals it left (from the values it gave), then Plugins.
-        const ordinal = first + index; const frame = this.store.frame(ordinal)!;
-        let derived: readonly ManualDecodedSignal[] = [];
-        if (kind === ROW_SIGNALS) {
-          const definition = this.analysisDefinitions.get(canKey(frame.canId, frame.extended))!;
-          const values: Record<string, number> = {};
-          for (let at = from; at < to; at++) values[spec.names[signals.signals[at]]] = signals.values[at];
-          const result = decodeManualDerived(frame, definition, contextFor(this.manualDecodeContexts, definition.id, frame), values, derivedBeforeFilter(definition));
-          if (result.diagnostics.length) this.analysisDiagnostics.add(frame.timestamp, result.diagnostics);
-          derived = result.decoded;
-        }
-        const plugin = this.pluginHost.processFrame(frame);
-        store.appendValues(ordinal, frame.timestamp, from, to, signals.signals, signals.values, signals.labels, map, signals.labelTexts, plugin.decoded.length ? [...derived, ...plugin.decoded] : derived);
-        for (const [signalId, events] of plugin.events) store.appendEvents(signalId, events);
-        if (plugin.decoded.length || plugin.diagnostics.length) this.pluginDisplay.set(ordinal, plugin.decoded.map((item) => ({ id: item.definition.id, name: item.definition.name, unit: item.definition.unit, value: item.sample.value })), plugin.diagnostics);
-        if (plugin.diagnostics.length) this.analysisDiagnostics.add(frame.timestamp, plugin.diagnostics);
-      }
-    }
+      this.decodeInto(this.signalStore, batch, first);
+    } else this.mergeDecoded(this.liveTarget(), spec, signals, (index) => first + index, frames.timestamps);
     this.publishAnalysisDiagnostics(this.analysisDiagnostics);
+  }
+
+  /**
+   * Stores what a worker decoded with `spec`, frame `index` of the piece being the stored frame `ordinal(index)`: each
+   * frame's values in order, with what the worker left (derived Signals that keep state, Plugins, frames with diagnostics)
+   * done here as `decodeInto` does it. `manual`: as `decodeManualInto` instead (no Plugins; only these Frame definitions).
+   */
+  private mergeDecoded(target: DecodeTarget, spec: WorkerSpec, signals: PackedSignals, ordinal: (index: number) => number, timestamps: Float64Array, manual?: ReadonlySet<string>): void {
+    const store = target.store;
+    let map = spec.numbers.get(store);
+    if (!map) { map = Int32Array.from(spec.series, (definition) => store.seriesNumber(definition)); spec.numbers.set(store, map); }
+    let row = 0; let main = 0;
+    while (row < signals.rows || main < signals.mainFrames.length) {
+      if (main < signals.mainFrames.length && (row >= signals.rows || signals.mainFrames[main] < signals.rowFrames[row])) {
+        const at = ordinal(signals.mainFrames[main++]); const frame = this.store.frame(at)!;
+        if (manual) this.decodeManualInto(store, [frame], target.definitions, target.contexts, manual, target.diagnostics);
+        else this.decodeInto(store, [frame], at, target.definitions, target.contexts, target.pluginHost, target.pluginDisplay, target.diagnostics);
+        continue;
+      }
+      const index = signals.rowFrames[row]; const from = signals.rowStarts[row]; const to = signals.rowStarts[row + 1]; const kind = signals.rowKinds[row++];
+      const at = ordinal(index);
+      if (kind === ROW_DONE) { store.appendValues(at, timestamps[index], from, to, signals.signals, signals.values, signals.labels, map, signals.labelTexts); continue; }
+      // What `decodeInto` does after the worker's part: the derived Signals it left (from the values it gave), then Plugins.
+      const frame = this.store.frame(at)!;
+      let derived: readonly ManualDecodedSignal[] = [];
+      if (kind === ROW_SIGNALS) {
+        const definition = target.definitions.get(canKey(frame.canId, frame.extended))!;
+        const values: Record<string, number> = {};
+        for (let item = from; item < to; item++) values[spec.names[signals.signals[item]]] = signals.values[item];
+        const result = decodeManualDerived(frame, definition, contextFor(target.contexts, definition.id, frame), values, derivedBeforeFilter(definition));
+        if (result.diagnostics.length) target.diagnostics.add(frame.timestamp, result.diagnostics);
+        derived = result.decoded;
+      }
+      if (manual) { store.appendValues(at, frame.timestamp, from, to, signals.signals, signals.values, signals.labels, map, signals.labelTexts, derived); continue; }
+      const plugin = target.pluginHost.processFrame(frame);
+      store.appendValues(at, frame.timestamp, from, to, signals.signals, signals.values, signals.labels, map, signals.labelTexts, plugin.decoded.length ? [...derived, ...plugin.decoded] : derived);
+      for (const [signalId, events] of plugin.events) store.appendEvents(signalId, events);
+      if (plugin.decoded.length || plugin.diagnostics.length) target.pluginDisplay.set(at, plugin.decoded.map((item) => ({ name: item.definition.name, unit: item.definition.unit, value: item.sample.value })), plugin.diagnostics);
+      if (plugin.diagnostics.length) target.diagnostics.add(frame.timestamp, plugin.diagnostics);
+    }
+  }
+
+  /**
+   * Decodes stored frames again on worker threads: frames `0..` (all), or `ordinals` (a delta); false when the
+   * rebuild was replaced by another (`token`). Progress is reported as `analysisProgress` against `total`.
+   */
+  private async decodeStored(target: DecodeTarget, spec: WorkerSpec, token: number, ordinals: Uint32Array | undefined, count: number, manual?: ReadonlySet<string>): Promise<number> {
+    const size = parallelLoadSettings.storedPieceFrames; let processed = 0;
+    const store = this.store;
+    function* pieces(): Iterator<{ readonly frames: PackedFrameColumns; readonly from: number }> {
+      for (let from = 0; from < count; from += size) yield { from, frames: ordinals ? store.packedFrames(0, 0, ordinals.subarray(from, Math.min(count, from + size))) : store.packedFrames(from, Math.min(count, from + size)) };
+    }
+    // As while a log is read: room for all the values once a little is known, so columns are not copied again and again.
+    let reserveAt = Math.min(count, 50_000);
+    await decodeStoredInParallel(spec.spec, pieces(), (piece, signals) => {
+      if (processed >= reserveAt && processed < count) {
+        target.store.reserveScaled(count / processed * 1.03, processed, reserveAt === Math.min(count, 50_000) ? 8 : Infinity, ordinals ? ordinals[count - 1] + 1 : count);
+        reserveAt = [count / 8, count / 4, count / 2, count * 3 / 4, Infinity].find((at) => at > processed)!;
+      }
+      this.mergeDecoded(target, spec, signals, ordinals ? (index) => ordinals[piece.from + index] : (index) => piece.from + index, piece.frames.timestamps, manual);
+      processed += piece.frames.count;
+      this.updates.fire({ type: 'analysisProgress', processed, total: manual ? count : this.store.size });
+    }, () => token !== this.analysisToken);
+    return processed;
   }
 
   private decodeManualInto(
@@ -745,16 +850,16 @@ export class RawLogDocument implements vscode.CustomDocument {
     this.updates.fire({ type: 'sourceDiagnostics', groups: this.sourceDiagnostics.snapshot(), total: this.sourceDiagnostics.total });
   }
 
-  private async appendExternal(store: InMemorySignalStore, project: SigMixaProject): Promise<void> {
-    const workspaceRoot = vscode.workspace.getWorkspaceFolder(this.uri)?.uri.fsPath
-      ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-      ?? path.dirname(this.filePath);
-    for (const source of project.externalCsvSources) {
-      const result = await loadExternalCsv(source, workspaceRoot, this.reference);
-      for (const series of result.series) store.appendSeries(series.definition, series.samples);
-      this.publishDiagnostics(result.diagnostics);
+  /** The measured signals of an MDF or CSV log: each channel group (or the CSV file) gives rows of its own, so the Table shows them in time order. */
+  private appendMeasured(store: InMemorySignalStore): void {
+    const groups = new Map<string, ReturnType<typeof mdfSignalDefinitions>[number][]>();
+    for (const item of mdfSignalDefinitions(this.mdfSignals, /\.mdf$/i.test(this.filePath) ? 'MDF' : isCsvLogFileName(this.filePath) ? 'CSV' : undefined)) {
+      const group = item.definition.source.type === 'mdf-channel' ? item.definition.source.group : '';
+      const list = groups.get(group) ?? []; list.push(item); groups.set(group, list);
     }
+    for (const [group, series] of groups) store.appendSeriesRows(`mdf:${group}`, series);
   }
+
 
   private toRow(frame: CanFrame): RawRowDto {
     const display = this.display(frame);
@@ -780,6 +885,27 @@ export class RawLogDocument implements vscode.CustomDocument {
   }
 }
 
+/** Signal definitions for an MF4 log's measured signals; ids stay the same for the same file, so views keep them. */
+export function mdfSignalDefinitions(series: readonly MdfSignalSeries[], format?: 'MDF' | 'CSV'): { readonly definition: SignalDefinition; readonly length: number; time(index: number): number; sample(index: number): SignalSample; samples(): SignalSample[] }[] {
+  const used = new Map<string, number>();
+  return series.map((item) => {
+    const base = `mdf:${encodeURIComponent(item.group)}:${encodeURIComponent(item.channel)}`;
+    const seen = used.get(base) ?? 0; used.set(base, seen + 1);
+    const definition: SignalDefinition = {
+      id: seen ? `${base}:${seen + 1}` : base, name: item.channel, ...(item.unit ? { unit: item.unit } : {}),
+      ...(item.labels ? { hasValueLabels: true } : {}), group: item.group, source: { type: 'mdf-channel', group: item.group, channel: item.channel, ...(format ? { format } : {}) },
+      ...(item.parent ? { parent: { id: `${encodeURIComponent(item.group)}:${encodeURIComponent(item.parent.name)}`, label: item.parent.label, member: item.parent.member } } : {}),
+    };
+    const sample = (i: number): SignalSample => {
+      const value = item.values[i];
+      if (!Number.isFinite(value)) return { timestamp: item.times[i], value: Number.NaN, quality: 'invalid' };
+      const label = seriesLabel(item, i);
+      return { timestamp: item.times[i], value, ...(label ? { valueLabel: label } : {}) };
+    };
+    return { definition, length: item.values.length, time: (i) => item.times[i], sample, samples: () => Array.from(item.values, (_, i) => sample(i)) };
+  });
+}
+
 /** Smaller than any log timestamp resolution: places the Trace head just before the first frame. */
 const BEFORE_FIRST_FRAME_SECONDS = 1e-9;
 function intersectRange(left: { readonly start: number; readonly end: number } | undefined, right: { readonly start: number; readonly end: number } | undefined): { start: number; end: number } | undefined {
@@ -801,6 +927,24 @@ function definitionMap(frames: readonly ManualFrameDefinition[]): Map<string, Ma
   return new Map(frames.map((definition) => [canKey(definition.canId, definition.extended), definition]));
 }
 function canKey(canId: number, extended: boolean): string { return `${extended ? 'e' : 's'}:${canId}`; }
+
+/** What worker threads decode: Frame definitions and Plugin routing, and how their Signals are numbered here. */
+interface WorkerSpec {
+  readonly owner: object; readonly definitions: ReadonlyMap<string, ManualFrameDefinition>; readonly pluginHost?: PluginHost;
+  readonly spec: DecodeSpec; readonly series: readonly SignalDefinition[]; readonly names: readonly string[]; readonly numbers: WeakMap<InMemorySignalStore, Int32Array>;
+}
+/** `only`: the Frame definitions (by ID) to decode, with no Plugins (a rebuild of changed definitions). */
+function workerSpec(definitionMap: ReadonlyMap<string, ManualFrameDefinition>, pluginHost: PluginHost | undefined, only?: ReadonlySet<string>): WorkerSpec {
+  const definitions = [...definitionMap.values()].filter((definition) => !only || only.has(definition.id));
+  const signals = definitions.flatMap((frame) => [...frame.signals, ...(frame.derivedSignals ?? [])].map((signal) => ({ signal, definition: signalDefinitionFor(frame, signal) })));
+  const series = signals.map((item) => item.definition);
+  return { owner: {}, definitions: definitionMap, pluginHost, series, names: signals.map((item) => item.signal.name), numbers: new WeakMap(), spec: { definitions, signalIds: series.map((item) => item.id), pluginKeys: pluginHost?.boundCanKeys() ?? [] } };
+}
+/** The state a decode writes to (see `RawLogDocument.decodeInto`). */
+interface DecodeTarget {
+  readonly store: InMemorySignalStore; readonly definitions: Map<string, ManualFrameDefinition>; readonly contexts: DecodeContexts;
+  readonly pluginHost: PluginHost; readonly pluginDisplay: PluginFrameTags; readonly diagnostics: DiagnosticTally;
+}
 type DecodeContexts = Map<string, ReturnType<typeof createManualDecodeContext>>;
 /** Contexts by a cheaper key than the JSON one they are stored under, so each frame does not build JSON. */
 // Whoever changes a contexts map other than through `contextFor` drops its shortcuts (`contextShortcuts.delete`).

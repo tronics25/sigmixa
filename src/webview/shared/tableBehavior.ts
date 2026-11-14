@@ -1,5 +1,23 @@
 import { emphasizeSignal } from './signalEmphasis';
 import { t } from './i18n';
+import { showActionMenu } from './contextMenu';
+import type { ViewContextAction } from './viewContextAction';
+
+/** The action every column heading's menu starts with: what double-clicking its edge does. */
+export function fitColumnAction(fit: () => void): ViewContextAction { return { label: t('Fit column width', '列幅を内容に合わせる'), icon: 'blank', run: fit }; }
+
+type ShowHeadingMenu = (actions: (ViewContextAction | null)[], label: string, x: number, y: number, returnFocus: HTMLElement) => void;
+/**
+ * A column heading's right-click menu, the same in every table. `actions` is read when the menu opens. It closes when
+ * `scroller` scrolls; a view whose other menus open in their own way passes that way as `show`, so all close alike.
+ */
+export function bindHeadingMenu(cell: HTMLElement, label: string, actions: () => (ViewContextAction | null)[], scroller?: HTMLElement, show?: ShowHeadingMenu): void {
+  cell.addEventListener('contextmenu', (event) => {
+    event.preventDefault(); event.stopPropagation();
+    if (show) show(actions(), label, event.clientX, event.clientY, cell);
+    else showActionMenu(actions(), label, event.clientX, event.clientY, cell, scroller ? { scroller } : {});
+  });
+}
 
 /** Width step for keyboard resizing; Shift makes it coarser. */
 const KEY_STEP = 8;
@@ -12,9 +30,9 @@ export function bindColumnHover(container: HTMLElement, columnOf: (element: Elem
   let current: string | undefined;
   const set = (column: string | undefined, force = false) => {
     if (column === current && !force) return;
-    if (current !== undefined) for (const head of Array.from(headersOf(current))) emphasizeSignal(head, false, '');
+    if (current !== undefined) for (const head of Array.from(headersOf(current))) emphasizeSignal(head, false, '', true);
     current = column;
-    if (column !== undefined) for (const head of Array.from(headersOf(column))) emphasizeSignal(head, true, 'var(--vscode-focusBorder)');
+    if (column !== undefined) for (const head of Array.from(headersOf(column))) emphasizeSignal(head, true, 'var(--vscode-focusBorder)', head.matches('th,[role=columnheader],.head,.signal-head'));
   };
   container.addEventListener('mouseover', (event) => set(columnOf(event.target as Element)));
   container.addEventListener('mouseleave', () => set(undefined));

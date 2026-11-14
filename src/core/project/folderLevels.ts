@@ -28,7 +28,12 @@ export interface LevelFile { readonly folder: string; readonly project: SigMixaP
 
 /** Names never searched for logs or levels. */
 export function isSkippedFolderName(name: string): boolean { return name.startsWith('.') || name === 'node_modules'; }
-export function isLogFileName(name: string): boolean { return /\.(asc|blf)$/i.test(name); }
+/** Logs found by looking through the workspace's folders. */
+export function isLogFileName(name: string): boolean { return /\.(asc|blf|mf4|mdf)$/i.test(name); }
+/** CSV files are logs only where added: a folder holds many CSV files that are not measurements. */
+export function isAddedOnlyLogFileName(name: string): boolean { return /\.csv$/i.test(name); }
+/** Every file that can be opened as a log. */
+export function isOpenableLogFileName(name: string): boolean { return isLogFileName(name) || isAddedOnlyLogFileName(name); }
 
 /** The nearest level folder containing `file` (workspace-relative); '' is the root. */
 export function levelOf(levelFolders: readonly string[], file: string): string {
@@ -66,7 +71,7 @@ export function composeWorkspace(levels: readonly LevelFile[], logs: readonly Wo
   const viewStates: Record<string, unknown> = {};
   for (const level of levels) {
     for (const [key, value] of Object.entries(level.project.viewStates)) {
-      if (key === GROUP_VIEW_KEY) continue;
+      // The shared view settings of a subfolder level become its group's; those of the workspace root stay among the root's keys.
       if (key.startsWith('log:')) viewStates[logViewKey(folders, toWorkspace(level.folder, key.slice(4)), level.folder)] = value;
       // Clips have no view settings of their own; settings saved for them by earlier versions are not carried over.
       else if (!key.startsWith('clip:') && !level.folder) viewStates[key] = value;

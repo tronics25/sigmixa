@@ -7,6 +7,8 @@ export const TABLE_BASE_STYLES = `
 .header,.signal-grid-header,.signal-header,.derived-header,.data-table thead{font-family:var(--vscode-font-family);background:var(--table-heading);border-bottom:1px solid var(--vscode-panel-border)}
 .head,.signal-head,.data-table th{font-family:var(--vscode-font-family);font-size:var(--sm-font-caption);font-weight:var(--sm-weight-semibold);line-height:16px;padding:var(--sm-space-sm) var(--sm-space-md);letter-spacing:.025em;color:var(--vscode-foreground)}
 .head,.signal-head{z-index:0}
+/* Headers of pinned columns (RAW log's first four, the Table's TIME) stay above the headers and resize handles (z-index 10) scrolled under them. */
+.head.sticky-col,.signal-head.sticky-time{z-index:11}
 .cell,.signal-cell,.data-table td{font-family:var(--vscode-editor-font-family);font-size:var(--sm-font-small);line-height:18px;font-variant-numeric:tabular-nums}
 .data-table{border-collapse:separate;border-spacing:0;background:var(--table-surface)}
 .table-scroll{overflow:auto;border:1px solid var(--vscode-panel-border);border-radius:var(--sm-radius-md)}
@@ -23,6 +25,7 @@ export const TABLE_BASE_STYLES = `
 .resize::after{content:"";position:absolute;right:0;top:4px;bottom:4px;width:1px;background:var(--vscode-panel-border);opacity:0}
 .head:hover>.resize::after,.signal-head:hover>.resize::after,.data-table th:hover>.resize::after{opacity:1}
 .resize:hover::after,.resize:active::after{width:2px;background:var(--vscode-focusBorder);opacity:1}
+.signal-emphasized>.resize:not(:hover):not(:active)::after{opacity:0}
 `;
 /** Editors share the same typography; controls need a 26px hit area plus cell padding. */
 export const EDITABLE_TABLE_STYLES = `${TABLE_BASE_STYLES}
