@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { dbcStartToManual, exportDbc, importDbc, manualStartToDbc } from '../src/core/dbc/dbc';
+import { dbcStartToManual, decodeDbcBytes, exportDbc, importDbc, manualStartToDbc } from '../src/core/dbc/dbc';
 import { decodeManualFrame } from '../src/core/manual/manualDecoder';
 import { parseProjectJson, serializeProject, migrateProject, CURRENT_PROJECT_SCHEMA_VERSION } from '../src/core/project/schema';
 
@@ -97,7 +97,7 @@ test('normalizes names on export and reports skipped Derived Signals', () => {
 });
 
 test('bundled basic DBC imports as valid standard and extended definitions', () => {
-  const result = importDbc(readFileSync(path.resolve('sample/sigmixa-basic.dbc'), 'utf8'), 'sample/sigmixa-basic.dbc');
+  const result = importDbc(readFileSync(path.resolve('sample/basic/sigmixa-basic.dbc'), 'utf8'), 'sample/basic/sigmixa-basic.dbc');
   assert.deepEqual(result.diagnostics, []);
   assert.deepEqual(result.frames.map((frame) => [frame.canId, frame.extended, frame.frameLength, frame.signals.length]), [
     [0x2a0, false, 8, 4],
@@ -126,4 +126,94 @@ test('a SIG_VALTYPE_ that does not match the Signal length is reported and the S
   const imported = importDbc('BO_ 513 Wrong: 8 ECU\n SG_ Short : 0|16@1+ (1,0) [0|0] "" ECU\nSIG_VALTYPE_ 513 Short : 1;\n');
   assert.deepEqual(imported.diagnostics.map((item) => item.code), ['DBC_VALUE_TYPE_INVALID']);
   assert.equal(imported.frames[0].signals[0].signedness, 'unsigned');
+});
+
+test('a Shift_JIS DBC is read without garbling its units and value labels', () => {
+  // "SG_ ... "℃"" and VAL_ 0 "停止" 1 "走行" written in Shift_JIS.
+  const head = Buffer.from('BO_ 100 Status: 8 ECU\n SG_ Temp : 0|8@1+ (1,0) [0|255] "', 'latin1');
+  const unit = Buffer.from([0x81, 0x8e]);
+  const middle = Buffer.from('" ECU\nVAL_ 100 Temp 0 "', 'latin1');
+  const stop = Buffer.from([0x92, 0xe2, 0x8e, 0x7e]); const run = Buffer.from([0x91, 0x96, 0x8d, 0x73]);
+  const bytes = Buffer.concat([head, unit, middle, stop, Buffer.from('" 1 "', 'latin1'), run, Buffer.from('";\n', 'latin1')]);
+  const result = importDbc(decodeDbcBytes(bytes));
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.frames[0].signals[0].unit, '℃');
+  assert.deepEqual(result.frames[0].signals[0].valueLabels, { 0: '停止', 1: '走行' });
+  assert.equal(decodeDbcBytes(Buffer.from('"℃ 停止"', 'utf8')), '"℃ 停止"');
+});
+
+test('a DBC with CR-only line breaks imports the same as with LF', () => {
+  const withLf = importDbc(sample + 'VAL_ 291 VehicleSpeed 0 "Stop" 1 "Go";\n');
+  const withCr = importDbc((sample + 'VAL_ 291 VehicleSpeed 0 "Stop" 1 "Go";\n').replace(/\n/g, '\r'));
+  assert.equal(withCr.frames.length, 2); assert.deepEqual(withCr.frames, withLf.frames); assert.deepEqual(withCr.diagnostics, withLf.diagnostics);
+});
+
+test('GenMsgCycleTime becomes the expected period and round-trips', () => {
+  const source = `${sample}BA_DEF_ BO_  "GenMsgCycleTime" INT 0 65535;\nBA_DEF_DEF_  "GenMsgCycleTime" 0;\nBA_ "GenMsgCycleTime" BO_ 291 20;\n`;
+  const imported = importDbc(source); assert.deepEqual(imported.diagnostics, []);
+  assert.equal(imported.frames[0].expectedPeriodMs, 20); assert.equal(imported.frames[1].expectedPeriodMs, undefined);
+  const exported = exportDbc(imported.frames).text;
+  assert.match(exported, /BA_DEF_ BO_ {2}"GenMsgCycleTime" INT 0 2147483647;/); assert.match(exported, /BA_ "GenMsgCycleTime" BO_ 291 20;/);
+  assert.equal(importDbc(exported).frames[0].expectedPeriodMs, 20);
+  const defaulted = importDbc(`${sample}BA_DEF_DEF_  "GenMsgCycleTime" 100;\nBA_ "GenMsgCycleTime" BO_ 291 20;\n`);
+  assert.deepEqual(defaulted.frames.map((frame) => frame.expectedPeriodMs), [20, 100]);
+});
+
+test('GenMsgSendType becomes the send mode (by ENUM index or name, with its default) and round-trips', () => {
+  const source = `${sample}BA_DEF_ BO_  "GenMsgSendType" ENUM  "Cyclic","NotUsed","IfActive","CyclicIfActive","CyclicAndSpontaneous","Spontaneous","NoMsgSendType";\nBA_DEF_DEF_  "GenMsgSendType" "NoMsgSendType";\nBA_ "GenMsgSendType" BO_ 291 4;\n`;
+  const imported = importDbc(source); assert.deepEqual(imported.diagnostics, []);
+  assert.deepEqual(imported.frames.map((frame) => frame.sendMode), ['mixed', undefined]);
+  const exported = exportDbc(imported.frames).text; assert.match(exported, /BA_ "GenMsgSendType" BO_ 291 2;/);
+  assert.deepEqual(importDbc(exported).frames.map((frame) => frame.sendMode), ['mixed', undefined]);
+  assert.deepEqual(importDbc(`${sample}BA_DEF_ BO_  "GenMsgSendType" ENUM  "Cyclic","NotUsed",\n  "CyclicAndSpontaneous";\nBA_ "GenMsgSendType" BO_ 291 2;\n`).frames.map((frame) => frame.sendMode), ['mixed', undefined], 'an ENUM continued on the next line');
+  assert.deepEqual(importDbc(`${sample}BA_DEF_ BO_  "GenMsgSendType" ENUM  "Cyclic","Spontaneous";\nBA_DEF_DEF_  "GenMsgSendType" "Cyclic";\nBA_ "GenMsgSendType" BO_ 291 1;\n`).frames.map((frame) => frame.sendMode), ['event', 'periodic']);
+});
+
+test('export marks CAN FD Frames with BusType and VFrameFormat', () => {
+  const exported = exportDbc(importDbc(sample).frames).text;
+  assert.match(exported, /BA_ "BusType" "CAN FD";/);
+  assert.match(exported, /BA_ "VFrameFormat" BO_ 291 0;/); assert.match(exported, /BA_ "VFrameFormat" BO_ 2566869221 15;/);
+  const classic = exportDbc(importDbc(sample).frames.slice(0, 1)).text; assert.doesNotMatch(classic, /BA_/);
+  assert.deepEqual(importDbc(exported).frames, importDbc(sample).frames);
+});
+
+test('nested multiplexing keeps the Frame and leaves out only second-level Signals', () => {
+  const source = `BO_ 100 Nested: 8 ECU\n SG_ Root M : 0|4@1+ (1,0) [0|15] "" ECU\n SG_ Inner m1M : 4|4@1+ (1,0) [0|15] "" ECU\n SG_ Leaf m2 : 8|8@1+ (1,0) [0|255] "" ECU\n SG_ Direct m3 : 8|8@1+ (1,0) [0|255] "" ECU\n SG_ Plain : 16|8@1+ (1,0) [0|255] "" ECU\nSG_MUL_VAL_ 100 Inner Root 1-1;\nSG_MUL_VAL_ 100 Leaf Inner 2-2;\nSG_MUL_VAL_ 100 Direct Root 3-3;\n`;
+  const result = importDbc(source);
+  assert.deepEqual(result.diagnostics.map((item) => item.code), ['DBC_NESTED_MULTIPLEXING']);
+  assert.equal(result.frames.length, 1);
+  assert.deepEqual(result.frames[0].signals.map((signal) => [signal.name, signal.multiplexing]), [
+    ['Root', { type: 'multiplexer' }], ['Inner', { type: 'conditional', ranges: [{ from: 1, to: 1 }] }], ['Direct', { type: 'conditional', ranges: [{ from: 3, to: 3 }] }], ['Plain', undefined],
+  ]);
+});
+
+test('three-level nested multiplexing leaves out every Signal below a nested Multiplexer, in any line order', () => {
+  // Leaf's selector Mid is itself left out, so Leaf must not fall back to Root.
+  const head = `BO_ 100 Deep: 8 ECU\n SG_ Root M : 0|4@1+ (1,0) [0|15] "" ECU\n SG_ Inner m1M : 4|4@1+ (1,0) [0|15] "" ECU\n SG_ Mid m2M : 8|4@1+ (1,0) [0|15] "" ECU\n SG_ Leaf m3 : 16|8@1+ (1,0) [0|255] "" ECU\n`;
+  const mux = ['SG_MUL_VAL_ 100 Inner Root 1-1;', 'SG_MUL_VAL_ 100 Mid Inner 2-2;', 'SG_MUL_VAL_ 100 Leaf Mid 3-3;'];
+  for (const order of [mux, [...mux].reverse()]) {
+    const result = importDbc(`${head}${order.join('\n')}\n`);
+    assert.deepEqual(result.diagnostics.map((item) => item.code), ['DBC_NESTED_MULTIPLEXING', 'DBC_NESTED_MULTIPLEXING']);
+    assert.deepEqual(result.frames[0].signals.map((signal) => [signal.name, signal.multiplexing]), [
+      ['Root', { type: 'multiplexer' }], ['Inner', { type: 'conditional', ranges: [{ from: 1, to: 1 }] }],
+    ]);
+  }
+});
+
+test('a Windows-1252 DBC is not mistaken for Shift_JIS', () => {
+  // "°C" (B0 43) and "Länge" (E4 6E) are also valid Shift_JIS, as "ｰC" and a kanji.
+  const bytes = Buffer.from('BO_ 100 Status: 8 ECU\n SG_ Temp : 0|8@1+ (1,0) [0|255] "°C" ECU\nVAL_ 100 Temp 0 "Länge" 1 "Größe";\n', 'latin1');
+  const result = importDbc(decodeDbcBytes(bytes));
+  assert.equal(result.frames[0].signals[0].unit, '°C');
+  assert.deepEqual(result.frames[0].signals[0].valueLabels, { 0: 'Länge', 1: 'Größe' });
+  // Japanese written in half-width katakana stays Shift_JIS.
+  assert.equal(decodeDbcBytes(Buffer.from([0x22, 0xb4, 0xdd, 0xbc, 0xde, 0xdd, 0x22])), '"ｴﾝｼﾞﾝ"');
+});
+
+test('a Shift_JIS DBC whose only Japanese is a single kanji unit is read as Shift_JIS', () => {
+  // "秒" is 95 62 in Shift_JIS; read as Windows-1252 it would be "•b".
+  const bytes = Buffer.concat([Buffer.from('BO_ 100 Status: 8 ECU\n SG_ Time : 0|8@1+ (1,0) [0|255] "', 'latin1'), Buffer.from([0x95, 0x62]), Buffer.from('" ECU\n', 'latin1')]);
+  assert.equal(importDbc(decodeDbcBytes(bytes)).frames[0].signals[0].unit, '秒');
+  // Windows-1252 letters and symbols still read as Windows-1252.
+  assert.equal(decodeDbcBytes(Buffer.from('"°C" "Länge" "Größe"', 'latin1')), '"°C" "Länge" "Größe"');
 });

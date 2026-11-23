@@ -51,9 +51,9 @@ test('synthetic BLF performance smoke parses 20,000 Classic frames', { timeout: 
 
 test('bundled basic BLF log mirrors every supported ASC frame', async () => {
   const frames: CanFrame[] = []; const diagnostics: Diagnostic[] = [];
-  const result = parseBlfBuffer(readFileSync('sample/sigmixa-basic.blf'), { sourceId: 'sample/sigmixa-basic.blf', onFrames: (items) => { frames.push(...items); }, onDiagnostics: (items) => diagnostics.push(...items) });
+  const result = parseBlfBuffer(readFileSync('sample/basic/sigmixa-basic.blf'), { sourceId: 'sample/basic/sigmixa-basic.blf', onFrames: (items) => { frames.push(...items); }, onDiagnostics: (items) => diagnostics.push(...items) });
   const ascFrames: CanFrame[] = [];
-  await parseAscFile('sample/sigmixa-basic.asc', { sourceId: 'sample/sigmixa-basic.asc', onFrames: (items) => ascFrames.push(...items) });
+  await parseAscFile('sample/basic/sigmixa-basic.asc', { sourceId: 'sample/basic/sigmixa-basic.asc', onFrames: (items) => ascFrames.push(...items) });
   const supportedAscFrames = ascFrames.filter((frame) => !(frame.canId === 0x400 && frame.dataLength === 0));
   const comparable = (frame: CanFrame) => ({
     timestampNs: Math.round(frame.timestamp * 1_000_000_000), channel: frame.channel, direction: frame.direction,

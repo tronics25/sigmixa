@@ -242,6 +242,115 @@
   "lookupTables": [],
   "calculations": [],
   "viewStates": {
+    "log:parking-garage.asc": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-sensors-2d",
+          "kind": "trajectory",
+          "name": "Rear Axle, IMU and GNSS from Above (2D)",
+          "height": 460,
+          "settings": {
+            "trajectorySeries": [
+              {
+                "id": "series-axle",
+                "name": "Rear Axle Centre",
+                "xId": "sig-pose-x",
+                "yId": "sig-pose-y"
+              },
+              {
+                "id": "series-imu",
+                "name": "IMU",
+                "xId": "sig-imu-x",
+                "yId": "sig-imu-y"
+              },
+              {
+                "id": "series-gnss",
+                "name": "GNSS Antenna",
+                "xId": "sig-gnss-x",
+                "yId": "sig-gnss-y"
+              }
+            ],
+            "trajectoryXId": "sig-pose-x",
+            "trajectoryYId": "sig-pose-y",
+            "trajectoryInvert": {
+              "x": false,
+              "y": false,
+              "z": false
+            },
+            "trajectoryEqualAspect": true,
+            "trajectoryConnectGaps": false,
+            "trajectoryShowGrid": true,
+            "trajectoryShowPoints": false,
+            "trajectoryTrail": "all",
+            "trajectoryTrailSeconds": 10
+          }
+        },
+        {
+          "id": "view-heights",
+          "kind": "graph",
+          "name": "GNSS Antenna and Rear Axle Height",
+          "height": 220,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-gnss-z",
+              "sig-pose-z"
+            ],
+            "chartColors": {
+              "sig-gnss-z": "#f97316",
+              "sig-pose-z": "#0891b2"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:length"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-frame-timing",
+          "kind": "frameTiming",
+          "name": "Frame Timing",
+          "settings": {
+            "frameTimingHiddenKeys": []
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-sensors-2d",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
+      "visualizeTraceHeight": 150,
+      "traceSettings": {
+        "pinnedIds": [
+          "s:449",
+          "s:1456"
+        ],
+        "defaultMode": "decoded",
+        "columns": [
+          "channel",
+          "direction",
+          "receivedAt",
+          "age",
+          "count",
+          "interval",
+          "minInterval",
+          "maxInterval",
+          "expected",
+          "deviation"
+        ],
+        "sort": "canId",
+        "descending": false
+      },
+      "viewStateScope": "group"
+    },
     "group-view": {
       "activeTab": "visualize-view",
       "visualizeViews": [
@@ -413,7 +522,7 @@
               "sig-inner-wheel-difference"
             ],
             "chartColors": {
-              "sig-steering-angle": "#2563eb",
+              "sig-steering-angle": "#7c3aed",
               "sig-inner-wheel-difference": "#f97316"
             },
             "chartMode": "raw",
@@ -442,8 +551,8 @@
               "sig-road-grade"
             ],
             "chartColors": {
-              "sig-pose-z": "#2563eb",
-              "sig-road-grade": "#f97316"
+              "sig-pose-z": "#0891b2",
+              "sig-road-grade": "#ca8a04"
             },
             "chartMode": "raw",
             "chartConnectGaps": true,

@@ -11,7 +11,7 @@
 
 Decode ASC, BLF, MF4 or MDF captures with DBC, open CSV measurements alongside them, plot Signals, compare intervals across recordings and replay 2D/3D trajectories. SigMixa's built-in analysis runs offline and does not upload your captures.
 
-[![SigMixa in VS Code: define Signals and watch the bit layout, pin graph values, follow the trace, create and compare Clips, and rotate a 3D trajectory](media/demo.gif)](media/demo.mp4)
+[![SigMixa in VS Code: define Signals and watch the bit layout, zoom and scroll a graph linked to a 3D trajectory and the trace, check frame timing, receive intervals, states and distributions, then create and compare Clips](media/demo.gif)](media/demo.mp4)
 
 [Watch the video](media/demo.mp4)
 
@@ -24,6 +24,7 @@ A free, open-source alternative for offline CAN log analysis.
 - Create Derived Signals with expressions, linear interpolation, low-pass filters and moving averages.
 - Inspect RAW Logs and Signal Tables with filtering, multi-row copy, VS Code text-editor integration and CSV export.
 - Visualize any number of graphs and 2D/3D trajectories in one view, with unit conversion, pinned values and a trace of every CAN ID's latest values, intervals and expected periods.
+- Check frame timing and receive intervals per CAN ID, follow states on a timeline, and read the distribution and statistics of Signals over the time span shown.
 - Manage logs per analysis with **analysis groups**: folders that share Frame definitions and view settings, overlaid on the workspace's definitions.
 - Cut intervals out as Clips and compare logs and Clips side by side, shifting each target in time.
 - Export views as SVG/PNG or as an interactive, offline HTML report.
@@ -34,7 +35,7 @@ A free, open-source alternative for offline CAN log analysis.
 
 ### Define Frames and Signals visually
 
-Configure CAN IDs, frame lengths, bit layouts and Signal decoding rules in one editor, or import the definitions from DBC. Hover or edit a Signal to highlight its bits and MSB/LSB; click a bit to find its definition. Colors follow Signals when rows are reordered. Changes apply automatically. Scale selects arithmetic automatically: power-of-two magnitudes shift integer RAW, apply the Scale sign, then add Offset; other values such as `0.01` retain fractional values. Positive and negative Scale values are supported. Direct conversion uses integer/rational arithmetic before producing the result. Multiplexed Frames show per-Signal activation rules and a switchable bit-layout preview.
+Configure CAN IDs, frame lengths, bit layouts and Signal decoding rules in one editor, or import the definitions from DBC. Hover or edit a Signal to highlight its bits and MSB/LSB; click a bit to find its definition. Colors follow Signals when rows are reordered. Changes apply automatically. Multiplexed Frames show per-Signal activation rules and a switchable bit-layout preview.
 
 Expand a Derived Signal to edit its linear-interpolation table alongside the curve, or inspect a filter's example step response. Editing a table point highlights the matching curve point without reordering the input rows. Double-click a column boundary to fit its contents.
 
@@ -52,23 +53,55 @@ Choose Signals by Frame or by the channel group of an MF4, MDF or CSV log and in
 
 [![SigMixa Signal Table showing decoded vehicle data](media/screenshots/signal-table.png)](media/screenshots/signal-table.png)
 
-### Visualize graphs and trajectories together
+### Visualize graphs, trajectories and timing together
 
-**Visualize** stacks any number of graph and trajectory views that share one time position. Each graph converts compatible units onto one axis (for example km/h and m/s) and shows up to two unit systems on real-value axes. Hover or pin markers to inspect original samples; hover a legend entry to emphasize a Signal. **Connect gaps** joins samples taken at different periods without changing the measured values.
+**Visualize** stacks any number of views that share one time position: graphs, trajectories, frame timing, receive intervals, state timelines, and distribution and statistics. Zoom, scroll or play, and every view follows.
 
-Trajectories draw X/Y and optional Z Signals in 2D or 3D, with several series in one view, such as the four wheels of a vehicle. Rotate, zoom, view along X, Y or Z, choose a right- or left-handed coordinate system, inspect points or measure between two points.
+#### Graphs
 
-Below the views, the **trace** lists every CAN ID's latest values at the time position, with receive count, intervals and the deviation from an expected period. Play or step through time and every view follows. Export the views as SVG/PNG or as an HTML report.
+Overlay Signals on one time axis and compare them in common units, for example km/h and m/s on one speed axis. Hover or pin markers to read the original samples, so you can check exactly when and by how much a value changed. **Connect gaps** joins samples taken at different periods without changing the measured values.
 
-[![SigMixa Visualize: a graph converting km/h and m/s onto one speed axis, with the trace below](media/screenshots/time-series.png)](media/screenshots/time-series.png)
+[![SigMixa Visualize: a speed graph with a state timeline below and the trace](media/screenshots/time-series.png)](media/screenshots/time-series.png)
+
+#### Trajectories
+
+A trajectory is drawn by combining three (or two) values within a frame. Follow a driven path or a moving position in 2D or 3D, rotate and zoom it, and measure the distance and average speed between two points.
 
 [![SigMixa 3D trajectory of a car park drive: rear axle and GNSS antenna](media/screenshots/trajectory.png)](media/screenshots/trajectory.png)
+
+#### Frame timing
+
+Each CAN ID's frames are lined up on the time axis, and stretches without frames are marked. See at a glance whether frames arrive at their period and where they stopped.
+
+[![SigMixa frame timing: periodic CAN IDs and a marked gap in reception](media/screenshots/frame-timing.png)](media/screenshots/frame-timing.png)
+
+#### Receive interval
+
+The time between frames is plotted against the period and a ±10 % band. Check how far and how often reception drifts or is delayed, with the statistics alongside.
+
+[![SigMixa receive intervals of two CAN IDs with their periods, a delayed frame and statistics](media/screenshots/receive-interval.png)](media/screenshots/receive-interval.png)
+
+#### State timeline
+
+Signals with value labels, such as gear or mode, are shown as bands of states. See when each state changed and how long it lasted, on the same time axis as the graphs.
+
+[![SigMixa state timeline of road type and gear below a speed graph](media/screenshots/state-timeline.png)](media/screenshots/state-timeline.png)
+
+#### Distribution and statistics
+
+For the time span shown, or a selected range, see how each Signal's values are spread, with their minimum, maximum, mean and standard deviation. Compare tendencies and spread between sections of a log.
+
+[![SigMixa distribution and statistics of speed, engine speed and accelerator over a selected range](media/screenshots/distribution.png)](media/screenshots/distribution.png)
+
+#### Trace
+
+Below the views, the **trace** lists every CAN ID's latest values at the time position, with receive count, intervals and the deviation from an expected period. Play or step through time and every view follows. Export the views as SVG/PNG or as an HTML report.
 
 ### Analysis groups, Clips and comparison
 
 An analysis group is a folder with a `.sigmixa` folder: it holds the Frame definitions and view settings for one analysis and applies them to every log in it, on top of the workspace's definitions. Add a log stored elsewhere to a group and it appears there as well as where it is, using the definitions of the place it is opened from. Copy a group's folder to share it.
 
-When one recording holds several trials, cut each out as a Clip. Select logs and Clips in **ANALYSIS GROUPS** and compare them, shifting each one in time to line up events.
+When one recording holds several trials, cut each out as a Clip. Select logs and Clips in **ANALYSIS GROUPS** and compare them. CAN, MF4 and CSV logs can be compared side by side, and each one can be shifted in time to line up events.
 
 [![SigMixa comparison of three Clips, shifted in time to line up the brake application](media/screenshots/clip-comparison.png)](media/screenshots/clip-comparison.png)
 
@@ -106,13 +139,12 @@ Plugin authors can use the [SigMixa Plugin SDK](docs/plugin-sdk.md). Plugins are
 
 ## Sample workspace
 
-Open the [`sample`](sample) directory as a VS Code workspace. `sigmixa-basic.asc` (or `.blf`, `.mf4`) shows decoding, Plugins, time series and the trace. `sigmixa-basic-decoded.csv` (or `.mdf`) is a log of values converted from CAN data (speed and temperature), which you can view next to a CAN log on the comparison screen. `brake-analysis/` shows analysis groups and Clips, and `parking-drive/` shows 3D and 2D trajectories. See the [sample guide](sample/README.md).
+Open the [`sample`](sample) directory as a VS Code workspace. `basic/sigmixa-basic.asc` (or `.blf`, `.mf4`) shows decoding, Plugins, time series and the trace. `basic/sigmixa-basic-decoded.csv` (or `.mdf`) is a log of values converted from CAN data (speed and temperature), which you can view next to a CAN log on the comparison screen. `brake-analysis/` shows analysis groups and Clips, and `parking-drive/` shows 3D and 2D trajectories. See the [sample guide](sample/README.md).
 
 ## Compatibility notes
 
-- A trajectory is drawn by combining three (or two) values within a frame.
 - DBC Signal value labels (`VAL_`) are imported and exported. Edit them from the value-label button beside a Signal name; labels match RAW integers before Scale/Offset. RAW Log, Table and chart markers show the label alongside the numeric value. CSV exports remain numeric.
-- DBC Frame/Signal definitions, Intel/Motorola byte order, signedness, Scale/Offset, limits, units, standard/extended IDs, Multiplexing and direct value labels are supported. DBC-only metadata such as comments, attributes and reusable named value tables (`VAL_TABLE_`) is not retained.
+- DBC Frame/Signal definitions, standard/extended IDs, Intel/Motorola byte order, signedness, Scale/Offset, limits, units, Multiplexing, value labels, floating-point Signals, the expected period (`GenMsgCycleTime`) and CAN FD are supported. Comments, attributes other than `GenMsgCycleTime`, named value tables (`VAL_TABLE_`) and node names are not retained.
 
 ## License
 

@@ -1,3 +1,4 @@
+import type { ChartContext } from './svgCanvas';
 export interface ClipSpan { readonly id: string; readonly name: string; readonly start: number; readonly end: number }
 /** Where one Clip's span marker was drawn, in the canvas's CSS pixels. */
 export interface ClipSpanMarker extends ClipSpan { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number; readonly startsHere: boolean; readonly endsHere: boolean }
@@ -7,7 +8,7 @@ export interface ClipSpanMarker extends ClipSpan { readonly left: number; readon
  * Marks only; no value is changed. Clips that overlap in time get separate rows, and a name never leaves its own span,
  * so names cannot run into each other. Returns where each marker is, for pointing at it.
  */
-export function drawClipSpans(context: CanvasRenderingContext2D, clips: readonly ClipSpan[], view: { readonly start: number; readonly end: number }, x: (time: number) => number, laneTop: number, laneHeight: number, color: string): ClipSpanMarker[] {
+export function drawClipSpans(context: ChartContext, clips: readonly ClipSpan[], view: { readonly start: number; readonly end: number }, x: (time: number) => number, laneTop: number, laneHeight: number, color: string): ClipSpanMarker[] {
   const markers: ClipSpanMarker[] = []; const rows: number[] = [];
   for (const clip of [...clips].sort((a, b) => a.start - b.start || a.end - b.end)) {
     const from = Math.max(view.start, clip.start); const to = Math.min(view.end, clip.end); if (!(to > from)) continue;

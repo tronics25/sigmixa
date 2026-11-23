@@ -75,17 +75,17 @@ class Reader {
   async close(): Promise<void> { await this.worker?.terminate(); }
 }
 
-const ascSample = readFileSync('sample/sigmixa-basic.asc', 'utf8').split('\n').slice(0, 400).join('\n');
+const ascSample = readFileSync('sample/basic/sigmixa-basic.asc', 'utf8').split('\n').slice(0, 400).join('\n');
 const bases: { readonly name: string; readonly format: FuzzRequest['format']; readonly bytes: Buffer }[] = [
   { name: 'sigmixa-basic.asc', format: 'asc', bytes: Buffer.from(ascSample) },
-  { name: 'sigmixa-basic.blf', format: 'blf', bytes: readFileSync('sample/sigmixa-basic.blf') },
-  { name: 'sigmixa-basic.mf4', format: 'mdf', bytes: readFileSync('sample/sigmixa-basic.mf4') },
+  { name: 'sigmixa-basic.blf', format: 'blf', bytes: readFileSync('sample/basic/sigmixa-basic.blf') },
+  { name: 'sigmixa-basic.mf4', format: 'mdf', bytes: readFileSync('sample/basic/sigmixa-basic.mf4') },
   { name: 'asammdf-structures.mf4', format: 'mdf', bytes: readFileSync('tests/fixtures/mdf/asammdf-structures.mf4') },
   { name: 'asammdf-signals-410.mf4', format: 'mdf', bytes: readFileSync('tests/fixtures/mdf/asammdf-signals-410.mf4') },
   { name: 'asammdf-transposed.mf4', format: 'mdf', bytes: readFileSync('tests/fixtures/mdf/asammdf-transposed.mf4') },
-  { name: 'sigmixa-basic-decoded.mdf', format: 'mdf', bytes: readFileSync('sample/sigmixa-basic-decoded.mdf') },
+  { name: 'sigmixa-basic-decoded.mdf', format: 'mdf', bytes: readFileSync('sample/basic/sigmixa-basic-decoded.mdf') },
   { name: 'asammdf-signals-330.mdf', format: 'mdf', bytes: readFileSync('tests/fixtures/mdf/asammdf-signals-330.mdf') },
-  { name: 'sigmixa-basic-decoded.csv', format: 'csv', bytes: readFileSync('sample/sigmixa-basic-decoded.csv') },
+  { name: 'sigmixa-basic-decoded.csv', format: 'csv', bytes: readFileSync('sample/basic/sigmixa-basic-decoded.csv') },
 ];
 
 for (const base of bases) {

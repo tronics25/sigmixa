@@ -1,7 +1,8 @@
 import type { SignalSample } from '../../core/signal/signal';
-import { crossesSeriesGap } from './chartSeries';
+import { crossesSeriesGap, SeriesPath } from './chartSeries';
 import { paintValueBoxes, type HoverLabelRect } from './chartHoverLabels';
 import { t } from './i18n';
+import type { ChartContext } from './svgCanvas';
 
 /**
  * Lanes under a time-series graph: one per Signal, on the graph's time axis. A lane shows only the shape. Each is scaled to
@@ -88,7 +89,7 @@ function valueAt(runs: readonly (readonly LanePoint[])[], time: number): number 
   return undefined;
 }
 
-export function paintChartLanes(context: CanvasRenderingContext2D, lanes: readonly ChartLane[], area: { readonly left: number; readonly width: number; readonly top: number }, view: { readonly start: number; readonly end: number }, overlays: LaneOverlays = {}): void {
+export function paintChartLanes(context: ChartContext, lanes: readonly ChartLane[], area: { readonly left: number; readonly width: number; readonly top: number }, view: { readonly start: number; readonly end: number }, overlays: LaneOverlays = {}): void {
   if (!lanes.length) return;
   const { left, width: plotWidth, top } = area; const right = left + plotWidth; const span = view.end - view.start || 1; const x = (time: number) => left + (time - view.start) / span * plotWidth;
   const border = css('--vscode-panel-border', '#777');
@@ -114,7 +115,9 @@ export function paintChartLanes(context: CanvasRenderingContext2D, lanes: readon
       context.fillStyle = fill; context.setLineDash([]);
       for (const points of line.runs) { if (points.length < 2) continue; context.beginPath(); context.moveTo(x(points[0].time), bandBottom); for (const point of points) context.lineTo(x(point.time), y(point.value)); context.lineTo(x(points[points.length - 1].time), bandBottom); context.closePath(); context.fill(); }
       context.strokeStyle = lane.color; context.lineWidth = lane.emphasized ? 3 : 1.5; context.setLineDash([...(line.dash ?? [])]);
-      for (const points of line.runs) { context.beginPath(); points.forEach((point, pointIndex) => pointIndex ? context.lineTo(x(point.time), y(point.value)) : context.moveTo(x(point.time), y(point.value))); context.stroke(); }
+      const path = new SeriesPath(context);
+      for (const points of line.runs) { for (const point of points) path.point(x(point.time), y(point.value)); path.end(); }
+      path.stroke();
       const value = cursor === undefined ? undefined : valueAt(line.runs, cursor);
       if (value !== undefined) dots.push({ x: x(cursor!), y: Math.max(bandTop, Math.min(bandBottom, y(value))), color: lane.color });
     }
@@ -156,6 +159,6 @@ function colorWithAlpha(color: string, alpha: number): string {
   const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(normalized); if (hex) return `rgba(${parseInt(hex[1], 16)}, ${parseInt(hex[2], 16)}, ${parseInt(hex[3], 16)}, ${alpha})`;
   const rgb = /^rgba?\(([^,]+),([^,]+),([^,)]+)/.exec(normalized); return rgb ? `rgba(${rgb[1].trim()}, ${rgb[2].trim()}, ${rgb[3].trim()}, ${alpha})` : normalized;
 }
-let colorProbe: CanvasRenderingContext2D | undefined;
-function ellipsize(context: CanvasRenderingContext2D, text: string, maxWidth: number): string { if (context.measureText(text).width <= maxWidth) return text; let low = 0; let high = text.length; while (low < high) { const middle = Math.ceil((low + high) / 2); if (context.measureText(`${text.slice(0, middle)}…`).width <= maxWidth) low = middle; else high = middle - 1; } return `${text.slice(0, low)}…`; }
+let colorProbe: ChartContext | undefined;
+function ellipsize(context: ChartContext, text: string, maxWidth: number): string { if (context.measureText(text).width <= maxWidth) return text; let low = 0; let high = text.length; while (low < high) { const middle = Math.ceil((low + high) / 2); if (context.measureText(`${text.slice(0, middle)}…`).width <= maxWidth) low = middle; else high = middle - 1; } return `${text.slice(0, low)}…`; }
 function css(name: string, fallback: string): string { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }

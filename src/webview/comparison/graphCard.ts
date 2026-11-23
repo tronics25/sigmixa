@@ -5,9 +5,9 @@ import { normalizeValue } from '../../core/timeline/timeline';
 import { convertDisplayUnit, preferredDisplayUnit, resolveDisplayUnit } from '../../core/units/displayUnit';
 import type { ComparisonSeriesDto, ComparisonTargetStateDto } from '../../extension/comparison/comparisonProtocol';
 import type { SignalGroupDto } from '../../extension/editors/rawLogProtocol';
-import { layoutTimestampMarker, paintTimestampConnector, paintValueBoxes, type HoverLabelRect, type ValueBox } from '../shared/chartHoverLabels';
-import { crossesSeriesGap, displaySeriesRange, interpolatedSeriesSample } from '../shared/chartSeries';
-import { chartWheelGesture } from '../shared/chartWheel';
+import { layoutTimestampMarker, timestampGutterRows, paintTimestampConnector, paintValueBoxes, type HoverLabelRect, type ValueBox } from '../shared/chartHoverLabels';
+import { crossesSeriesGap, displaySeriesRange, interpolatedSeriesSample, SeriesPath } from '../shared/chartSeries';
+import { chartWheelGesture, wheelZoomFactor } from '../shared/chartWheel';
 import { enhanceChoiceSelect } from '../shared/choiceGroup';
 import { graphDisplayPolicy, partitionActualGraphs } from '../shared/graphDisplayPolicy';
 import { t } from '../shared/i18n';
@@ -15,12 +15,12 @@ import { iconButton, viewActionGroup } from '../shared/iconButton';
 import { MeasuredSamples, measuredValueLabel, nearestMeasuredTimestamp } from '../shared/measuredSamples';
 import { bindPressRepeat } from '../shared/pressRepeat';
 import { emphasizeSignal } from '../shared/signalEmphasis';
-import { createLegendEntry } from '../shared/signalLegend';
+import { createLegendEntry, markUnmeasured } from '../shared/signalLegend';
 import { SignalSelector } from '../shared/signalSelector';
 import { clearLegend, fitCardTitle, placeCardTitle } from './cardTitle';
 import { drawClipSpans, type ClipSpan } from '../shared/clipSpans';
 import type { SharedTimeAxis } from '../../core/timeline/sharedTimeAxis';
-import { createSvgCanvas } from '../shared/svgCanvas';
+import { createSvgCanvas, type ChartContext } from '../shared/svgCanvas';
 import type { SheetImage } from '../shared/imageSheet';
 import { withBrandMark } from '../shared/brandMark';
 import { buttonContextAction, type ViewContextAction } from '../shared/viewContextAction';
@@ -132,7 +132,6 @@ export class GraphCard implements ComparisonCard {
   private markerCounter = 0;
   private plotLeft = 72; private plotWidth = 1;
   private drawScheduled = false;
-  private viewportTimer?: number;
 
   constructor(private definitionValue: ComparisonGraphDefinition, private readonly host: GraphHost, list: HTMLElement, optionsHost: HTMLElement) {
     this.selected = new Set(definitionValue.signalIds);
@@ -316,12 +315,13 @@ export class GraphCard implements ComparisonCard {
       if (this.selection) { this.host.setSelection(undefined); return; }
       const time = this.pointerTime(event.clientX, event.clientY); if (time !== undefined) this.addMarker(time);
     });
+    // The wheel moves the graphs by what was turned, at once: no waiting for the gesture to end, no fixed steps.
     this.canvas.addEventListener('wheel', (event) => {
       if (!this.fullRange || !this.viewRange) return;
       const gesture = chartWheelGesture(event, this.canvas.clientWidth); if (gesture.kind === 'scroll' || !gesture.delta) return;
-      event.preventDefault(); if (this.viewportTimer !== undefined) window.clearTimeout(this.viewportTimer);
-      const center = gesture.kind === 'zoom' ? this.pointerTime(event.clientX, event.clientY) : undefined;
-      this.viewportTimer = window.setTimeout(() => { this.viewportTimer = undefined; if (gesture.kind === 'zoom') this.zoom(gesture.delta < 0 ? 1 / 1.5 : 1.5, center); else this.pan(gesture.delta < 0 ? -1 : 1); }, 70);
+      event.preventDefault();
+      if (gesture.kind === 'zoom') { this.zoom(wheelZoomFactor(gesture.delta), this.pointerTime(event.clientX, event.clientY)); return; }
+      const view = this.host.time.view; if (view) this.host.time.panBy(gesture.delta / Math.max(1, this.canvas.clientWidth) * (view.end - view.start));
     }, { passive: false });
   }
 
@@ -532,7 +532,7 @@ export class GraphCard implements ComparisonCard {
   }
 
   /** One lane per shown Signal, with a line for each target; `interactive` adds the hover time, its values and the selection. */
-  private paintLanes(context: CanvasRenderingContext2D, width: number, top: number, groups: readonly AxisGroup[], range: TimeRange, interactive: boolean): void {
+  private paintLanes(context: ChartContext, width: number, top: number, groups: readonly AxisGroup[], range: TimeRange, interactive: boolean): void {
     const normalized = groups.length === 1 && groups[0].key === 'normalized'; const entries = groups.flatMap((group) => group.entries.map((entry) => ({ entry, displayUnit: group.displayUnit })));
     const definitions = new Map(this.host.definitions().map((definition) => [definition.id, definition]));
     const hover = interactive ? this.host.hoverTime() : undefined; const highlighted = interactive ? this.host.highlighted() : undefined;
@@ -553,7 +553,7 @@ export class GraphCard implements ComparisonCard {
     paintChartLanes(context, lanes, { left, width: Math.max(32, width - left - right), top }, { start: range.start, end: range.end === range.start ? range.start + 1 : range.end }, { cursor: hover, markers: markers.map((marker) => marker.time), selection: interactive ? this.selection : undefined });
   }
 
-  private paint(context: CanvasRenderingContext2D, width: number, top: number, groups: readonly AxisGroup[], range: TimeRange, interactive: boolean): void {
+  private paint(context: ChartContext, width: number, top: number, groups: readonly AxisGroup[], range: TimeRange, interactive: boolean): void {
     const normalized = groups.length === 1 && groups[0].key === 'normalized';
     const left = 72; const right = groups.length > 1 ? 72 : 24; const plotW = Math.max(32, width - left - right);
     if (interactive) { this.plotLeft = left; this.plotWidth = plotW; }
@@ -587,14 +587,14 @@ export class GraphCard implements ComparisonCard {
       for (const entry of group.entries) {
         const color = this.color(entry.signalId);
         context.save(); context.beginPath(); context.rect(left, laneTop, plotW, laneHeight); context.clip(); context.setLineDash(dashFor(entry.targetIndex)); context.strokeStyle = color;
-        context.lineWidth = highlighted === entry.signalId ? 3 : 1.5; context.beginPath(); let started = false; let previous: number | undefined;
+        context.lineWidth = highlighted === entry.signalId ? 3 : 1.5; const path = new SeriesPath(context); let previous: number | undefined;
         for (const sample of entry.series.samples) {
           const value = this.value(entry, sample.value, group.displayUnit, normalized); const usable = Number.isFinite(value) && (sample.quality === undefined || sample.quality === 'valid');
-          if (!usable) { if (!this.connectGaps) started = false; continue; }
+          if (!usable) { if (!this.connectGaps) path.end(); continue; }
           const separated = !this.connectGaps && previous !== undefined && crossesSeriesGap(entry.series.gaps, previous, sample.timestamp);
-          const px = x(sample.timestamp - entry.anchor); const py = y(value); started && !separated ? context.lineTo(px, py) : context.moveTo(px, py); started = true; previous = sample.timestamp;
+          path.point(x(sample.timestamp - entry.anchor), y(value), separated); previous = sample.timestamp;
         }
-        context.stroke(); context.restore();
+        path.stroke(); context.restore();
         if (hover !== undefined && hover >= xMin && hover <= xMax) {
           const sample = interpolatedSeriesSample(entry.series, entry.anchor + hover, this.connectGaps);
           if (sample) { const py = y(this.value(entry, sample.value, group.displayUnit, normalized)); if (Number.isFinite(py)) hoverValues.push({ y: Math.max(laneTop, Math.min(laneTop + laneHeight, py)), sampleY: py, sampleX: x(hover), text: `${this.valueLabel(entry, sample.value, group.displayUnit, normalized)}${sample.valueLabel ? ` (${sample.valueLabel})` : ''}`, color, lineDash: dashFor(entry.targetIndex), emphasized: highlighted === entry.signalId }); }
@@ -612,7 +612,7 @@ export class GraphCard implements ComparisonCard {
     if (showHover) { const px = x(hover!); context.strokeStyle = css('--vscode-editorCursor-foreground', '#fff'); context.beginPath(); context.moveTo(px, laneTop); context.lineTo(px, laneTop + laneHeight); context.stroke(); }
     const occupied: HoverLabelRect[] = [];
     const fixed = markers.map((marker) => { const box = timestampBox(context, x(marker.time), `${marker.time >= 0 ? '+' : ''}${format(marker.time)} s`, left, left + plotW, laneTop + laneHeight, occupied, laneTop); occupied.push(box.rect); return box; });
-    const hoverBox = showHover ? timestampBox(context, x(hover!), `${hover! >= 0 ? '+' : ''}${format(hover!)} s`, left, left + plotW, laneTop + laneHeight, occupied, laneTop) : undefined; if (hoverBox) occupied.push(hoverBox.rect);
+    const hoverBox = showHover ? timestampBox(context, x(hover!), `${hover! >= 0 ? '+' : ''}${format(hover!)} s`, left, left + plotW, laneTop + laneHeight, occupied, laneTop, timestampGutterRows(0)) : undefined; if (hoverBox) occupied.push(hoverBox.rect);
     for (const marker of markers) paintValues(context, x(marker.time), markerValues.get(marker.id) ?? [], left, left + plotW, laneTop, laneTop + laneHeight, occupied);
     if (hoverBox) paintValues(context, x(hover!), hoverValues, left, left + plotW, laneTop, laneTop + laneHeight, occupied);
     context.save(); context.strokeStyle = css('--vscode-descriptionForeground', '#888'); for (const box of [...fixed, ...(hoverBox ? [hoverBox] : [])]) paintTimestampConnector(context, box.cursorX, box.bottom, box.rect); context.restore();
@@ -625,7 +625,7 @@ export class GraphCard implements ComparisonCard {
     for (const signalId of this.shown) {
       const definition = definitions.get(signalId); const color = this.color(signalId);
       const entry = createLegendEntry(`${definition?.name ?? signalId}${definition?.unit ? ` (${definition.unit})` : ''}`, color, (active) => this.host.highlight(active ? signalId : undefined));
-      entry.className = 'chart-legend-entry'; entry.dataset.signalId = signalId;
+      entry.className = 'chart-legend-entry'; entry.dataset.signalId = signalId; markUnmeasured(entry, !this.selector.isMeasured(signalId));
       emphasizeSignal(entry, this.host.highlighted() === signalId, color);
       this.legend.appendChild(entry);
     }
@@ -643,7 +643,7 @@ export class GraphCard implements ComparisonCard {
     const entries = this.entries(); const groups = this.axisGroups(entries); if (!this.viewRange || !groups.length) return undefined;
     const targets = this.host.targets().filter((target) => target.status === 'ready' && !this.host.hidden(target.id));
     const legendRows = 1 + Math.ceil(targets.length / Math.max(1, Math.floor(width / 533))) + Math.ceil(this.shown.length / Math.max(1, Math.floor(width / 400))); const header = 60 + legendRows * 20; const lanes = this.lanesOpen ? lanesHeight(this.shown.length) : 0; const height = header + this.plotHeight + lanes + 20;
-    const paintAll = (context: CanvasRenderingContext2D) => {
+    const paintAll = (context: ChartContext) => {
       context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height);
       context.fillStyle = css('--vscode-foreground', '#ddd'); context.font = '600 20px sans-serif'; context.fillText(heading, 24, 34);
       context.font = '12px sans-serif'; context.fillStyle = css('--vscode-descriptionForeground', '#999'); const range = `${format(this.viewRange!.start)}–${format(this.viewRange!.end)} s`; context.fillText(range, width - context.measureText(range).width - 24, 32);
@@ -661,17 +661,17 @@ export class GraphCard implements ComparisonCard {
 }
 
 interface TimestampBox { readonly cursorX: number; readonly bottom: number; readonly text: string; readonly rect: HoverLabelRect }
-function timestampBox(context: CanvasRenderingContext2D, cursorX: number, text: string, left: number, right: number, bottom: number, occupied: readonly HoverLabelRect[], top: number): TimestampBox {
+function timestampBox(context: ChartContext, cursorX: number, text: string, left: number, right: number, bottom: number, occupied: readonly HoverLabelRect[], top: number, maxRows = Number.POSITIVE_INFINITY): TimestampBox {
   context.save(); context.font = `600 11px ${css('--vscode-editor-font-family', 'monospace')}`; const width = context.measureText(text).width + 12; context.restore();
-  return { cursorX, bottom, text, rect: layoutTimestampMarker(cursorX, width, 18, left, right, bottom, occupied, top) };
+  return { cursorX, bottom, text, rect: layoutTimestampMarker(cursorX, width, 18, left, right, bottom, occupied, top, maxRows) };
 }
-function paintTimestampBox(context: CanvasRenderingContext2D, box: TimestampBox, hover: boolean): void {
+function paintTimestampBox(context: ChartContext, box: TimestampBox, hover: boolean): void {
   context.save(); context.font = `600 11px ${css('--vscode-editor-font-family', 'monospace')}`; context.textAlign = 'center'; context.textBaseline = 'middle';
   context.fillStyle = css('--vscode-editorHoverWidget-background', '#252526'); context.fillRect(box.rect.x, box.rect.y, box.rect.width, box.rect.height);
   context.strokeStyle = hover ? css('--vscode-editorCursor-foreground', '#fff') : css('--vscode-focusBorder', '#007acc'); context.strokeRect(box.rect.x, box.rect.y, box.rect.width, box.rect.height);
   context.fillStyle = css('--vscode-editor-foreground', '#ddd'); context.fillText(box.text, box.rect.x + box.rect.width / 2, box.rect.y + box.rect.height / 2); context.restore();
 }
-function paintValues(context: CanvasRenderingContext2D, cursorX: number, values: readonly HoverValue[], left: number, right: number, top: number, bottom: number, occupied: HoverLabelRect[]): void {
+function paintValues(context: ChartContext, cursorX: number, values: readonly HoverValue[], left: number, right: number, top: number, bottom: number, occupied: HoverLabelRect[]): void {
   paintValueBoxes(context, cursorX, values, { left, right, top, bottom }, occupied, { family: css('--vscode-editor-font-family', 'monospace'), background: css('--vscode-editorHoverWidget-background', '#252526') });
 }
 export function css(name: string, fallback: string): string { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }

@@ -1,9 +1,10 @@
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { graph, logView, pinned, TRACE_COLUMNS, trajectory } from './sample-views.mjs';
+import { canKey, distribution, fileView, frameInterval, frameTiming, graph, logView, pinned, stateTimeline, TRACE_COLUMNS, trajectory } from './sample-views.mjs';
 import { parkingFrames } from './sample-frames.mjs';
 
 const output = path.resolve('sample/.sigmixa/project.json');
+const basicOutput = path.resolve('sample/basic/.sigmixa/project.json');
 const formatCanId = (canId, extended) => `${canId.toString(16).toUpperCase()}${extended && canId <= 0x7ff ? 'x' : ''}`;
 const extracted = (id, name, unit, byteOffset, lengthBits, scale, offset = 0, options = {}) => ({
   id, name, unit, byteOffset, bitOffset: options.bitOffset ?? 0, lengthBits,
@@ -151,11 +152,15 @@ const propertyConfig = {
 };
 // The views of the basic CAN log (and its BLF and MF4 copies).
 const basicViews = logView([
+      // The CAN logs' views: what the vehicle did and in what state.
       graph('view-speed-engine', 'Speed and Engine', ['sig-speed', 'sig-smoothed-speed', 'sig-engine-speed'], ['family:speed', 'family:rotational-speed']),
+      stateTimeline('view-drive-states', 'Drive Mode and Gear', ['sig-drive-mode', 'sig-gear-position', 'sig-drive-state']),
       graph('view-torque-brake', 'Torque and Brake', ['sig-engine-torque', 'sig-brake-pressure'], ['family:torque', 'family:pressure']),
+      // 320 is multiplexed: bytes 2-3 carry the requested torque, the DC link power or the regeneration limit.
+      stateTimeline('view-mux-states', 'Multiplexer of 320', ['sig-mux-mode']),
       graph('view-temperatures', 'Temperatures', ['sig-temp', 'sig-coolant-temp'], ['family:temperature']),
-      graph('view-states', 'Drive and Module States', ['sig-gear-position', 'sig-drive-state', 'sig-door-module-state'], ['empty'], 200),
-      graph('view-property-service', 'Property Service', [propertyResponseSignal('p1-value'), propertyRequestSignal('p1-requested'), propertyResponseSignal('p4-value'), propertyRequestSignal('p4-requested')], ['family:temperature', 'family:percentage']),
+      stateTimeline('view-body-states', 'Body Control', ['sig-headlight', 'sig-turn-left', 'sig-turn-right', 'sig-horn', 'sig-driver-door', 'sig-passenger-door', 'sig-seatbelt']),
+      distribution('view-distribution', 'Speed, Torque and Brake', ['sig-speed', 'sig-engine-speed', 'sig-engine-torque', 'sig-brake-pressure']),
       trajectory('view-path-3d', 'Vehicle Path (3D)', [{ id: 'series-vehicle', name: 'Vehicle Position', xId: 'sig-position-x', yId: 'sig-position-y', zId: 'sig-position-z' }], { view: { yaw: 5.374, pitch: 0.419, zoom: 1.49, panX: -4.11, panY: 0.58 } }),
     ], {
       tableSelectedIds: ['sig-speed', 'sig-engine-speed', 'sig-engine-torque', 'sig-mechanical-power', 'sig-brake-pressure', 'sig-wheel-speed-difference', 'sig-headlight', 'sig-gear-position', 'sig-object-distance', 'sig-time-to-collision', counterId, metricId,
@@ -181,6 +186,33 @@ const decodedViews = {
   ], { tableSelectedIds: ['sig-speed', measured('Reference', 'Vehicle Speed'), measured('Reference', 'Coolant Temperature')] }), viewStateScope: 'file' },
 };
 
+// The basic ASC log's own views ("This file", which it opens with): the CAN views, its Plugins and how its frames arrive.
+const basicAscViews = fileView([
+  ...basicViews.visualizeViews,
+      // 3C0 is expected every 100 ms, arrives with jitter and stops from 41 to 50 s.
+      stateTimeline('view-door-module-states', 'Door Module State', ['sig-door-module-state']),
+      frameInterval('view-intervals', 'Door Module Heartbeat Interval', [canKey(0x3c0)]),
+      frameTiming('view-frame-timing', 'Frame Timing'),
+      graph('view-property-service', 'Property Service', [propertyResponseSignal('p1-value'), propertyRequestSignal('p1-requested'), propertyResponseSignal('p4-value'), propertyRequestSignal('p4-requested')], ['family:temperature', 'family:percentage']),
+], { tableSelectedIds: basicViews.tableSelectedIds, traceSettings: basicViews.traceSettings }, 'file');
+// The BLF copy's own views: the CAN views, and the same timing as the ASC log.
+const basicBlfViews = fileView([
+  ...basicViews.visualizeViews,
+  frameTiming('view-frame-timing', 'Frame Timing'),
+  frameInterval('view-intervals', 'Door Module Heartbeat Interval', [canKey(0x3c0)]),
+], { tableSelectedIds: basicViews.tableSelectedIds }, 'file');
+
+
+// The basic group's shared views ("Shared in group"): the values every log here holds, whether decoded from CAN (ASC,
+// BLF, MF4) or stored as measured values (CSV, MDF, MF4). Each log shows the ones it has.
+const speeds = ['sig-speed', measured('', 'Vehicle Speed'), measured('Reference', 'Vehicle Speed')];
+const coolant = ['sig-coolant-temp', measured('', 'Coolant Temperature'), measured('Reference', 'Coolant Temperature')];
+const basicSharedViews = logView([
+  graph('view-shared-speed', 'Vehicle Speed', speeds, ['family:speed'], 240),
+  graph('view-shared-coolant', 'Coolant Temperature', coolant, ['family:temperature'], 200),
+  distribution('view-shared-distribution', 'Speed and Coolant Temperature', [...speeds, ...coolant]),
+]);
+
 const project = {
   schemaVersion: 4,
   frames,
@@ -191,18 +223,29 @@ const project = {
   ],
   pluginBindings,
   externalCsvSources: [],
-  // The reference values are a CSV log of their own: compare it with the basic log on the comparison screen.
-  addedLogs: ['sigmixa-basic-decoded.csv'],
-  // The basic log has no Clips: Clips are shown on brake-analysis/road-test.asc, which holds three trials.
   clips: [],
   lookupTables: [],
   calculations: [],
   viewStates: {
     'frame-definition-columns': { name: 203, unit: 112, byte: 48, bit: 44, length: 58, signed: 96, endian: 92, scale: 100, offset: 74, minimum: 74, maximum: 74, activation: 136, actions: 32, derivedName: 235, derivedUnit: 112, derivedType: 140, definition: 520, derivedActions: 32 },
-    // Opened at the workspace level, every log starts from these views (2.0.0: several graphs and trajectories).
+    // A log with no views of its own starts from these (2.0.0: several graphs and trajectories).
     'log-view-default': basicViews,
-    // The workspace root is a group like any other: its logs of the same CAN data share these views ("Shared in group").
-    'group-view': basicViews,
+  },
+};
+
+// The basic logs are an analysis group of their own. They use the workspace's Frames and Plugins.
+const basicProject = {
+  schemaVersion: 4, frames: [], plugins: [], pluginBindings: [], externalCsvSources: [],
+  // The reference values are a CSV log of their own: compare it with the basic log on the comparison screen.
+  addedLogs: ['sigmixa-basic-decoded.csv'],
+  // The basic log has no Clips: Clips are shown on brake-analysis/road-test.asc, which holds three trials.
+  clips: [], lookupTables: [], calculations: [],
+  viewStates: {
+    // Its logs share these views ("Shared in group").
+    'group-view': basicSharedViews,
+    // The CAN logs open with their own views ("This file").
+    'log:sigmixa-basic.asc': basicAscViews,
+    'log:sigmixa-basic.blf': basicBlfViews,
     // Logs of decoded values show their own signals ("This file").
     ...decodedViews,
   },
@@ -210,4 +253,6 @@ const project = {
 
 const persistedProject = { ...project, frames: project.frames.map(({ canId, extended, ...frame }) => ({ ...frame, canId: formatCanId(canId, extended) })) };
 writeFileSync(output, `${JSON.stringify(persistedProject, null, 2)}\n`, 'utf8');
+mkdirSync(path.dirname(basicOutput), { recursive: true });
+writeFileSync(basicOutput, `${JSON.stringify(basicProject, null, 2)}\n`, 'utf8');
 console.log(`Generated ${output}: ${frames.length} frames / ${frames.reduce((sum, frame) => sum + frame.signals.length, 0)} extracted Signals / ${frames.reduce((sum, frame) => sum + frame.derivedSignals.length, 0)} Derived Signals / 0 Clips / 3 Plugins / 1 External CSV`);

@@ -1,4 +1,5 @@
-let measure: CanvasRenderingContext2D | undefined;
+import type { ChartContext } from '../shared/svgCanvas';
+let measure: ChartContext | undefined;
 
 /** Sizes the title to its text, so the legend follows it directly. */
 export function fitCardTitle(title: HTMLInputElement): void {

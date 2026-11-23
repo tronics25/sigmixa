@@ -38,3 +38,28 @@ test('reporting the same span again tells nobody', () => {
   const axis = new SharedTimeAxis(); axis.report('a', { start: 0, end: 10 }); let told = 0; axis.subscribe(() => told++);
   axis.report('a', { start: 0, end: 10 }); axis.report('missing', undefined); assert.equal(told, 0);
 });
+
+test('a held axis does not rescale while a graph\'s span moves; reset shows everything again', () => {
+  const axis = new SharedTimeAxis(); axis.report('a', { start: 0, end: 10 }); axis.report('b', { start: 0, end: 10 });
+  axis.hold(); axis.report('b', { start: 3, end: 13 });
+  assert.deepEqual(axis.view, { start: 0, end: 10 }, 'shifted past the end: what is shown stays'); assert.deepEqual(axis.full, { start: 0, end: 13 }); assert.equal(axis.zoomed, true);
+  axis.zoom(100); assert.deepEqual(axis.view, { start: 0, end: 13 }, 'zooming out reaches the shifted data');
+  axis.reset(); assert.deepEqual(axis.view, { start: 0, end: 13 }); assert.equal(axis.zoomed, false);
+  axis.hold(); axis.report('a', { start: 2, end: 12 }); axis.report('b', { start: 2, end: 12 });
+  assert.deepEqual(axis.view, { start: 0, end: 13 }, 'the data spans less: what is shown stays'); assert.equal(axis.zoomed, true, 'reset is available');
+  axis.reset(); assert.deepEqual(axis.full, { start: 2, end: 12 }); assert.deepEqual(axis.view, { start: 2, end: 12 });
+});
+
+test('a hold that changed nothing is released, and the axis follows its graphs again', () => {
+  const axis = new SharedTimeAxis(); axis.report('a', { start: 0, end: 10 });
+  axis.hold(); axis.release(); axis.report('b', { start: 0, end: 20 });
+  assert.deepEqual(axis.view, { start: 0, end: 20 });
+  axis.hold(); axis.report('b', { start: 5, end: 25 }); axis.release();
+  assert.deepEqual(axis.view, { start: 0, end: 20 }, 'a hold that shows is kept');
+});
+
+test('panBy scrolls by a time and stops at the ends', () => {
+  const axis = new SharedTimeAxis(); axis.report('a', { start: 0, end: 10 }); axis.setView({ start: 4, end: 6 });
+  axis.panBy(0.5); assert.deepEqual(axis.view, { start: 4.5, end: 6.5 });
+  axis.panBy(100); assert.deepEqual(axis.view, { start: 8, end: 10 }); axis.panBy(-100); assert.deepEqual(axis.view, { start: 0, end: 2 });
+});

@@ -164,11 +164,13 @@ test('measuredSignalIds lists only the Signals that have samples', () => {
 test('more than 2000 breaks are all kept: the line after the 2000th break is still drawn', () => {
   const store = new InMemorySignalStore(); store.registerDefinitions([speed]);
   const samples: { timestamp: number; value: number; quality: 'valid' }[] = [];
-  // 3000 short runs of three samples 10 ms apart, each followed by a 1 s pause in reception.
-  for (let run = 0; run < 3000; run++) for (let index = 0; index < 3; index++) samples.push({ timestamp: run * 1.03 + index * 0.01, value: index, quality: 'valid' });
+  // 2100 runs of 300 samples 10 ms apart, each followed by a pause in reception of 1 to 100 s. (Short runs after every
+  // pause would be frames sent in bursts on events, not a periodic Signal with dropouts.)
+  let start = 0;
+  for (let run = 0; run < 2100; run++) { for (let index = 0; index < 300; index++) samples.push({ timestamp: start + index * 0.01, value: index, quality: 'valid' }); start += 2.99 + 1 + (run * 7919 % 1000) / 10; }
   store.appendSeries(speed, samples);
   const [all] = store.seriesSlice([speed.id], undefined, 50_000_000);
-  assert.equal(all.gaps.length, 2999);
+  assert.equal(all.gaps.length, 2099);
   const last = samples.length - 1;
   assert.equal(crossesSeriesGap(all.gaps, samples[last - 1].timestamp, samples[last].timestamp), false);
   // A screen-sized budget merges only breaks closer than one drawn point; it never reaches past the data.
@@ -259,4 +261,37 @@ test('a short run of rows added after many frame rows is merged in place, with t
   assert.deepEqual(page.rows.slice(at, at + 3).map((row) => [...row.values.values()].map((sample) => sample.value)), [[3], [101], [102]]);
   assert.deepEqual(store.samplesForFrame('a:5').map((item) => item.sample.value), [5]);
   assert.deepEqual(store.tablePage([reference.id], 0, 10).rows.map((row) => row.values.get(reference.id)!.value), [100, 101, 102, 103]);
+});
+
+test('a Signal whose intervals alternate short and long is one line, not a gap at every long interval', () => {
+  // The same frame received twice per 20 ms cycle (0.3 ms apart), and a frame sent in bursts of three every 100 ms.
+  for (const offsets of [[0, 0.0003], [0, 0.01, 0.02]]) {
+    const cycle = offsets.length === 2 ? 0.02 : 0.1;
+    const store = new InMemorySignalStore(); store.registerDefinitions([speed]);
+    const samples: { timestamp: number; value: number; quality: 'valid' }[] = [];
+    for (let index = 0; index < 3000; index++) for (const offset of offsets) samples.push({ timestamp: index * cycle + offset, value: index % 50, quality: 'valid' });
+    store.appendSeries(speed, samples);
+    assert.deepEqual(store.seriesSlice([speed.id], undefined, 1500)[0].gaps, []);
+    assert.deepEqual(store.seriesSlice([speed.id], { start: 10, end: 11 }, 1500)[0].gaps, []);
+  }
+});
+
+test('a pause in reception is still a gap when the Signal otherwise arrives in alternating intervals', () => {
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed]);
+  const samples: { timestamp: number; value: number; quality: 'valid' }[] = [];
+  for (let index = 0; index < 3000; index++) if (index < 1000 || index >= 1100) for (const offset of [0, 0.0003]) samples.push({ timestamp: index * 0.02 + offset, value: 1, quality: 'valid' });
+  store.appendSeries(speed, samples);
+  assert.deepEqual(store.seriesSlice([speed.id], undefined, 1500)[0].gaps, [{ startTimestamp: 999 * 0.02 + 0.0003, endTimestamp: 1100 * 0.02 }]);
+});
+
+test('a gap in a zoomed view stays a gap even when it is a large part of the view', () => {
+  // 100 Hz with no reception from 0.99 s to 10 s; a view of little more than the gap holds only a few samples.
+  const store = new InMemorySignalStore(); store.registerDefinitions([speed]);
+  const samples: { timestamp: number; value: number; quality: 'valid' }[] = [];
+  for (let index = 0; index < 2000; index++) if (index < 100 || index >= 1000) samples.push({ timestamp: index * 0.01, value: index, quality: 'valid' });
+  store.appendSeries(speed, samples);
+  for (const range of [{ start: 0.99, end: 10 }, { start: 0.99, end: 10.05 }, { start: 0.5, end: 10 }, { start: 0, end: 20 }]) {
+    const [series] = store.seriesSlice([speed.id], range, 1500);
+    assert.ok(crossesSeriesGap(series.gaps, 0.99, 10), `${range.start}–${range.end} s`);
+  }
 });

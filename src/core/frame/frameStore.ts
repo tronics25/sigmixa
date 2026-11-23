@@ -442,6 +442,33 @@ export class ChunkedFrameStore implements FrameStore {
     return index < result.length ? result.subarray(0, index) : result;
   }
 
+  /** The CAN IDs that have frames, in the order their first frame came. */
+  canRefs(): readonly { readonly canId: number; readonly extended: boolean }[] {
+    return [...this.canRefIndexes.keys()].map((key) => ({ canId: Number(key.slice(2)), extended: key.startsWith('e') }));
+  }
+
+  /** Per CAN ID: true when its frames came in time order, else a sorted copy of their times; kept until frames change. */
+  private readonly canRefOrder = new Map<string, true | Float64Array>(); private canRefOrderVersion = -1;
+  /**
+   * Receive times of one CAN ID's frames in time order (the period, gaps and intervals depend on it). Read from the frame
+   * columns without copying while the frames came in time order, as they nearly always do; otherwise from a sorted copy.
+   */
+  canRefTimes(canId: number, extended: boolean): { readonly length: number; at(index: number): number } | undefined {
+    const key = canKey(canId, extended); const index = this.canRefIndexes.get(key); if (!index) return undefined;
+    const chunks = this.chunks; const size = this.chunkSize;
+    const inFileOrder = { length: index.length, at: (at: number) => { const ordinal = index.at(at)!; return chunks[Math.floor(ordinal / size)].timestamps[ordinal % size]; } };
+    if (this.canRefOrderVersion !== this.version) { this.canRefOrder.clear(); this.canRefOrderVersion = this.version; }
+    let order = this.canRefOrder.get(key);
+    if (!order) {
+      order = true; let previous = -Infinity;
+      for (let at = 0; at < inFileOrder.length; at++) { const time = inFileOrder.at(at); if (time < previous) { order = undefined; break; } previous = time; }
+      if (!order) { const sorted = new Float64Array(inFileOrder.length); for (let at = 0; at < sorted.length; at++) sorted[at] = inFileOrder.at(at); order = sorted.sort(); }
+      this.canRefOrder.set(key, order);
+    }
+    if (order === true) return inFileOrder;
+    const sorted = order; return { length: sorted.length, at: (at) => sorted[at] };
+  }
+
   /**
    * Frames `from..to-1` (or the frames at `ordinals`) as columns (`PackedFrameColumns`), for decoding on another thread
    * without making an object per frame. Channels come as 32-bit numbers.

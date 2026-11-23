@@ -1,6 +1,28 @@
 import type { ChartAxisRangeSetting, SignalSeriesDto } from '../../extension/editors/rawLogProtocol';
 import { convertDisplayUnit } from '../../core/units/displayUnit';
 import type { SignalSample } from '../../core/signal/signal';
+import type { ChartContext } from './svgCanvas';
+
+/**
+ * Draws a Signal's line on a canvas: `point` for each drawable sample, `end` where the line stops. A sample with no
+ * neighbour on the line (a lone sample between gaps) becomes a dot, so it stays visible when gaps are not connected.
+ */
+export class SeriesPath {
+  private count = 0; private lastX = 0; private lastY = 0; private readonly dots: [number, number][] = [];
+  constructor(private readonly context: ChartContext) { context.beginPath(); }
+  point(x: number, y: number, separated = false): void {
+    if (separated) this.end();
+    if (this.count) this.context.lineTo(x, y); else this.context.moveTo(x, y);
+    this.count++; this.lastX = x; this.lastY = y;
+  }
+  end(): void { if (this.count === 1) this.dots.push([this.lastX, this.lastY]); this.count = 0; }
+  stroke(): void {
+    const context = this.context; this.end(); context.stroke(); if (!this.dots.length) return;
+    context.save(); context.setLineDash([]); context.fillStyle = context.strokeStyle; context.beginPath();
+    for (const [x, y] of this.dots) { context.moveTo(x + context.lineWidth, y); context.arc(x, y, context.lineWidth, 0, Math.PI * 2); }
+    context.fill(); context.restore();
+  }
+}
 
 export function displaySeriesRange(series: readonly SignalSeriesDto[], setting?: ChartAxisRangeSetting, visibleRange?: { readonly start: number; readonly end: number }, displayUnit?: string): { minimum: number; maximum: number } {
   let range = visibleDisplayRange(series, visibleRange, displayUnit);

@@ -54,10 +54,10 @@ async function assertSameReading(file: string): Promise<number> {
 
 function write(name: string, content: string | Buffer): string { const file = path.join(root, name); fs.writeFileSync(file, content); return file; }
 
-const asc = fs.readFileSync('sample/sigmixa-basic.asc', 'utf8');
+const asc = fs.readFileSync('sample/basic/sigmixa-basic.asc', 'utf8');
 
 test('ASC logs read in pieces on workers give the same frames, diagnostics and summary as read in one go', async () => {
-  assert.ok(await assertSameReading(path.resolve('sample/sigmixa-basic.asc')) > 3000);
+  assert.ok(await assertSameReading(path.resolve('sample/basic/sigmixa-basic.asc')) > 3000);
   const lines = asc.split('\n');
   // A base change in the middle, unreadable rows, CRLF and lone CR endings, a long line, and a last line without a break.
   const at = Math.floor(lines.length / 2);
@@ -107,7 +107,7 @@ function blf(stream: Buffer, sizes: (index: number) => number, options: { method
 }
 
 test('BLF logs read in pieces on workers give the same frames, diagnostics and summary, also where objects run across containers', async () => {
-  for (const name of ['sample/sigmixa-basic.blf', ...fs.readdirSync('tests/fixtures/python-can').filter((item) => item.endsWith('.blf')).map((item) => `tests/fixtures/python-can/${item}`)]) await assertSameReading(path.resolve(name));
+  for (const name of ['sample/basic/sigmixa-basic.blf', ...fs.readdirSync('tests/fixtures/python-can').filter((item) => item.endsWith('.blf')).map((item) => `tests/fixtures/python-can/${item}`)]) await assertSameReading(path.resolve(name));
   const objects: Buffer[] = [];
   for (let index = 0; index < 3000; index++) {
     const time = BigInt(index) * 1_000_000n;
@@ -180,7 +180,7 @@ test('a log decoded on workers shows the same values, Plugin output and diagnost
   // Frames shorter than their definitions (diagnostics), in the middle of the log.
   const lines = asc.split('\n'); const at = Math.floor(lines.length / 3);
   const short = write('short.asc', [...lines.slice(0, at), '   20.000100 1  2A0             Rx   d 2 01 02', '   20.000200 1  300             Rx   d 1 07', ...lines.slice(at)].join('\n'));
-  for (const file of [path.resolve('sample/sigmixa-basic.asc'), path.resolve('sample/sigmixa-basic.blf'), path.resolve('sample/sigmixa-basic.mf4'), short]) {
+  for (const file of [path.resolve('sample/basic/sigmixa-basic.asc'), path.resolve('sample/basic/sigmixa-basic.blf'), path.resolve('sample/basic/sigmixa-basic.mf4'), short]) {
     const expected = await open(file, project, registry, false);
     const actual = await open(file, project, registry, true);
     assert.ok(expected.rows.length > 3000 && expected.ids.length > 40 && expected.analysis.some((group) => group.code === 'DERIVED_SIGNAL_EVALUATION_ERROR'), file);
@@ -269,7 +269,7 @@ test('an MF4 load cancelled before it begins ends, without waiting for room that
   small();
   try {
     const controller = new AbortController(); controller.abort();
-    const summary = await loadMdfInParallel(path.resolve('sample/sigmixa-basic.mf4'), { sourceId: 'x', signal: controller.signal, decodeSpec: () => ({ owner: {}, spec: { definitions: [], signalIds: [], pluginKeys: [] } }), onChunk: () => undefined, onDiagnostics: () => undefined });
+    const summary = await loadMdfInParallel(path.resolve('sample/basic/sigmixa-basic.mf4'), { sourceId: 'x', signal: controller.signal, decodeSpec: () => ({ owner: {}, spec: { definitions: [], signalIds: [], pluginKeys: [] } }), onChunk: () => undefined, onDiagnostics: () => undefined });
     assert.equal(summary.cancelled, true);
   } finally { restore(); }
 });
@@ -290,7 +290,7 @@ test('definitions changed after a log is read are decoded again on workers with 
   const changeFrames = (ids: string[], offset: number) => ({ ...project, frames: project.frames.map((frame) => ids.includes(frame.id) ? { ...frame, signals: frame.signals.map((signal) => ({ ...signal, conversion: { ...signal.conversion, offset: signal.conversion.offset + offset } })) } : frame) }) as SigMixaProject;
   // A Frame with a filter and Plugins, then a plain one (only their CAN IDs are decoded again), then a Plugin change (all frames).
   const changes = [changeFrames(['ff-2a0'], 1), changeFrames(['ff-2a0', 'ff-310'], 2), { ...changeFrames(['ff-2a0', 'ff-310'], 2), plugins: project.plugins.map((plugin, index) => index ? plugin : { ...plugin, config: { ...plugin.config as object, factor: 3 } }) } as SigMixaProject];
-  const file = path.resolve('sample/sigmixa-basic.asc');
+  const file = path.resolve('sample/basic/sigmixa-basic.asc');
   const run = async (onWorkers: boolean) => {
     Object.assign(parallelLoadSettings, { minBytes: Infinity });
     const doc = new RawLogDocument(vscode.Uri.file(file), file, project, 1, registry());

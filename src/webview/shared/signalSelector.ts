@@ -3,6 +3,7 @@ import { iconButton } from './iconButton';
 import type { SignalDefinition } from '../../core/signal/signal';
 import type { SignalGroupDto } from '../../extension/editors/rawLogProtocol';
 import { t } from './i18n';
+import { markUnmeasured } from './signalLegend';
 import { signalUnitGroup, type SignalGrouping } from './signalGrouping';
 
 /** Curated graph colors shared by automatic assignment and the compact picker. */
@@ -63,7 +64,6 @@ export class SignalSelector {
         .selector-search-row>input{flex:1 1 auto;min-width:0;width:auto}
         .selector-search-row>button{flex:0 0 auto}
         .view-settings .signal-selector>.selector-search-row{grid-column:1/-1;order:-1}
-        .selector-signal.is-unmeasured>span{color:var(--vscode-descriptionForeground);font-style:italic}
         .signal-selector .selector-signal{padding-left:48px}
         /* The two ways of grouping share the full width, half each. */
         .selector-grouping-row .choice-group{display:flex;flex:1 1 100%;width:100%}
@@ -75,6 +75,8 @@ export class SignalSelector {
     }
   }
 
+  /** False for a Signal this log does not record, so legends can mark it as the list does. */
+  isMeasured(id: string): boolean { return !this.measured || this.measured.has(id); }
   /**
    * `availability.measuredIds` narrows the list to the Signals the log has, plus whatever is already chosen.
    * `availability.unmeasuredOption` adds the switch that lists the others too (view settings shared in a group).
@@ -219,10 +221,10 @@ export class SignalSelector {
         child.addEventListener('change', () => { const next = new Set(selected); child.checked ? next.add(id) : next.delete(id); this.replaceSelection(next); });
         const source = this.sources.get(id) ?? group;
         const text = document.createElement('span'); const collision = (nameCounts.get(definition.name) ?? 0) > 1; text.textContent = `${member ?? definition.name}${definition.unit ? ` (${definition.unit})` : ''}${collision ? ` · ${source.label}` : ''}`; text.title = `${text.textContent}${!collision && this.grouping === 'unit' ? ` · ${source.label}` : ''}`;
-        if (this.measured && !this.measured.has(id)) { row.classList.add('is-unmeasured'); text.title = `${text.title} · ${t('Not in this log', 'このログにはありません')}`; }
-        row.append(child, text);
+        const unmeasured = !!this.measured && !this.measured.has(id);
+        row.append(child, text); markUnmeasured(row, unmeasured);
         const colorControl = this.options.colors && this.options.onColorChange;
-        row.style.gridTemplateColumns = `20px minmax(0,1fr)${colorControl ? ' 22px' : ''}`;
+        row.style.gridTemplateColumns = `20px minmax(0,1fr)${unmeasured ? ' auto' : ''}${colorControl ? ' 22px' : ''}`;
         if (this.options.colors && this.options.onColorChange) row.appendChild(this.colorButton(id));
         // Under a parent row (indent, 28px toggle, 20px checkbox): the member starts where the parent's name does.
         if (member !== undefined) row.style.paddingLeft = `calc(var(--sm-space-2xl) + ${48 - shift}px)`; else if (shift) row.style.paddingLeft = `${48 - shift}px`;

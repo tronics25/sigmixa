@@ -1,4 +1,4 @@
-import { createLegendEntry } from '../shared/signalLegend';
+import { createLegendEntry, markUnmeasured } from '../shared/signalLegend';
 import { clearLegend, fitCardTitle, placeCardTitle } from './cardTitle';
 import { emphasizeSignal } from '../shared/signalEmphasis';
 import { crossesSeriesGap } from '../shared/chartSeries';
@@ -15,7 +15,7 @@ import { enhanceChoiceSelect, syncChoiceSelect } from '../shared/choiceGroup';
 import { iconButton, viewActionGroup } from '../shared/iconButton';
 import { bindPressRepeat } from '../shared/pressRepeat';
 import { SIGNAL_COLOR_PRESETS } from '../shared/signalSelector';
-import { createSvgCanvas } from '../shared/svgCanvas';
+import { createSvgCanvas, type ChartContext } from '../shared/svgCanvas';
 import type { SheetImage } from '../shared/imageSheet';
 import { withBrandMark } from '../shared/brandMark';
 import { placeTickLabel, separateTitles, type LabelBox } from '../shared/trajectoryLabels';
@@ -362,7 +362,7 @@ export class TrajectoryCard implements ComparisonCard {
     return parts.join(' · ');
   }
 
-  private paintMeasurement(context: CanvasRenderingContext2D, projected: readonly Projected[]): void {
+  private paintMeasurement(context: ChartContext, projected: readonly Projected[]): void {
     const value = this.measurement; if (!value) return;
     const selected = value.times.map((time) => projected.find((item) => item.track.key === value.key && item.track.targetId === value.targetId && item.time === time)).filter((item): item is Projected => Boolean(item)); if (!selected.length) return;
     context.save();
@@ -371,7 +371,7 @@ export class TrajectoryCard implements ComparisonCard {
     context.restore();
   }
 
-  private paint(context: CanvasRenderingContext2D, width: number, height: number, top: number, tracks: readonly Track[], hover: number | undefined): Projected[] {
+  private paint(context: ChartContext, width: number, height: number, top: number, tracks: readonly Track[], hover: number | undefined): Projected[] {
     context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, top, width, height);
     if (!tracks.some((track) => track.points.length)) {
       context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.font = '12px sans-serif';
@@ -427,7 +427,7 @@ export class TrajectoryCard implements ComparisonCard {
     return projected;
   }
 
-  private paint2dAxes(context: CanvasRenderingContext2D, s: ReturnType<TrajectoryCard['scales']>, project: (point: TrajectoryPoint) => { x: number; y: number }, width: number, height: number, top: number, xLabel: string, yLabel: string): void {
+  private paint2dAxes(context: ChartContext, s: ReturnType<TrajectoryCard['scales']>, project: (point: TrajectoryPoint) => { x: number; y: number }, width: number, height: number, top: number, xLabel: string, yLabel: string): void {
     context.save(); context.strokeStyle = css('--vscode-panel-border', '#555'); context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.font = '11px sans-serif'; context.globalAlpha = .7;
     for (const tick of this.definitionValue.showGrid === false ? [] : s.x.ticks) { const p = project({ timestamp: 0, x: tick, y: s.y.minimum }); const q = project({ timestamp: 0, x: tick, y: s.y.maximum }); context.beginPath(); context.moveTo(p.x, p.y); context.lineTo(q.x, q.y); context.stroke(); context.fillText(format(trajectoryAxisDisplayValue(tick, this.definitionValue.invert?.x === true)), p.x - 10, Math.min(top + height - 22, p.y + 14)); }
     for (const tick of this.definitionValue.showGrid === false ? [] : s.y.ticks) { const p = project({ timestamp: 0, x: s.x.minimum, y: tick }); const q = project({ timestamp: 0, x: s.x.maximum, y: tick }); context.beginPath(); context.moveTo(p.x, p.y); context.lineTo(q.x, q.y); context.stroke(); context.fillText(format(trajectoryAxisDisplayValue(tick, this.definitionValue.invert?.y === true)), Math.max(4, p.x - context.measureText(format(tick)).width - 6), p.y + 4); }
@@ -435,7 +435,7 @@ export class TrajectoryCard implements ComparisonCard {
     context.fillText(`X: ${xLabel}`, width / 2 - context.measureText(`X: ${xLabel}`).width / 2, top + height - 8); context.fillText(`Y: ${yLabel}`, 8, top + 14); context.restore();
   }
 
-  private paint3dAxes(context: CanvasRenderingContext2D, s: ReturnType<TrajectoryCard['scales']>, project: (point: TrajectoryPoint) => { x: number; y: number }, xLabel: string, yLabel: string, zLabel: string, width: number, height: number, top: number): void {
+  private paint3dAxes(context: ChartContext, s: ReturnType<TrajectoryCard['scales']>, project: (point: TrajectoryPoint) => { x: number; y: number }, xLabel: string, yLabel: string, zLabel: string, width: number, height: number, top: number): void {
     const axis = (from: TrajectoryPoint, to: TrajectoryPoint, color: string, text: string, title: LabelBox) => { const a = project(from); const b = project(to); context.save(); context.strokeStyle = color; context.fillStyle = color; context.globalAlpha = .8; context.beginPath(); context.moveTo(a.x, a.y); context.lineTo(b.x, b.y); context.stroke(); context.font = '600 11px sans-serif'; context.fillText(text, title.x, title.y + 11); context.restore(); };
     const origin = { timestamp: 0, x: s.x.minimum, y: s.y.minimum, z: s.z.minimum };
     const axisEnds = [{ end: { ...origin, x: s.x.maximum }, color: css('--vscode-charts-red', '#f14c4c'), text: `X: ${xLabel}` }, { end: { ...origin, y: s.y.maximum }, color: css('--vscode-charts-green', '#89d185'), text: `Y: ${yLabel}` }, { end: { ...origin, z: s.z.maximum }, color: css('--vscode-charts-blue', '#3794ff'), text: `Z: ${zLabel}` }];
@@ -482,7 +482,7 @@ export class TrajectoryCard implements ComparisonCard {
       const line = entry.querySelector('i')!;
       line.style.backgroundColor = 'transparent'; line.style.height = '0';
       line.style.borderTop = `3px ${index % 4 === 0 ? 'solid' : index % 4 === 2 ? 'dotted' : 'dashed'} ${color}`;
-      if (!has && !this.pending && this.isConfigured) { const warn = document.createElement('span'); warn.className = 'codicon codicon-warning legend-warning'; entry.appendChild(warn); entry.title = t('This file/Clip has no data for the selected X/Y/Z Signals.', 'このファイル／クリップには選択したX/Y/Zのシグナルのデータがありません。'); }
+      markUnmeasured(entry, !has && !this.pending && this.isConfigured, t('This file/Clip has no data for the selected X/Y/Z Signals.', 'このファイル／クリップには選択したX/Y/Zのシグナルのデータがありません。'));
       this.legend.appendChild(entry);
     }
   }
@@ -503,7 +503,7 @@ export class TrajectoryCard implements ComparisonCard {
     pngContext.font = '12px sans-serif'; let legendX = 24; let legendY = 54;
     const legend = [...new Map(tracks.map((track) => [track.key, track])).values()].map((track) => { const step = 50 + pngContext.measureText(track.name).width; if (legendX > 24 && legendX + step > width - 24) { legendX = 24; legendY += 20; } const place = { track, x: legendX, y: legendY }; legendX += step; return place; });
     const top = legendY + 16;
-    const paintAll = (context: CanvasRenderingContext2D) => {
+    const paintAll = (context: ChartContext) => {
       context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height);
       context.fillStyle = css('--vscode-foreground', '#ddd'); context.font = '600 20px sans-serif'; context.fillText(heading, 24, 34);
       context.font = '12px sans-serif';

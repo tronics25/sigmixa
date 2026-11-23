@@ -67,7 +67,7 @@ input[type=search],input[type=text],button{cursor:pointer}
 .graph-notice{display:flex;align-items:center;gap:var(--sm-space-md);margin:var(--sm-space-sm) var(--sm-space-md) 0;padding:var(--sm-space-xs) var(--sm-space-md);border-radius:var(--sm-radius-md);font-size:var(--sm-font-small);background:color-mix(in srgb,var(--vscode-focusBorder) 10%,transparent);border:1px solid color-mix(in srgb,var(--vscode-focusBorder) 40%,transparent)}
 .graph-notice[hidden]{display:none}
 .chart-legend-group{display:flex;align-items:center;min-width:0}
-.legend-warning{color:var(--vscode-editorWarning-foreground);margin-left:var(--sm-space-2xs)}
+
 .chart-canvas-wrap{position:relative}
 .view-resizer{flex:0 0 6px;height:6px;cursor:row-resize;touch-action:none;background:var(--vscode-panel-border)}
 .view-resizer:hover,.view-resizer:focus-visible{background:var(--vscode-focusBorder);outline:none}

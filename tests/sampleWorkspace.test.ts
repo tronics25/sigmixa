@@ -55,7 +55,7 @@ test('sample workspace persists seventeen valid Manual Frames', () => {
 });
 
 test('basic log DBC imports value labels and Multiplexing without errors', () => {
-  const result = importDbc(readFileSync(path.join(workspace, 'sigmixa-basic.dbc'), 'utf8'), 'sigmixa-basic.dbc');
+  const result = importDbc(readFileSync(path.join(workspace, 'basic', 'sigmixa-basic.dbc'), 'utf8'), 'sigmixa-basic.dbc');
   assert.deepEqual(result.diagnostics.filter((item) => item.severity === 'error'), []);
   const body = result.frames.find((frame) => frame.canId === 0x310);
   assert.deepEqual(body?.signals.find((signal) => signal.name === 'GearPosition')?.valueLabels, { 0: 'Park', 1: 'Neutral', 3: 'Drive' });
@@ -76,7 +76,7 @@ test('basic log ASC exercises parser boundaries and visible Signal ranges', asyn
   const manualContext = createManualDecodeContext();
   const observed = new Set<string>();
   const observedIds = new Set<string>();
-  const summary = await parseAscFile(path.join(workspace, 'sigmixa-basic.asc'), {
+  const summary = await parseAscFile(path.join(workspace, 'basic', 'sigmixa-basic.asc'), {
     sourceId: 'basic', batchSize: 127,
     onFrames: (frames) => {
       for (const frame of frames) {
@@ -139,7 +139,7 @@ test('basic log runs two public Plugins on one Frame and isolates the deliberate
   }
   const host = new PluginHost(registry, project.frames, project.plugins, project.pluginBindings);
   const sampleCounts = new Map<string, number>(); const diagnostics: string[] = [];
-  await parseAscFile(path.join(workspace, 'sigmixa-basic.asc'), {
+  await parseAscFile(path.join(workspace, 'basic', 'sigmixa-basic.asc'), {
     sourceId: 'plugin-basic',
     onFrames: (frames) => {
       for (const frame of frames) {
@@ -157,11 +157,11 @@ test('basic log runs two public Plugins on one Frame and isolates the deliberate
   assert.deepEqual(diagnostics, ['PLUGIN_PROCESS_THROW']);
 });
 
-test('the reference values are a CSV log listed in the workspace, read with their units', async () => {
-  const project = migrateProject(JSON.parse(readFileSync(path.join(workspace, '.sigmixa/project.json'), 'utf8')));
+test('the reference values are a CSV log listed in the basic group, read with their units', async () => {
+  const project = migrateProject(JSON.parse(readFileSync(path.join(workspace, 'basic/.sigmixa/project.json'), 'utf8')));
   assert.deepEqual(project.addedLogs, ['sigmixa-basic-decoded.csv']); assert.equal(project.externalCsvSources.length, 0);
   const diagnostics: unknown[] = []; let series: readonly MdfSignalSeries[] = [];
-  await parseCsvLogFile(path.join(workspace, 'sigmixa-basic-decoded.csv'), { sourceId: 'csv', onFrames: () => undefined, onDiagnostics: (items) => diagnostics.push(...items), onSignals: (items) => { series = items; } });
+  await parseCsvLogFile(path.join(workspace, 'basic', 'sigmixa-basic-decoded.csv'), { sourceId: 'csv', onFrames: () => undefined, onDiagnostics: (items) => diagnostics.push(...items), onSignals: (items) => { series = items; } });
   assert.deepEqual(diagnostics, []);
   assert.deepEqual(series.map((item) => [item.group, item.channel, item.unit, item.times.length, item.times[0], item.values[0]]), [
     ['', 'Vehicle Speed', 'm/s', 601, 0.001, 0], ['', 'Coolant Temperature', '°C', 601, 0.001, 72],
@@ -176,7 +176,7 @@ test('basic log decodes an effective synchronized 3D Trajectory', async () => {
   assert.deepEqual(definition.signals.slice(3).map((signal) => signal.id), ['sig-heading', 'sig-yaw-rate', 'sig-lateral-accel']);
   assert.deepEqual(validateFrameDefinition(definition).diagnostics, []);
   const samples = new Map(definition.signals.map((signal) => [signal.id, [] as Array<{ timestamp: number; value: number }>]));
-  const summary = await parseAscFile(path.join(workspace, 'sigmixa-basic.asc'), {
+  const summary = await parseAscFile(path.join(workspace, 'basic', 'sigmixa-basic.asc'), {
     sourceId: 'trajectory-basic',
     onFrames: (frames) => {
       for (const frame of frames) {
@@ -207,7 +207,7 @@ test('the property-service Plugin pairs each response with its request', async (
   }
   const host = new PluginHost(registry, project.frames, project.plugins, project.pluginBindings);
   const samples: Array<{ name: string; time: number; value: number; label?: string }> = []; const diagnostics: string[] = [];
-  await parseAscFile(path.join(workspace, 'sigmixa-basic.asc'), {
+  await parseAscFile(path.join(workspace, 'basic', 'sigmixa-basic.asc'), {
     sourceId: 'property-basic',
     onFrames: (frames) => {
       for (const frame of frames) {
@@ -233,7 +233,7 @@ test('the heartbeat has irregular intervals and a dropout, and one multiplexed F
   const project = migrateProject(JSON.parse(readFileSync(path.join(workspace, '.sigmixa/project.json'), 'utf8')));
   assert.equal(project.frames.find((frame) => frame.id === 'ff-3c0')?.expectedPeriodMs, 100);
   const heartbeat: number[] = []; const short: CanFrame[] = [];
-  await parseAscFile(path.join(workspace, 'sigmixa-basic.asc'), {
+  await parseAscFile(path.join(workspace, 'basic', 'sigmixa-basic.asc'), {
     sourceId: 'coverage-basic',
     onFrames: (frames) => { for (const frame of frames) { if (frame.canId === 0x3c0) heartbeat.push(frame.timestamp); if (frame.canId === 0x320 && frame.dataLength < 8) short.push(frame); } },
   });
@@ -246,16 +246,16 @@ test('the heartbeat has irregular intervals and a dropout, and one multiplexed F
   assert.ok(decoded.diagnostics.some((item) => item.code === 'FRAME_TOO_SHORT'));
 });
 
-const LEVELS = ['', 'brake-analysis', 'parking-drive'];
+const LEVELS = ['', 'basic', 'brake-analysis', 'parking-drive', 'city-drive'];
 const readLevel = (folder: string) => migrateProject(JSON.parse(readFileSync(path.join(workspace, folder, '.sigmixa/project.json'), 'utf8')));
 
 test('brake analysis manages several logs as one group, with its own definitions on top of the common ones', () => {
   const levels = LEVELS.map((folder) => ({ folder, project: readLevel(folder) }));
-  const located = ['sigmixa-basic.asc', 'brake-analysis/bench-test.asc', 'brake-analysis/road-test.asc', 'parking-drive/parking-garage.asc'].map((file) => ({ path: file }));
+  const located = ['basic/sigmixa-basic.asc', 'brake-analysis/bench-test.asc', 'brake-analysis/road-test.asc', 'parking-drive/parking-garage.asc'].map((file) => ({ path: file }));
   const project = composeWorkspace(levels, [...located, ...addedLogsOf(levels)]);
   const brake = project.analysisGroups!.find((group) => group.id === 'brake-analysis')!;
-  assert.deepEqual([...brake.sourcePaths].sort(), ['brake-analysis/bench-test.asc', 'brake-analysis/road-test.asc', 'sigmixa-basic.asc'], 'two logs of its own and the basic log added');
-  assert.ok(project.logPaths!.includes('sigmixa-basic.asc'), 'the added log also stays where it is');
+  assert.deepEqual([...brake.sourcePaths].sort(), ['basic/sigmixa-basic.asc', 'brake-analysis/bench-test.asc', 'brake-analysis/road-test.asc'], 'two logs of its own and the basic log added');
+  assert.ok(project.analysisGroups!.find((group) => group.id === 'basic')!.sourcePaths.includes('basic/sigmixa-basic.asc'), 'the added log also stays in its own group');
   assert.ok(resolveGroupProject(project, 'brake-analysis').frames.find((frame) => frame.canId === 0x300)?.derivedSignals?.some((signal) => signal.id === 'sig-pedal-pressure-ratio'));
   assert.ok(!project.frames.find((frame) => frame.canId === 0x300)?.derivedSignals?.some((signal) => signal.id === 'sig-pedal-pressure-ratio'), 'the common definitions are unchanged');
   assert.ok(resolveGroupProject(project, 'parking-drive').frames.find((frame) => frame.canId === 0x1a1)?.derivedSignals?.some((signal) => signal.id === 'sig-inner-wheel-difference'));
@@ -288,6 +288,26 @@ test('the car park log climbs a helix in 3D, and each wheel runs on its own radi
 });
 const mean = (list: readonly number[]) => list.reduce((sum, value) => sum + value, 0) / list.length;
 
+test('the city drive merges onto the highway, brakes hard behind the car ahead and stops, without diagnostics', async () => {
+  const project = composeWorkspace(['', 'city-drive'].map((folder) => ({ folder, project: readLevel(folder) })), []);
+  const resolved = resolveGroupProject(project, 'city-drive');
+  const definitions = new Map(resolved.frames.map((frame) => [frame.canId, frame]));
+  const values = new Map<string, Array<{ time: number; value: number }>>(); const diagnostics: unknown[] = [];
+  await parseAscFile(path.join(workspace, 'city-drive/drive.asc'), {
+    sourceId: 'drive', onDiagnostics: (items) => diagnostics.push(...items),
+    onFrames: (frames) => { const context = createManualDecodeContext(); for (const frame of frames) { const definition = definitions.get(frame.canId); assert.ok(definition, `frame ${frame.canId.toString(16)} is defined`); const decoded = decodeManualFrame(frame, definition, context); diagnostics.push(...decoded.diagnostics); for (const item of decoded.decoded) { const list = values.get(item.definition.id) ?? []; list.push({ time: item.sample.timestamp, value: item.sample.value }); values.set(item.definition.id, list); } } },
+  });
+  assert.deepEqual(diagnostics, []);
+  const series = (id: string, from = 0, to = Infinity) => values.get(id)!.filter((sample) => sample.time >= from && sample.time <= to).map((sample) => sample.value);
+  assert.ok(Math.abs(Math.max(...series('sig-speed', 108, 140)) - 100) < 2, 'about 100 km/h on the highway');
+  assert.ok(Math.max(...series('sig-brake-pressure', 140, 144)) > 60, 'hard braking');
+  assert.ok(Math.min(...series('sig-object-distance', 112, 170)) > 5, 'the car ahead is not hit');
+  assert.deepEqual(series('sig-speed', 170), series('sig-speed', 170).map(() => 0), 'stopped at the end');
+  const rpm = series('sig-engine-speed', 0, 110); const drops = rpm.slice(1).filter((value, index) => rpm[index] - value > 150).length;
+  assert.ok(drops >= 6, `the engine speed drops at each upshift (${drops})`);
+  assert.ok(Math.max(...series('sig-route-x')) - Math.min(...series('sig-route-x')) > 500, 'the route leaves the ±327 m of the common position frames');
+});
+
 test('every prepared view shows Signals that exist, on axes of their own unit systems', async () => {
   const project = readLevel('');
   const units = new Map<string, string | undefined>();
@@ -295,11 +315,11 @@ test('every prepared view shows Signals that exist, on axes of their own unit sy
   const registry = new PluginRegistry(); const runtimeRequire = createRequire(path.resolve('tests/sampleWorkspace.test.ts'));
   for (const registration of project.plugins) { const plugin = runtimeRequire(path.join(workspace, registration.source)) as SigMixaPlugin; plugin.setConfig?.(registration.config); registry.register(plugin, registration.source); }
   const host = new PluginHost(registry, project.frames, project.plugins, project.pluginBindings);
-  await parseAscFile(path.join(workspace, 'sigmixa-basic.asc'), { sourceId: 'views-basic', onFrames: (frames) => { for (const frame of frames) for (const item of host.processFrame(frame).decoded) units.set(item.definition.id, item.definition.unit); } });
+  await parseAscFile(path.join(workspace, 'basic', 'sigmixa-basic.asc'), { sourceId: 'views-basic', onFrames: (frames) => { for (const frame of frames) for (const item of host.processFrame(frame).decoded) units.set(item.definition.id, item.definition.unit); } });
   // The measured signals of the sample's MF4, MDF and CSV logs, as their logs name them.
   const { mdfSignalDefinitions } = await import('../src/extension/editors/rawLogDocument');
   const { parseMdfFile } = await import('../src/parsers/mdf/parseMdf');
-  for (const file of ['sigmixa-basic.mf4', 'sigmixa-basic-decoded.mdf', 'sigmixa-basic-decoded.csv']) {
+  for (const file of ['basic/sigmixa-basic.mf4', 'basic/sigmixa-basic-decoded.mdf', 'basic/sigmixa-basic-decoded.csv']) {
     let series: readonly MdfSignalSeries[] = []; const options = { sourceId: file, onFrames: () => undefined, onSignals: (items: readonly MdfSignalSeries[]) => { series = items; } };
     await (file.endsWith('.csv') ? parseCsvLogFile(path.join(workspace, file), options) : parseMdfFile(path.join(workspace, file), options));
     for (const { definition } of mdfSignalDefinitions(series)) units.set(definition.id, definition.unit);
@@ -311,6 +331,8 @@ test('every prepared view shows Signals that exist, on axes of their own unit sy
   for (const [key, state] of states) {
     for (const id of state.tableSelectedIds ?? []) assert.ok(units.has(id), `${key}: table Signal ${id}`);
     for (const view of state.visualizeViews) {
+      if (view.kind === 'stateTimeline' || view.kind === 'distribution') { for (const id of view.settings[`${view.kind}Ids`]) assert.ok(units.has(id), `${key} / ${view.name}: ${id}`); continue; }
+      if (view.kind === 'frameTiming' || view.kind === 'frameInterval') continue;
       if (view.kind === 'trajectory') { for (const series of view.settings.trajectorySeries) for (const id of [series.xId, series.yId, series.zId].filter(Boolean)) assert.ok(units.has(id), `${key} / ${view.name}: ${id}`); continue; }
       const axes = new Set<string>(view.settings.chartGroupLayout.flat());
       for (const id of view.settings.chartSelectedIds) {
@@ -330,11 +352,18 @@ test('every log opens with views whose Signals are in that log', async () => {
   const chain = (...folders: string[]) => folders.flatMap((folder) => levels.get(folder)!.frames);
   const groupView = (folder: string) => levels.get(folder)!.viewStates['group-view'];
   const cases: Array<[string, unknown, readonly ManualFrame[]]> = [
-    ['sigmixa-basic.asc', levels.get('')!.viewStates['log-view-default'], chain('')],
-    ['sigmixa-basic.asc', groupView('brake-analysis'), chain('brake-analysis', '')],
+    ['basic/sigmixa-basic.asc', levels.get('')!.viewStates['log-view-default'], chain('basic', '')],
+    ['basic/sigmixa-basic.asc', groupView('brake-analysis'), chain('brake-analysis', '')],
     ['brake-analysis/bench-test.asc', groupView('brake-analysis'), chain('brake-analysis', '')],
     ['brake-analysis/road-test.asc', groupView('brake-analysis'), chain('brake-analysis', '')],
     ['parking-drive/parking-garage.asc', groupView('parking-drive'), chain('parking-drive', '')],
+    ['city-drive/drive.asc', groupView('city-drive'), chain('city-drive', '')],
+    // Each log's own views ("This file").
+    ['basic/sigmixa-basic.asc', levels.get('basic')!.viewStates['log:sigmixa-basic.asc'], chain('basic', '')],
+    ['brake-analysis/road-test.asc', levels.get('brake-analysis')!.viewStates['log:road-test.asc'], chain('brake-analysis', '')],
+    ['brake-analysis/bench-test.asc', levels.get('brake-analysis')!.viewStates['log:bench-test.asc'], chain('brake-analysis', '')],
+    ['parking-drive/parking-garage.asc', levels.get('parking-drive')!.viewStates['log:parking-garage.asc'], chain('parking-drive', '')],
+    ['city-drive/drive.asc', levels.get('city-drive')!.viewStates['log:drive.asc'], chain('city-drive', '')],
   ];
   for (const [log, state, frames] of cases) {
     const present = new Set<number>();
@@ -342,7 +371,9 @@ test('every log opens with views whose Signals are in that log', async () => {
     const signalFrame = new Map<string, number>(); for (const frame of [...frames].reverse()) for (const signal of [...frame.signals, ...(frame.derivedSignals ?? [])]) signalFrame.set(signal.id, frame.canId);
     const views = (state as { visualizeViews: Array<{ kind: string; name: string; settings: Record<string, any> }> }).visualizeViews;
     for (const view of views) {
-      const ids: string[] = view.kind === 'graph' ? view.settings.chartSelectedIds : view.settings.trajectorySeries.flatMap((series: Record<string, string>) => [series.xId, series.yId, series.zId].filter(Boolean));
+      if (view.kind === 'frameTiming') continue;
+      if (view.kind === 'frameInterval') { for (const key of view.settings.frameIntervalKeys) assert.ok(present.has(Number(key.slice(2))), `${log} / ${view.name}: ${key} is in this log`); continue; }
+      const ids: string[] = view.kind === 'graph' ? view.settings.chartSelectedIds : view.kind === 'stateTimeline' || view.kind === 'distribution' ? view.settings[`${view.kind}Ids`] : view.settings.trajectorySeries.flatMap((series: Record<string, string>) => [series.xId, series.yId, series.zId].filter(Boolean));
       const drawable = ids.filter((id) => id.startsWith('external:') || (id.startsWith('plugin:') && present.has(0x6a8)) || present.has(signalFrame.get(id) ?? -1));
       assert.deepEqual(drawable, ids, `${log} / ${view.name}: every Signal comes from a Frame in this log`);
     }

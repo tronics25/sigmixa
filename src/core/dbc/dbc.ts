@@ -1,3 +1,4 @@
+import type { SendMode } from '../timing/sendingPattern';
 import { createDiagnostic, type Diagnostic } from '../diagnostics/diagnostic';
 import { normalizeFrameDefinition, parseValueLabelRaw, validateFrameDefinition, type ManualFrameDefinition, type ManualSignalDefinition } from '../manual/manualDefinition';
 
@@ -14,11 +15,60 @@ export interface DbcExportResult {
 const NUMBER = '[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?';
 const SIGNAL = new RegExp(`^\\s*SG_\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(M|m\\d+(?:M)?)?\\s*:\\s*(\\d+)\\|(\\d+)@([01])([+-])\\s*\\(\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*\\)\\s*\\[\\s*(${NUMBER})\\s*\\|\\s*(${NUMBER})\\s*\\]\\s*"((?:[^"\\\\]|\\\\.)*)"`);
 const MESSAGE = /^\s*BO_\s+(0x[0-9a-f]+|\d+)\s+([A-Za-z_][A-Za-z0-9_]*):\s*(\d+)\s+\S+/i;
+const CYCLE_TIME = new RegExp(`^\\s*BA_\\s+"GenMsgCycleTime"\\s+BO_\\s+(0x[0-9a-f]+|\\d+)\\s+(${NUMBER})\\s*;`, 'i');
+const CYCLE_TIME_DEFAULT = new RegExp(`^\\s*BA_DEF_DEF_\\s+"GenMsgCycleTime"\\s+(${NUMBER})\\s*;`, 'i');
+const SEND_TYPE_DEFINITION = /^\s*BA_DEF_\s+BO_\s+"GenMsgSendType"\s+ENUM\s+([^;]*);/im;
+const SEND_TYPE_DEFAULT = /^\s*BA_DEF_DEF_\s+"GenMsgSendType"\s+("[^"]*"|\d+)\s*;/i;
+const SEND_TYPE = /^\s*BA_\s+"GenMsgSendType"\s+BO_\s+(0x[0-9a-f]+|\d+)\s+("[^"]*"|\d+)\s*;/i;
+/** The GenMsgSendType values written on export, in this order. */
+const SEND_TYPES = ['Cyclic', 'Spontaneous', 'CyclicAndSpontaneous', 'NoMsgSendType'] as const;
+/** A GenMsgSendType value as a send mode: the many tool-specific names come down to cyclic, spontaneous (events) or both. */
+export function sendModeOfDbc(name: string): SendMode | undefined {
+  const value = name.toLowerCase(); const cyclic = value.includes('cyclic') || value.includes('periodic'); const events = value.includes('spontan') || value.includes('event') || value === 'ifactive';
+  return cyclic && events ? 'mixed' : cyclic ? 'periodic' : events ? 'event' : undefined;
+}
+// Vector's VFrameFormat values: 0 StandardCAN, 1 ExtendedCAN, 14 StandardCAN_FD, 15 ExtendedCAN_FD.
+const FRAME_FORMATS = ['StandardCAN', 'ExtendedCAN', 'reserved', 'J1939PG', 'reserved', 'reserved', 'reserved', 'reserved', 'reserved', 'reserved', 'reserved', 'reserved', 'reserved', 'reserved', 'StandardCAN_FD', 'ExtendedCAN_FD'];
 const EXTENDED_MULTIPLEXING = /^\s*SG_MUL_VAL_\s+(0x[0-9a-f]+|\d+)\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+([^;]+);/i;
 
-export function importDbc(text: string, sourceId = 'database.dbc'): DbcImportResult {
+/**
+ * DBC files have no encoding declaration: tools on Japanese Windows write Shift_JIS, others UTF-8 or Windows-1252.
+ * Valid UTF-8 is read as UTF-8. Otherwise the text is read as Shift_JIS only when it reads as Japanese; most
+ * Windows-1252 text (such as "°C" or "Länge") is also valid Shift_JIS, but turns into stray half-width katakana or lone rare kanji.
+ */
+export function decodeDbcBytes(bytes: Uint8Array): string {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { /* not UTF-8 */ }
+  let japanese: string | undefined;
+  try { japanese = new TextDecoder('shift_jis', { fatal: true }).decode(bytes); } catch { /* not Shift_JIS */ }
+  return japanese !== undefined && (readsAsJapanese(japanese) || hasCommonKanji(bytes)) ? japanese : new TextDecoder('windows-1252').decode(bytes);
+}
+
+/**
+ * A common (JIS level 1) kanji, such as a unit written as "秒" alone: its lead byte 0x88-0x9F is, in Windows-1252, a
+ * rarely used punctuation mark (the "•" of "•b"), while Windows-1252 letters such as "ä" fall on other lead bytes.
+ */
+function hasCommonKanji(bytes: Uint8Array): boolean {
+  for (let index = 0; index < bytes.length; index++) {
+    const byte = bytes[index];
+    if (byte < 0x81 || (byte >= 0xa0 && byte < 0xe0)) continue;
+    if (byte >= 0x88 && byte <= 0x9f) return true;
+    index++; // skip the trail byte of any other double-byte character
+  }
+  return false;
+}
+
+/** Kana, Japanese punctuation and full-width forms, two or more kanji in a row, or three or more half-width katakana in a row. */
+function readsAsJapanese(text: string): boolean {
+  return /[\u3000-\u30ff\uff01-\uff5e\u2103]|[\u4e00-\u9fff]{2}|[\uff61-\uff9f]{3}/.test(text);
+}
+
+export function importDbc(source: string, sourceId = 'database.dbc'): DbcImportResult {
   const frames: ManualFrameDefinition[] = []; const diagnostics: Diagnostic[] = [];
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
+  // Line breaks may be LF, CR LF or CR alone; line numbers below count the normalized text.
+  const text = source.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  const lines = text.split('\n');
+  // Signals marked both multiplexed and multiplexer (m1M): the selectors of nested multiplexing.
+  const nestedSelectors = new Set<string>();
   let current: { frame: ManualFrameDefinition; line: number } | undefined;
   const finish = () => {
     if (!current) return;
@@ -53,6 +103,7 @@ export function importDbc(text: string, sourceId = 'database.dbc'): DbcImportRes
       conversion: { type: 'scale-offset', lsb: scale, lsbText: signal[7], offset }, minimum, maximum,
       multiplexing: marker === 'M' ? { type: 'multiplexer' } : marker?.startsWith('m') ? { type: 'conditional', ranges: [{ from: Number(/^m(\d+)/.exec(marker)?.[1]), to: Number(/^m(\d+)/.exec(marker)?.[1]) }] } : undefined,
     };
+    if (marker && /^m\d+M$/.test(marker)) nestedSelectors.add(id);
     current.frame = { ...current.frame, multiplexing: current.frame.multiplexing || Boolean(marker), signals: [...current.frame.signals, definition] };
   });
   finish();
@@ -92,14 +143,59 @@ export function importDbc(text: string, sourceId = 'database.dbc'): DbcImportRes
     if (!valid) { diagnostics.push(diagnostic(sourceId, line, 'DBC_VALUE_LABEL_SYNTAX', `${target.name}: invalid or duplicate RAW value in VAL_.`)); continue; }
     frames[frameIndex] = { ...frames[frameIndex], signals: frames[frameIndex].signals.map((signal) => signal.id === target.id ? { ...signal, valueLabels: values } : signal) };
   }
+  // SG_MUL_VAL_ ties a Signal to its Multiplexer. A Frame has one Multiplexer here, so a Signal selected by a nested
+  // Multiplexer (m<n>M), or by a Signal that is itself left out, would be decoded with the wrong selector: such Signals are
+  // left out, however deep the nesting, and reported; the rest of the Frame is kept.
+  const selections = new Map<number, Array<{ readonly line: number; readonly target: ManualSignalDefinition; readonly selector: ManualSignalDefinition; readonly ranges: readonly { from: number; to: number }[] }>>();
   lines.forEach((line, index) => {
     const match = EXTENDED_MULTIPLEXING.exec(line); if (!match) return;
     const decoded = decodeDbcMessageId(Number(match[1])); const frameIndex = decoded ? frames.findIndex((frame) => frame.canId === decoded.canId && frame.extended === decoded.extended) : -1;
     if (frameIndex < 0) { diagnostics.push(diagnostic(sourceId, index + 1, 'DBC_MULTIPLEXING_FRAME', 'Extended multiplexing references an unknown Frame.', 'warning')); return; }
     const frame = frames[frameIndex]; const target = frame.signals.find((signal) => signal.name === match[2]); const selector = frame.signals.find((signal) => signal.name === match[3]); const ranges = parseDbcMuxRanges(match[4]);
     if (!target || !selector || !ranges) { diagnostics.push(diagnostic(sourceId, index + 1, 'DBC_MULTIPLEXING_REFERENCE', 'Extended multiplexing contains an invalid Signal reference or value range.', 'warning')); return; }
-    frames[frameIndex] = { ...frame, multiplexing: true, signals: frame.signals.map((signal) => signal.id === selector.id ? { ...signal, multiplexing: { type: 'multiplexer' } } : signal.id === target.id ? { ...signal, multiplexing: { type: 'conditional', ranges } } : signal) };
+    selections.set(frameIndex, [...(selections.get(frameIndex) ?? []), { line: index + 1, target, selector, ranges }]);
   });
+  for (const [frameIndex, entries] of selections) {
+    const leftOut = new Set<string>();
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const entry of entries) {
+        if (leftOut.has(entry.target.id) || !(nestedSelectors.has(entry.selector.id) || leftOut.has(entry.selector.id))) continue;
+        leftOut.add(entry.target.id); changed = true;
+        diagnostics.push(diagnostic(sourceId, entry.line, 'DBC_NESTED_MULTIPLEXING', `${frames[frameIndex].name}: Signal ${entry.target.name} is selected by the nested Multiplexer ${entry.selector.name} and was not imported. Nested multiplexing is not supported.`, 'warning'));
+      }
+    }
+    let frame = { ...frames[frameIndex], signals: frames[frameIndex].signals.filter((signal) => !leftOut.has(signal.id)) };
+    for (const { target, selector, ranges } of entries) {
+      if (leftOut.has(target.id)) continue;
+      frame = { ...frame, multiplexing: true, signals: frame.signals.map((signal) => signal.id === selector.id ? { ...signal, multiplexing: { type: 'multiplexer' } } : signal.id === target.id ? { ...signal, multiplexing: { type: 'conditional', ranges } } : signal) };
+    }
+    frames[frameIndex] = frame;
+  }
+  // GenMsgCycleTime (ms) is the Frame's expected period; the attribute's default applies to Frames without their own value.
+  let defaultPeriod: number | undefined; const periods = new Map<number, number>();
+  for (const line of lines) {
+    const fallback = CYCLE_TIME_DEFAULT.exec(line); if (fallback) { defaultPeriod = Number(fallback[1]); continue; }
+    const match = CYCLE_TIME.exec(line); if (!match) continue;
+    const decoded = decodeDbcMessageId(Number(match[1])); const frameIndex = decoded ? frames.findIndex((frame) => frame.canId === decoded.canId && frame.extended === decoded.extended) : -1;
+    if (frameIndex >= 0) periods.set(frameIndex, Number(match[2]));
+  }
+  frames.forEach((frame, index) => {
+    const period = periods.get(index) ?? defaultPeriod;
+    if (period !== undefined && Number.isFinite(period) && period > 0) frames[index] = { ...frame, expectedPeriodMs: period };
+  });
+  // GenMsgSendType is the Frame's send mode. Its values are indexes into the attribute's ENUM (or, by some tools, the names).
+  let sendTypeNames: string[] = []; let defaultSendType: string | undefined; const sendTypes = new Map<number, string>();
+  const sendTypeName = (value: string) => value.startsWith('"') ? value.slice(1, -1) : sendTypeNames[Number(value)];
+  // The ENUM's values may continue on the following lines, up to its semicolon.
+  const definition = SEND_TYPE_DEFINITION.exec(lines.join('\n')); if (definition) sendTypeNames = [...definition[1].matchAll(/"([^"]*)"/g)].map((item) => item[1]);
+  for (const line of lines) {
+    const fallback = SEND_TYPE_DEFAULT.exec(line); if (fallback) { defaultSendType = sendTypeName(fallback[1]); continue; }
+    const match = SEND_TYPE.exec(line); if (!match) continue;
+    const decoded = decodeDbcMessageId(Number(match[1])); const frameIndex = decoded ? frames.findIndex((frame) => frame.canId === decoded.canId && frame.extended === decoded.extended) : -1;
+    const name = sendTypeName(match[2]); if (frameIndex >= 0 && name !== undefined) sendTypes.set(frameIndex, name);
+  }
+  frames.forEach((frame, index) => { const name = sendTypes.get(index) ?? defaultSendType; const mode = name === undefined ? undefined : sendModeOfDbc(name); if (mode) frames[index] = { ...frames[index], sendMode: mode }; });
   const validFrames = frames.filter((frame) => {
     const validation = validateFrameDefinition(frame);
     if (validation.valid) return true;
@@ -114,12 +210,13 @@ export function exportDbc(frames: readonly ManualFrameDefinition[]): DbcExportRe
     'VERSION ""', '', 'NS_ :', '', 'BS_:', '', 'BU_: Vector__XXX', '',
   ];
   const usedMessageNames = new Set<string>(); const valueTypeLines: string[] = [];
+  const exported: Array<{ readonly dbcId: number; readonly frame: ManualFrameDefinition }> = [];
   for (const frame of frames) {
     const validation = validateFrameDefinition(frame);
     if (!validation.valid) { diagnostics.push(...validation.diagnostics); continue; }
     const messageName = uniqueDbcName(frame.name, usedMessageNames, `Frame_${frame.canId.toString(16).toUpperCase()}`);
     const dbcId = frame.extended ? frame.canId + 0x80000000 : frame.canId;
-    lines.push(`BO_ ${dbcId} ${messageName}: ${frame.frameLength} Vector__XXX`);
+    lines.push(`BO_ ${dbcId} ${messageName}: ${frame.frameLength} Vector__XXX`); exported.push({ dbcId, frame });
     const usedSignalNames = new Set<string>();
     const signalNames = new Map<string, string>(); const extendedMuxLines: string[] = [];
     const selector = frame.signals.find((signal) => signal.multiplexing?.type === 'multiplexer');
@@ -143,6 +240,26 @@ export function exportDbc(frames: readonly ManualFrameDefinition[]): DbcExportRe
     if (selectorName) for (const entry of extendedMuxLines) { const [signalName, ranges] = entry.split('\t'); lines.push(`SG_MUL_VAL_ ${dbcId} ${signalName} ${selectorName} ${ranges};`); }
     if (frame.derivedSignals?.length) diagnostics.push(diagnostic('export.dbc', undefined, 'DBC_DERIVED_SIGNALS_SKIPPED', `${frame.name}: ${frame.derivedSignals.length} Derived Signal definition(s) were not exported because standard DBC SG_ entries cannot preserve their operations.`, 'warning'));
     lines.push('');
+  }
+  // Attributes: the expected period as GenMsgCycleTime, the send mode as GenMsgSendType, and CAN FD (a Frame longer than
+  // 8 bytes) as BusType and VFrameFormat.
+  const periodic = exported.filter(({ frame }) => frame.expectedPeriodMs !== undefined);
+  const sent = exported.filter(({ frame }) => frame.sendMode !== undefined);
+  const fd = exported.some(({ frame }) => frame.frameLength > 8);
+  if (periodic.length || sent.length || fd) {
+    const definitions: string[] = []; const defaults: string[] = []; const values: string[] = [];
+    if (fd) { definitions.push('BA_DEF_  "BusType" STRING ;', `BA_DEF_ BO_  "VFrameFormat" ENUM  ${FRAME_FORMATS.map((name) => `"${name}"`).join(',')};`); defaults.push('BA_DEF_DEF_  "BusType" "CAN";', 'BA_DEF_DEF_  "VFrameFormat" "StandardCAN";'); values.push('BA_ "BusType" "CAN FD";'); }
+    if (periodic.length) {
+      const integers = periodic.every(({ frame }) => Number.isInteger(frame.expectedPeriodMs));
+      definitions.push(integers ? 'BA_DEF_ BO_  "GenMsgCycleTime" INT 0 2147483647;' : 'BA_DEF_ BO_  "GenMsgCycleTime" FLOAT 0 2147483647;'); defaults.push('BA_DEF_DEF_  "GenMsgCycleTime" 0;');
+    }
+    if (fd) for (const { dbcId, frame } of exported) values.push(`BA_ "VFrameFormat" BO_ ${dbcId} ${(frame.frameLength > 8 ? 14 : 0) + (frame.extended ? 1 : 0)};`);
+    for (const { dbcId, frame } of periodic) values.push(`BA_ "GenMsgCycleTime" BO_ ${dbcId} ${numberText(frame.expectedPeriodMs!)};`);
+    if (sent.length) {
+      definitions.push(`BA_DEF_ BO_  "GenMsgSendType" ENUM  ${SEND_TYPES.map((name) => `"${name}"`).join(',')};`); defaults.push('BA_DEF_DEF_  "GenMsgSendType" "NoMsgSendType";');
+      for (const { dbcId, frame } of sent) values.push(`BA_ "GenMsgSendType" BO_ ${dbcId} ${frame.sendMode === 'periodic' ? 0 : frame.sendMode === 'event' ? 1 : 2};`);
+    }
+    lines.push(...definitions, ...defaults, ...values, '');
   }
   // SIG_VALTYPE_ records follow the messages, as DBC writers place them.
   if (valueTypeLines.length) lines.push(...valueTypeLines, '');

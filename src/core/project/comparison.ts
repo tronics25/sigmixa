@@ -30,10 +30,19 @@ export interface ComparisonTrajectorySeries {
   readonly axes: { readonly x?: string; readonly y?: string; readonly z?: string };
 }
 
+export type ReportViewKind = 'frameTiming' | 'frameInterval' | 'stateTimeline' | 'distribution';
+
 export interface ComparisonGraphDefinition {
   readonly id: string;
-  /** Time-series graph (default) or trajectory; a trajectory uses `axes` and draws one path per target. */
-  readonly kind?: 'graph' | 'trajectory';
+  /**
+   * Time-series graph (default) or trajectory; a trajectory uses `axes` and draws one path per target. The other kinds are
+   * the frame timing, receive interval, state timeline and distribution views of a log report, drawn from what the
+   * report embeds: they are not part of a comparison.
+   */
+  readonly kind?: 'graph' | 'trajectory' | ReportViewKind;
+  /** A receive interval view's CAN IDs, and the CAN IDs a frame timing view leaves out (as `s:291` / `e:419361278`). */
+  readonly canKeys?: readonly string[];
+  readonly hiddenCanKeys?: readonly string[];
   readonly name: string;
   readonly axes?: { readonly x?: string; readonly y?: string; readonly z?: string };
   /** Instead of `axes`: several paths on one plot, as in a Visualize trajectory. Colour tells the series apart, line style the target. */

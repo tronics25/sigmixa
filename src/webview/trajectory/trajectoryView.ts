@@ -16,7 +16,7 @@ import { chartWheelGesture } from '../shared/chartWheel';
 import { bindPressRepeat } from '../shared/pressRepeat';
 import { commonDisplayUnit, convertDisplayUnit, type CommonDisplayUnit } from '../../core/units/displayUnit';
 import { downsampleExtremes } from '../../core/timeline/timeline';
-import { createSvgCanvas } from '../shared/svgCanvas';
+import { createSvgCanvas, type ChartContext } from '../shared/svgCanvas';
 import type { SheetImage } from '../shared/imageSheet';
 import { withBrandMark } from '../shared/brandMark';
 import { placeTickLabel, separateTitles, type LabelBox } from '../shared/trajectoryLabels';
@@ -268,7 +268,7 @@ export class TrajectoryView {
     if (inline !== this.inlineTitle) { this.inlineTitle = inline; this.onCardState?.({ inlineTitle: inline, noData: false }); }
     if (editing && lead!.isConnected) { lead!.focus(); if (caret) lead!.setSelectionRange(caret[0], caret[1]); }
   }
-  private paintExportLegend(context: CanvasRenderingContext2D, width: number): number {
+  private paintExportLegend(context: ChartContext, width: number): number {
     const items = this.legendEntries(); if (!items.length) return 0;
     context.save(); context.font = '12px sans-serif'; context.textAlign = 'left'; context.textBaseline = 'middle';
     let x = 24; let y = 72;
@@ -343,11 +343,11 @@ export class TrajectoryView {
     const trail = this.timeline.range ? this.analysisPoints : trailAt(this.points, this.current, this.trail === 'last-seconds' ? { type: 'last-seconds', seconds: this.trailSeconds } : { type: this.trail }); this.is3d() ? this.draw3d(context, trail, width, height) : this.draw2d(context, trail, width, height); const point = nearest(this.points, this.current);
     this.elements.querySelector('.trajectory-status')!.textContent = point ? `${timeLabel(point.timestamp, fmtSeconds)} · ${this.coordinateStatus('x', point.x)} · ${this.coordinateStatus('y', point.y)}${point.z === undefined ? '' : ` · ${this.coordinateStatus('z', point.z)}`}` : t('No current point', '現在位置なし');
   }
-  private draw2d(context: CanvasRenderingContext2D, points: readonly TrajectoryPoint[], width: number, height: number): void {
+  private draw2d(context: ChartContext, points: readonly TrajectoryPoint[], width: number, height: number): void {
     const pad = { left: 72, right: 32, top: 32, bottom: 56 }; const xScale = trajectoryAxisScale(this.points.map((point) => point.x)); const yScale = trajectoryAxisScale(this.points.map((point) => point.y)); const spanX = xScale.maximum - xScale.minimum; const spanY = yScale.maximum - yScale.minimum; const plotW = Math.max(1, width - pad.left - pad.right); const plotH = Math.max(1, height - pad.top - pad.bottom); const sx = plotW / spanX; const sy = plotH / spanY; const scale = this.equalAspect ? Math.min(sx, sy) : 1; const usedW = this.equalAspect ? spanX * scale : plotW; const usedH = this.equalAspect ? spanY * scale : plotH; const left = pad.left + (plotW - usedW) / 2; const top = pad.top + (plotH - usedH) / 2; const px = (value: number) => left + (value - xScale.minimum) * (this.equalAspect ? scale : sx); const py = (value: number) => top + usedH - (value - yScale.minimum) * (this.equalAspect ? scale : sy);
     this.draw2dAxes(context, xScale, yScale, px, py, left, top, usedW, usedH); const projected = points.map((point) => ({ x: px(point.x), y: py(point.y), depth: 0, t: point.timestamp, point })); this.projectedPoints = projected; this.strokePath(context, projected); if (this.showPoints) paintDataPoints(context, this.pointsInRange(projected)); this.paintMeasurement(context); this.paintHover(context, width, height); this.paintTracePosition(context, width, height);
   }
-  private draw2dAxes(context: CanvasRenderingContext2D, xScale: AxisScale, yScale: AxisScale, px: (value: number) => number, py: (value: number) => number, left: number, top: number, width: number, height: number): void {
+  private draw2dAxes(context: ChartContext, xScale: AxisScale, yScale: AxisScale, px: (value: number) => number, py: (value: number) => number, left: number, top: number, width: number, height: number): void {
     context.save(); context.font = `10px ${css('--vscode-editor-font-family', 'monospace')}`; context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.strokeStyle = css('--vscode-panel-border', '#555'); context.lineWidth = 1;
     if (this.showGrid) {
       context.globalAlpha = .52; for (const tick of xScale.ticks) { const x = px(tick); context.beginPath(); context.moveTo(x, top); context.lineTo(x, top + height); context.stroke(); } for (const tick of yScale.ticks) { const y = py(tick); context.beginPath(); context.moveTo(left, y); context.lineTo(left + width, y); context.stroke(); } context.globalAlpha = 1;
@@ -355,14 +355,14 @@ export class TrajectoryView {
     }
     const xEndpoints = trajectoryAxisEndpoints(xScale.minimum, xScale.maximum, this.invert.x); const yEndpoints = trajectoryAxisEndpoints(yScale.minimum, yScale.maximum, this.invert.y); drawArrow(context, px(xEndpoints.start), py(0), px(xEndpoints.end), py(0), axisColor('x')); drawArrow(context, px(0), py(yEndpoints.start), px(0), py(yEndpoints.end), axisColor('y')); paintAxisLabel(context, axisLabelBox(context, px(xEndpoints.end), py(0), this.axisLabel('x'), 'x', width + left, height + top), this.axisLabel('x'), axisColor('x')); paintAxisLabel(context, axisLabelBox(context, px(0), py(yEndpoints.end), this.axisLabel('y'), 'y', width + left, height + top), this.axisLabel('y'), axisColor('y')); context.restore();
   }
-  private draw3d(context: CanvasRenderingContext2D, points: readonly TrajectoryPoint[], width: number, height: number): void {
+  private draw3d(context: ChartContext, points: readonly TrajectoryPoint[], width: number, height: number): void {
     const scales = { x: trajectoryAxisScale(this.points.map((point) => point.x)), y: trajectoryAxisScale(this.points.map((point) => point.y)), z: trajectoryAxisScale(this.points.map((point) => point.z ?? 0)) }; const centers = this.sceneCenters(); const scale = this.sceneScale(width, height);
     // A fitted camera is fitted again to every size it is drawn at: the canvas after a resize, or an exported image.
     const view = this.camera.frame((camera) => this.fitView(camera, width, height), !this.exporting);
     const project = (x: number, y: number, z: number): ProjectedPoint => { const value = projectPoint3d({ x: x - centers[0], y: y - centers[1], z: z - centers[2] }, view, this.coordinateSystem); return { x: width / 2 + value.x * scale, y: height / 2 - value.y * scale, depth: value.depth, t: 0 }; };
     this.draw3dAxes(context, scales, project, width, height); const projected = points.map((point) => ({ ...project(point.x, point.y, point.z ?? 0), t: point.timestamp, point })); this.projectedPoints = projected; this.strokePath(context, projected); if (this.showPoints) paintDataPoints(context, this.pointsInRange(projected).sort((left, right) => left.depth - right.depth)); this.paintMeasurement(context); this.paintHover(context, width, height); this.paintTracePosition(context, width, height);
   }
-  private draw3dAxes(context: CanvasRenderingContext2D, scales: Record<'x' | 'y' | 'z', AxisScale>, project: (x: number, y: number, z: number) => ProjectedPoint, width: number, height: number): void {
+  private draw3dAxes(context: ChartContext, scales: Record<'x' | 'y' | 'z', AxisScale>, project: (x: number, y: number, z: number) => ProjectedPoint, width: number, height: number): void {
     context.save(); context.font = `10px ${css('--vscode-editor-font-family', 'monospace')}`; const gridColor = css('--vscode-panel-border', '#555');
     if (this.showGrid) {
       context.strokeStyle = gridColor; context.globalAlpha = .48; for (const tick of scales.x.ticks) drawLine(context, project(tick, scales.y.minimum, 0), project(tick, scales.y.maximum, 0)); for (const tick of scales.y.ticks) drawLine(context, project(scales.x.minimum, tick, 0), project(scales.x.maximum, tick, 0)); context.globalAlpha = 1;
@@ -383,7 +383,7 @@ export class TrajectoryView {
   private pointsInRange<T extends { readonly t: number }>(points: readonly T[]): T[] {
     const range = this.timeline.range; return range ? points.filter((point) => point.t >= range.start && point.t <= range.end) : [...points];
   }
-  private strokePath(context: CanvasRenderingContext2D, points: readonly ProjectedTrajectoryPoint[]): void {
+  private strokePath(context: ChartContext, points: readonly ProjectedTrajectoryPoint[]): void {
     this.cursorPoints.clear();
     for (const [trackIndex, track] of this.tracks.entries()) {
       const items = points.filter((point) => point.point.seriesId === track.id); const ids = [track.xId, track.yId, track.zId];
@@ -409,7 +409,7 @@ export class TrajectoryView {
     }
   }
   private updateHover(event: MouseEvent): void { const bounds = this.canvas.getBoundingClientRect(); if (!bounds.width || !bounds.height || !this.projectedPoints.length) return; const x = (event.clientX - bounds.left) * (this.canvas.clientWidth / bounds.width); const y = (event.clientY - bounds.top) * (this.canvas.clientHeight / bounds.height); let closest: ProjectedTrajectoryPoint | undefined; let distance = 18 * 18; for (const point of this.projectedPoints) { const next = (point.x - x) ** 2 + (point.y - y) ** 2; if (next <= distance) { closest = point; distance = next; } } const timestamp = closest?.t; if (timestamp === this.hoverTimestamp) return; this.hoverTimestamp = timestamp; this.timeline.set(timestamp, this.timelineSource); this.canvas.classList.toggle('point-hover', timestamp !== undefined); this.draw(); }
-  private paintMeasurement(context: CanvasRenderingContext2D): void { const selected = this.measurementTimestamps.map((timestamp) => this.projectedPoints.find((item) => item.t === timestamp)).filter((item): item is ProjectedTrajectoryPoint => Boolean(item)); if (!selected.length) return; context.save(); if (selected.length === 2) { context.strokeStyle = css('--vscode-charts-orange', '#d18616'); context.lineWidth = 1.2; context.setLineDash([]); context.beginPath(); context.moveTo(selected[0].x, selected[0].y); context.lineTo(selected[1].x, selected[1].y); context.stroke(); context.setLineDash([]); } selected.forEach((point, index) => { const color = index === 0 ? css('--vscode-charts-orange', '#d18616') : css('--vscode-charts-blue', '#75beff'); context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.strokeStyle = color; context.lineWidth = 2.5; context.beginPath(); context.arc(point.x, point.y, 7, 0, Math.PI * 2); context.fill(); context.stroke(); context.font = `600 11px ${css('--vscode-font-family', 'sans-serif')}`; context.fillStyle = color; context.textAlign = 'center'; context.textBaseline = 'bottom'; context.fillText(index === 0 ? 'A' : 'B', point.x, point.y - 9); }); context.restore(); }
+  private paintMeasurement(context: ChartContext): void { const selected = this.measurementTimestamps.map((timestamp) => this.projectedPoints.find((item) => item.t === timestamp)).filter((item): item is ProjectedTrajectoryPoint => Boolean(item)); if (!selected.length) return; context.save(); if (selected.length === 2) { context.strokeStyle = css('--vscode-charts-orange', '#d18616'); context.lineWidth = 1.2; context.setLineDash([]); context.beginPath(); context.moveTo(selected[0].x, selected[0].y); context.lineTo(selected[1].x, selected[1].y); context.stroke(); context.setLineDash([]); } selected.forEach((point, index) => { const color = index === 0 ? css('--vscode-charts-orange', '#d18616') : css('--vscode-charts-blue', '#75beff'); context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.strokeStyle = color; context.lineWidth = 2.5; context.beginPath(); context.arc(point.x, point.y, 7, 0, Math.PI * 2); context.fill(); context.stroke(); context.font = `600 11px ${css('--vscode-font-family', 'sans-serif')}`; context.fillStyle = color; context.textAlign = 'center'; context.textBaseline = 'bottom'; context.fillText(index === 0 ? 'A' : 'B', point.x, point.y - 9); }); context.restore(); }
   private updateMeasurementControls(): void { const toggle = this.elements.querySelector<HTMLButtonElement>('.trajectory-measure-toggle')!; const panel = this.elements.querySelector<HTMLElement>('.trajectory-measurement')!; const value = this.elements.querySelector<HTMLElement>('.trajectory-measurement-value')!; const clear = this.elements.querySelector<HTMLButtonElement>('.trajectory-measure-clear')!; toggle.classList.toggle('primary', this.measurementMode); toggle.setAttribute('aria-pressed', String(this.measurementMode)); this.canvas.classList.toggle('measurement-mode', this.measurementMode); panel.hidden = !this.measurementMode && !this.measurementTimestamps.length; clear.hidden = !this.measurementTimestamps.length; if (!this.measurementTimestamps.length) value.textContent = t('Select point A on the trajectory.', '軌跡上の始点Aを選択してください。'); else if (this.measurementTimestamps.length === 1) value.textContent = `${this.measurementPointText('A', this.measurementTimestamps[0])} · ${t('Select point B.', '終点Bを選択してください。')}`; else value.textContent = this.measurementSummary() ?? '—'; }
   /** "A 1.2 s (X 10 m, Y 2 m)": a measured point's time and coordinates. */
   private measurementPointText(name: 'A' | 'B', timestamp: number): string {
@@ -422,7 +422,7 @@ export class TrajectoryView {
    * The Trace position in the bottom-right corner (not on exported images): the time, then one row per series with its
    * own X/Y/Z, in aligned columns, so several series can be compared at a glance.
    */
-  private paintTracePosition(context: CanvasRenderingContext2D, width: number, height: number): void {
+  private paintTracePosition(context: ChartContext, width: number, height: number): void {
     // Shown only for the Trace cursors actually drawn: the same points, so the box never appears without a cursor.
     if (this.exporting || !this.cursorPoints.size) return;
     const rows = this.tracks.flatMap((track, index) => {
@@ -449,7 +449,7 @@ export class TrajectoryView {
     });
     context.restore();
   }
-  private paintHover(context: CanvasRenderingContext2D, width: number, height: number): void {
+  private paintHover(context: ChartContext, width: number, height: number): void {
     const projected = this.hoverTimestamp === undefined ? undefined : this.projectedPoints.find((item) => item.t === this.hoverTimestamp);
     if (!projected) return; const lines = [
     { text: `${timeLabel(projected.t, fmtSeconds)}`, color: css('--vscode-foreground', '#ddd') },
@@ -470,13 +470,13 @@ export class TrajectoryView {
     const trail = this.timeline.range ? this.analysisPoints : trailAt(this.points, this.current, this.trail === 'last-seconds' ? { type: 'last-seconds', seconds: this.trailSeconds } : { type: this.trail });
     const savedHover = this.hoverTimestamp; const savedHighlight = this.highlightedTrackId; this.hoverTimestamp = undefined; this.highlightedTrackId = undefined; this.exporting = true;
     // Clipped to the scene: a fitted camera can carry the axis lines past it, over the heading and legend.
-    const paintScene = (target: CanvasRenderingContext2D) => { target.save(); target.translate(0, sceneTop); target.beginPath(); target.rect(0, 0, width, sceneHeight); target.clip(); this.is3d() ? this.draw3d(target, trail, width, sceneHeight) : this.draw2d(target, trail, width, sceneHeight); target.restore(); };
+    const paintScene = (target: ChartContext) => { target.save(); target.translate(0, sceneTop); target.beginPath(); target.rect(0, 0, width, sceneHeight); target.clip(); this.is3d() ? this.draw3d(target, trail, width, sceneHeight) : this.draw2d(target, trail, width, sceneHeight); target.restore(); };
     paintScene(context);
     const vector = createSvgCanvas(width, height); this.paintExportHeader(vector.context, width, height, summary, heading); this.paintExportLegend(vector.context, width); paintScene(vector.context);
     this.hoverTimestamp = savedHover; this.highlightedTrackId = savedHighlight; this.exporting = false;
     this.draw(); return { canvas, pngDataUrl: canvas.toDataURL('image/png'), svg: vector.toSvg(), width, height };
   }
-  private paintExportHeader(context: CanvasRenderingContext2D, width: number, height: number, summary: string, heading: string): void { context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height); context.fillStyle = css('--vscode-foreground', '#ddd'); context.font = '600 22px sans-serif'; context.fillText(heading, 24, 34); context.font = '12px sans-serif'; context.fillStyle = css('--vscode-descriptionForeground', '#999'); context.fillText(summary, width - context.measureText(summary).width - 24, 32); }
+  private paintExportHeader(context: ChartContext, width: number, height: number, summary: string, heading: string): void { context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height); context.fillStyle = css('--vscode-foreground', '#ddd'); context.font = '600 22px sans-serif'; context.fillText(heading, 24, 34); context.font = '12px sans-serif'; context.fillStyle = css('--vscode-descriptionForeground', '#999'); context.fillText(summary, width - context.measureText(summary).width - 24, 32); }
   private persist(): void { this.storeActiveTrack(); this.renderLegend(); this.save({ trajectorySeries: this.tracks, trajectoryXId: this.xId, trajectoryYId: this.yId, trajectoryZId: this.zId, trajectoryInvert: this.invert, trajectoryEqualAspect: this.equalAspect, trajectoryConnectGaps: this.connectGaps, trajectoryShowGrid: this.showGrid, trajectoryShowPoints: this.showPoints, trajectoryTrail: this.trail, trajectoryTrailSeconds: this.trailSeconds, trajectoryView: this.camera.view, trajectoryViewFit: this.camera.fitted, trajectoryCoordinateSystem: this.coordinateSystem }); }
 }
 
@@ -485,23 +485,23 @@ export function viewAlongLabel(axis: 'x' | 'y' | 'z'): string { const letter = a
 
 function nearest(points: readonly TrajectoryPoint[], timestamp: number): TrajectoryPoint | undefined { return points.reduce<TrajectoryPoint | undefined>((best, point) => !best || Math.abs(point.timestamp - timestamp) < Math.abs(best.timestamp - timestamp) ? point : best, undefined); }
 function nearestProjected(points: readonly { x: number; y: number; t: number }[], timestamp: number) { return points.reduce<typeof points[number] | undefined>((best, point) => !best || Math.abs(point.t - timestamp) < Math.abs(best.t - timestamp) ? point : best, undefined); }
-function dot(context: CanvasRenderingContext2D, x: number, y: number): void { context.fillStyle = css('--vscode-editorCursor-foreground', '#fff'); context.beginPath(); context.arc(x, y, 5, 0, Math.PI * 2); context.fill(); context.strokeStyle = '#0008'; context.stroke(); }
+function dot(context: ChartContext, x: number, y: number): void { context.fillStyle = css('--vscode-editorCursor-foreground', '#fff'); context.beginPath(); context.arc(x, y, 5, 0, Math.PI * 2); context.fill(); context.strokeStyle = '#0008'; context.stroke(); }
 type AxisScale = ReturnType<typeof trajectoryAxisScale>;
 interface ProjectedPoint { readonly x: number; readonly y: number; readonly depth: number; readonly t: number; }
 interface ProjectedTrajectoryPoint extends ProjectedPoint { readonly point: TrajectoryPoint; }
 function axisColor(axis: 'x' | 'y' | 'z'): string { return axis === 'x' ? css('--vscode-charts-red', '#f14c4c') : axis === 'y' ? css('--vscode-charts-green', '#89d185') : css('--vscode-charts-blue', '#75beff'); }
-function drawLine(context: CanvasRenderingContext2D, start: { readonly x: number; readonly y: number }, end: { readonly x: number; readonly y: number }): void { context.beginPath(); context.moveTo(start.x, start.y); context.lineTo(end.x, end.y); context.stroke(); }
-function drawArrow(context: CanvasRenderingContext2D, startX: number, startY: number, endX: number, endY: number, color: string): void {
+function drawLine(context: ChartContext, start: { readonly x: number; readonly y: number }, end: { readonly x: number; readonly y: number }): void { context.beginPath(); context.moveTo(start.x, start.y); context.lineTo(end.x, end.y); context.stroke(); }
+function drawArrow(context: ChartContext, startX: number, startY: number, endX: number, endY: number, color: string): void {
   const angle = Math.atan2(endY - startY, endX - startX); context.save(); context.strokeStyle = color; context.fillStyle = color; context.lineWidth = 1.7; context.beginPath(); context.moveTo(startX, startY); context.lineTo(endX, endY); context.stroke(); context.beginPath(); context.moveTo(endX, endY); context.lineTo(endX - Math.cos(angle - Math.PI / 6) * 8, endY - Math.sin(angle - Math.PI / 6) * 8); context.lineTo(endX - Math.cos(angle + Math.PI / 6) * 8, endY - Math.sin(angle + Math.PI / 6) * 8); context.closePath(); context.fill(); context.restore();
 }
-function axisLabelBox(context: CanvasRenderingContext2D, x: number, y: number, text: string, axis: 'x' | 'y' | 'z', width: number, height: number) {
+function axisLabelBox(context: ChartContext, x: number, y: number, text: string, axis: 'x' | 'y' | 'z', width: number, height: number) {
   context.save(); context.font = `600 11px ${css('--vscode-font-family', 'sans-serif')}`; const boxWidth = context.measureText(text).width + 10; const boxHeight = 18; const desiredX = x + 7; const desiredY = axis === 'y' ? y - boxHeight - 7 : y + 7; context.restore();
   return { x: clamp(desiredX, 4, Math.max(4, width - boxWidth - 4)), y: clamp(desiredY, 4, Math.max(4, height - boxHeight - 4)), width: boxWidth, height: boxHeight };
 }
-function paintAxisLabel(context: CanvasRenderingContext2D, { x: boxX, y: boxY, width: boxWidth, height: boxHeight }: LabelBox, text: string, color: string): void {
+function paintAxisLabel(context: ChartContext, { x: boxX, y: boxY, width: boxWidth, height: boxHeight }: LabelBox, text: string, color: string): void {
   context.save(); context.font = `600 11px ${css('--vscode-font-family', 'sans-serif')}`; context.globalAlpha = .9; context.fillStyle = css('--vscode-editorHoverWidget-background', '#252526'); context.fillRect(boxX, boxY, boxWidth, boxHeight); context.globalAlpha = 1; context.strokeStyle = color; context.strokeRect(boxX, boxY, boxWidth, boxHeight); context.fillStyle = color; context.textAlign = 'left'; context.textBaseline = 'middle'; context.fillText(text, boxX + 5, boxY + boxHeight / 2); context.restore();
 }
-function paintDataPoints(context: CanvasRenderingContext2D, points: readonly { readonly x: number; readonly y: number }[]): void {
+function paintDataPoints(context: ChartContext, points: readonly { readonly x: number; readonly y: number }[]): void {
   if (!points.length) return; const step = Math.max(1, Math.ceil(points.length / 600)); context.save(); context.fillStyle = css('--vscode-charts-purple', '#b180d7'); context.globalAlpha = .62; context.beginPath(); for (let index = 0; index < points.length; index += step) { const point = points[index]; context.moveTo(point.x + 2, point.y); context.arc(point.x, point.y, 2, 0, Math.PI * 2); } context.fill(); context.restore();
 }
 function clamp(value: number, min: number, max: number): number { return Math.max(min, Math.min(max, value)); }

@@ -25,3 +25,22 @@ export function chartWheelGesture(event: ChartWheelInput, pageSize: number): Cha
   if (Math.abs(deltaX) > Math.abs(deltaY)) return { kind: 'pan', delta: deltaX };
   return { kind: 'scroll' };
 }
+
+export interface WheelRange { readonly start: number; readonly end: number }
+
+/**
+ * How much one wheel event zooms: below 1 zooms in. A mouse wheel notch (a delta of about 100) is about 1.4 times;
+ * the small deltas of a trackpad pinch add up to the same over the gesture, so the graph follows the fingers.
+ */
+export function wheelZoomFactor(delta: number): number {
+  const bounded = Math.max(-240, Math.min(240, delta));
+  return Math.exp(bounded * (Math.abs(delta) < 50 ? 0.01 : 0.0035));
+}
+
+/** The span shown after a wheel pan: the graph moves by the wheel's pixels, as if dragged, and stops at the ends. */
+export function wheelPanRange(view: WheelRange, full: WheelRange, delta: number, plotWidth: number): WheelRange {
+  const span = view.end - view.start; if (span >= full.end - full.start) return { start: full.start, end: full.end };
+  let start = view.start + delta / Math.max(1, plotWidth) * span;
+  start = Math.max(full.start, Math.min(start, full.end - span));
+  return { start, end: start + span };
+}

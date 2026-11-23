@@ -16,14 +16,14 @@ import { dragClipEdge } from '../../core/project/clipRangeEdit';
 import { drawClipSpans } from '../shared/clipSpans';
 import { t } from '../shared/i18n';
 import { convertDisplayUnit, preferredDisplayUnit, resolveDisplayUnit } from '../../core/units/displayUnit';
-import { crossesSeriesGap, displaySeriesRange, interpolatedSeriesSample } from '../shared/chartSeries';
+import { crossesSeriesGap, displaySeriesRange, interpolatedSeriesSample, SeriesPath } from '../shared/chartSeries';
 import { MeasuredSamples, measuredValueLabel, type MeasuredSampleQuery } from '../shared/measuredSamples';
-import { chartWheelGesture } from '../shared/chartWheel';
-import { createLegendEntry } from '../shared/signalLegend';
+import { chartWheelGesture, wheelPanRange, wheelZoomFactor } from '../shared/chartWheel';
+import { createLegendEntry, markUnmeasured } from '../shared/signalLegend';
 import { emphasizeSignal } from '../shared/signalEmphasis';
 import { arrangeSingleChartGroups, findGraphIndexBySignals, type ChartGroupLayout } from '../shared/chartLayout';
-import { layoutHoverLabelBoxes, layoutTimestampMarker, timestampGutter, paintTimestampConnector, type HoverLabelRect, paintValueBoxes, type ValueBox } from '../shared/chartHoverLabels';
-import { createSvgCanvas } from '../shared/svgCanvas';
+import { layoutHoverLabelBoxes, layoutTimestampMarker, timestampGutter, timestampGutterRows, paintTimestampConnector, type HoverLabelRect, paintValueBoxes, type ValueBox } from '../shared/chartHoverLabels';
+import { createSvgCanvas, type ChartContext } from '../shared/svgCanvas';
 import { createLaneToggle, laneIndexAt, laneRuns, lanesHeight, paintChartLanes, placeLaneToggle, type ChartLane } from '../shared/chartLanes';
 import type { SheetImage } from '../shared/imageSheet';
 import { withBrandMark } from '../shared/brandMark';
@@ -76,8 +76,12 @@ export class TimeSeriesView {
   private counter = 200_000;
   private latestSeriesRequest = 0;
   private refreshTimer: number | undefined;
-  private viewportRequestTimer: number | undefined;
   private requestedViewRange: { start: number; end: number } | undefined;
+  /** The span being navigated to: shown at once from the samples held, while its own samples are fetched behind. */
+  private navRange: { start: number; end: number } | undefined;
+  /** The span whose samples are being fetched for the navigation; one request at a time. */
+  private navRequested: { start: number; end: number } | undefined;
+  private navDrawScheduled = false;
   private catalogRequested = false;
   private latestCatalogRequest = 0;
   private visible = false;
@@ -176,7 +180,7 @@ export class TimeSeriesView {
     this.selectedRange = this.timeline?.range;
     this.unsubscribeClipRanges = this.timeline?.subscribeClipRanges(() => { if (this.visible) this.draw(false); });
     this.unsubscribeTimeDisplay = onTimeDisplayChange(() => { const range = this.selectedRange; if (range) this.elements.querySelector('.clip-range')!.textContent = `${timeRangeLabel(range.start, range.end, formatSeconds)} · ${formatNumber(range.end - range.start)} s`; this.updateZoomControls(); if (this.visible) this.draw(false); });
-    this.unsubscribeViewRange = this.timeline?.subscribeViewRange((_range, source) => { if (source !== this.timelineSource && this.shown.length) this.requestSeries(this.fullRange); });
+    this.unsubscribeViewRange = this.timeline?.subscribeViewRange((range, source) => { if (source === this.timelineSource || !this.shown.length) return; if (this.fullRange && this.viewRange && this.series.length) this.showSpan(range ?? this.fullRange); else this.requestSeries(this.fullRange); });
     this.unsubscribeRange = this.timeline?.subscribeRange((range, source) => { if (source === this.timelineSource) return; if (!range) { this.latestRangeRequest = ++this.counter; this.rangePending = false; } this.selectedRange = range; this.updateRangeControls(); this.draw(false); });
     this.measured = new MeasuredSamples((requestId, query) => this.post({ type: 'measuredSignalsRequest', requestId, selectedIds: query.signalIds, timestamp: query.timestamp }), () => this.scheduleInteractionDraw());
     this.selected = new Set(initial?.chartSelectedIds ?? []);
@@ -306,7 +310,10 @@ export class TimeSeriesView {
       this.seriesPending = false; this.series = message.series; this.fullRange = message.fullRange; this.fullRangeKnown = true;
       // The card collapses or expands before the graph is drawn into it.
       this.reportCardState(this.cardState.inlineTitle && !this.noData);
-      this.viewRange = reconcileViewRange(this.requestedViewRange ?? this.viewRange, this.fullRange); this.requestedViewRange = undefined;
+      // While navigating, the span on screen is the one the user has reached by now, not the one these samples were asked for.
+      const reached = this.navRange; const fetched = this.navRequested; this.navRequested = undefined;
+      this.viewRange = reconcileViewRange(reached ?? this.requestedViewRange ?? this.viewRange, this.fullRange); this.requestedViewRange = undefined;
+      if (reached && fetched && (reached.start !== fetched.start || reached.end !== fetched.end)) this.fetchNavigation(); else this.navRange = undefined;
       this.updateStatus(); this.updateZoomControls();
       this.draw();
     } else if (message.type === 'analysisProgress') {
@@ -352,30 +359,45 @@ export class TimeSeriesView {
    * (`navigate`: zoom, pan, reset) publishes it to the other graphs, and any other request adopts the shared span.
    */
   private requestSeries(range = this.viewRange, navigate = false): void {
+    this.navRequested = undefined; if (navigate) this.navRange = undefined;
     if (navigate) this.timeline?.setViewRange(range && this.fullRange && range.start <= this.fullRange.start && range.end >= this.fullRange.end ? undefined : range, this.timelineSource);
     else range = this.timeline?.viewRange ?? range;
     if (!this.shown.length) { this.seriesPending = false; this.series = []; this.fullRange = undefined; this.viewRange = undefined; this.requestedViewRange = undefined; this.updateStatus(); this.updateZoomControls(); this.draw(); return; } this.seriesPending = true; this.requestedViewRange = range ? { ...range } : undefined; this.updateStatus(); this.updateExportAction(); this.latestSeriesRequest = ++this.counter; this.post({ type: 'signalSeriesRequest', requestId: this.latestSeriesRequest, selectedIds: this.shown, range: this.requestedViewRange, maxPoints: 4000 }); if (!this.series.length) this.draw(); }
   private scheduleSeriesRefresh(): void { if (this.refreshTimer !== undefined) return; this.refreshTimer = window.setTimeout(() => { this.refreshTimer = undefined; if (this.visible) this.requestSeries(); }, 250); }
 
   private zoom(factor: number, centerTimestamp?: number): void {
-    if (!this.fullRange) return; const current = this.requestedViewRange ?? this.viewRange ?? this.fullRange; const fullSpan = this.fullRange.end - this.fullRange.start || 1; const center = (current.start + current.end) / 2; const span = Math.max(fullSpan * 0.005, Math.min(fullSpan, (current.end - current.start || fullSpan) * factor));
+    if (!this.fullRange) return; const current = this.navRange ?? this.requestedViewRange ?? this.viewRange ?? this.fullRange; const fullSpan = this.fullRange.end - this.fullRange.start || 1; const center = (current.start + current.end) / 2; const span = Math.max(fullSpan * 0.005, Math.min(fullSpan, (current.end - current.start || fullSpan) * factor));
     const pivot = centerTimestamp ?? center; const ratio = (pivot - current.start) / (current.end - current.start || 1); let start = pivot - span * ratio; let end = start + span; if (start < this.fullRange.start) { start = this.fullRange.start; end = start + span; } if (end > this.fullRange.end) { end = this.fullRange.end; start = end - span; }
-    this.requestSeries({ start, end }, true);
+    this.navigate({ start, end });
   }
 
+  /** The wheel moves the graph by what was turned, at once: it neither waits for the gesture to end nor jumps by fixed steps. */
   private handleWheel(event: WheelEvent): void {
     if (!this.fullRange || !this.viewRange) return; const gesture = chartWheelGesture(event, this.canvas.clientWidth);
-    if (gesture.kind === 'scroll') return;
-    if (!gesture.delta) return;
-    if (gesture.kind === 'zoom') { event.preventDefault(); const timestamp = this.timestampAt(event as unknown as MouseEvent); const factor = gesture.delta < 0 ? 1 / 1.5 : 1.5; this.scheduleViewportNavigation(() => this.zoom(factor, timestamp)); return; }
-    const fullSpan = this.fullRange.end - this.fullRange.start; const span = this.viewRange.end - this.viewRange.start; if (span >= fullSpan - 1e-12) return; event.preventDefault(); const direction = Math.sign(gesture.delta); this.scheduleViewportNavigation(() => this.panStep(direction));
+    if (gesture.kind === 'scroll' || !gesture.delta) return;
+    if (gesture.kind === 'zoom') { event.preventDefault(); this.zoom(wheelZoomFactor(gesture.delta), this.timestampAt(event)); return; }
+    const current = this.navRange ?? this.viewRange; if (current.end - current.start >= this.fullRange.end - this.fullRange.start - 1e-12) return;
+    event.preventDefault(); this.navigate(wheelPanRange(current, this.fullRange, gesture.delta, this.axisGeometry(this.canvas.getBoundingClientRect().width).plotWidth));
   }
 
-  private panStep(direction: number): void {
-    if (!this.fullRange || !this.viewRange || !direction) return; const span = this.viewRange.end - this.viewRange.start; const shift = Math.sign(direction) * span * .18; let start = this.viewRange.start + shift; let end = this.viewRange.end + shift; if (start < this.fullRange.start) { start = this.fullRange.start; end = start + span; } if (end > this.fullRange.end) { end = this.fullRange.end; start = end - span; } this.requestSeries({ start, end }, true);
+  /** Moves this graph and, through the shared timeline, the others to a span. */
+  private navigate(range: { start: number; end: number }): void {
+    if (!this.fullRange || !this.series.length) { this.requestSeries(range, true); return; }
+    this.timeline?.setViewRange(range.start <= this.fullRange.start && range.end >= this.fullRange.end ? undefined : range, this.timelineSource);
+    this.showSpan(range);
   }
 
-  private scheduleViewportNavigation(action: () => void): void { window.clearTimeout(this.viewportRequestTimer); this.viewportRequestTimer = window.setTimeout(() => { this.viewportRequestTimer = undefined; if (this.visible) action(); }, 100); }
+  /**
+   * Shows a span at once from the samples already held and fetches its own samples behind. Only one request is out at a
+   * time: the next goes when its answer arrives, for wherever the view is by then. Asking on every wheel event instead
+   * would throw each answer away as stale, and nothing would be drawn until the gesture stopped.
+   */
+  private showSpan(range: { start: number; end: number }): void {
+    this.viewRange = { ...range }; this.navRange = { ...range }; this.updateZoomControls();
+    if (!this.navDrawScheduled) { this.navDrawScheduled = true; requestAnimationFrame(() => { this.navDrawScheduled = false; if (this.visible) this.draw(false); }); }
+    if (!this.navRequested) this.fetchNavigation();
+  }
+  private fetchNavigation(): void { const range = this.navRange; if (!range || !this.visible) { this.navRange = undefined; return; } this.requestSeries(range); this.navRequested = { ...range }; }
 
   private timestampAt(event: Pick<MouseEvent, 'clientX'>): number | undefined {
     if (!this.viewRange) return undefined; const rect = this.canvas.getBoundingClientRect(); const { left, plotWidth: width } = this.axisGeometry(rect.width);
@@ -470,7 +492,7 @@ export class TimeSeriesView {
   }
 
   /** The lanes under the graph from `top`; `interactions` adds the cursor, its values and the emphasized Signal (not in images). */
-  private paintLanes(context: CanvasRenderingContext2D, width: number, top: number, interactions: boolean): void {
+  private paintLanes(context: ChartContext, width: number, top: number, interactions: boolean): void {
     const view = this.viewRange; if (!view) return;
     const cursor = interactions ? this.cursorTimestamp : undefined;
     const markerTimes = [...this.markers.values()].flatMap((marker) => { const timestamp = this.measured.referenceTimestamp(`marker:${marker.id}`); return timestamp === undefined ? [] : [{ id: marker.id, timestamp }]; });
@@ -502,7 +524,7 @@ export class TimeSeriesView {
     this.measured.update(queries);
   }
 
-  private paintChart(context: CanvasRenderingContext2D, width: number, height: number, top: number, bottom: number, interactions: boolean, legendHeights: readonly number[], gutters = this.axisGutters ?? []): ChartGeometry | undefined {
+  private paintChart(context: ChartContext, width: number, height: number, top: number, bottom: number, interactions: boolean, legendHeights: readonly number[], gutters = this.axisGutters ?? []): ChartGeometry | undefined {
     if (interactions) this.clipMarkers = [];
     if (!this.series.length || !this.viewRange) return undefined; const { left, right, plotWidth: plotW, axisWidth } = this.axisGeometry(width); const plotH = Math.max(1, height - top - bottom); const x = (timestamp: number) => left + (timestamp - this.viewRange!.start) / (this.viewRange!.end - this.viewRange!.start || 1) * plotW;
     const graphs = timeSeriesGraphs(this.series, this.mode, this.groupLayout); const graphSignalIds = timeSeriesGraphSignalIds(graphs); const rangeGraphIndex = findGraphIndexBySignals(graphSignalIds, this.rangeSignalIds); const graphCount = Math.max(1, graphs.length); let precedingHeight = 0; context.font = '11px sans-serif'; context.lineWidth = 1;
@@ -533,14 +555,14 @@ export class TimeSeriesView {
         context.save(); context.beginPath(); context.rect(left, laneTop, plotW, laneHeight); context.clip();
         for (const item of group.items) {
           const color = this.color(item.definition.id); context.strokeStyle = color; context.lineWidth = interactions && item.definition.id === this.highlightedSignalId ? 3 : 1.5;
-          context.beginPath(); let started = false; let previousTimestamp: number | undefined;
+          const path = new SeriesPath(context); let previousTimestamp: number | undefined;
           for (const sample of item.samples) {
             const value = seriesDisplayValue(item, sample.value, this.mode, group.displayUnit); const usable = Number.isFinite(value) && (sample.quality === undefined || sample.quality === 'valid');
-            if (!usable) { if (!this.connectGaps) started = false; continue; }
-            const separated = !this.connectGaps && previousTimestamp !== undefined && crossesSeriesGap(item.gaps, previousTimestamp, sample.timestamp); const px = x(sample.timestamp); const py = y(value);
-            started && !separated ? context.lineTo(px, py) : context.moveTo(px, py); started = true; previousTimestamp = sample.timestamp;
+            if (!usable) { if (!this.connectGaps) path.end(); continue; }
+            const separated = !this.connectGaps && previousTimestamp !== undefined && crossesSeriesGap(item.gaps, previousTimestamp, sample.timestamp);
+            path.point(x(sample.timestamp), y(value), separated); previousTimestamp = sample.timestamp;
           }
-          context.stroke(); context.lineWidth = 1.5; this.drawEvents(context, item, x, y, group.displayUnit);
+          path.stroke(); context.lineWidth = 1.5; this.drawEvents(context, item, x, y, group.displayUnit);
         }
         context.restore();
         if (interactions && cursorTimestamp !== undefined && this.hoverGraphIndex === graphIndex) for (const item of group.items) {
@@ -576,6 +598,8 @@ export class TimeSeriesView {
       }
       if (interactions && cursorTimestamp !== undefined && cursorTimestamp >= this.viewRange.start && cursorTimestamp <= this.viewRange.end && (this.hoverGraphIndex === undefined || this.hoverGraphIndex === graphIndex)) { context.strokeStyle = css('--vscode-editorCursor-foreground', '#fff'); context.beginPath(); const px = x(cursorTimestamp); context.moveTo(px, laneTop); context.lineTo(px, laneTop + laneHeight); context.stroke(); }
       const occupiedLabels: HoverLabelRect[] = [];
+      // The Timestamps that move keep within the rows the gutter has; only markers make it taller (see measureAxisGutters).
+      const movingRows = timestampGutterRows(gutters[graphIndex] ?? 0);
       const fixedTimestampMarkers = visibleMarkers.map((marker) => {
         const timestampMarker = this.createTimestampMarker(context, x(marker.timestamp), timeLabel(marker.timestamp, formatSeconds), left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop);
         occupiedLabels.push(timestampMarker.rect); return timestampMarker;
@@ -584,17 +608,17 @@ export class TimeSeriesView {
       if (this.selectedRange && rangeGraphIndex === graphIndex) {
         for (const edge of ['start', 'end'] as const) {
           const timestamp = this.selectedRange[edge]; if (timestamp < this.viewRange.start || timestamp > this.viewRange.end) continue;
-          const marker = this.createTimestampMarker(context, x(timestamp), `${edge === 'start' ? t('Start', '開始') : t('End', '終了')} ${timeLabel(timestamp, formatSeconds)}`, left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop, this.activeRangeEdge === edge);
+          const marker = this.createTimestampMarker(context, x(timestamp), `${edge === 'start' ? t('Start', '開始') : t('End', '終了')} ${timeLabel(timestamp, formatSeconds)}`, left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop, this.activeRangeEdge === edge, movingRows);
           occupiedLabels.push(marker.rect); rangeTimestampMarkers.push(marker);
         }
       }
       const traceTimestampMarker = traceVisible
-        ? { ...this.createTimestampMarker(context, x(traceTime), timeLabel(traceTime, formatSeconds), left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop), color: traceColor }
+        ? { ...this.createTimestampMarker(context, x(traceTime), timeLabel(traceTime, formatSeconds), left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop, false, movingRows), color: traceColor }
         : undefined;
       if (traceTimestampMarker) occupiedLabels.push(traceTimestampMarker.rect);
       const cursorMatchesRangeEdge = this.selectedRange && this.activeRangeEdge && cursorTimestamp === this.selectedRange[this.activeRangeEdge] && rangeGraphIndex === graphIndex;
       const timestampMarker = interactions && cursorTimestamp !== undefined && this.hoverGraphIndex === graphIndex && !cursorMatchesRangeEdge
-        ? this.createTimestampMarker(context, x(cursorTimestamp), timeLabel(cursorTimestamp, formatSeconds), left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop)
+        ? this.createTimestampMarker(context, x(cursorTimestamp), timeLabel(cursorTimestamp, formatSeconds), left, left + plotW, laneTop + laneHeight, occupiedLabels, laneTop, false, movingRows)
         : undefined;
       if (timestampMarker) occupiedLabels.push(timestampMarker.rect);
       for (const marker of visibleMarkers) this.paintHoverValues(context, x(marker.timestamp), markerValues.get(marker.id) ?? [], left, left + plotW, laneTop, laneTop + laneHeight, occupiedLabels);
@@ -608,7 +632,7 @@ export class TimeSeriesView {
     return { left, right, top: top + (legendHeights[0] ?? 0) + 30, bottom: top + plotH - 28, width: plotW, x };
   }
 
-  private drawEvents(context: CanvasRenderingContext2D, item: SignalSeriesDto, x: (t: number) => number, y: (v: number) => number, displayUnit?: string): void {
+  private drawEvents(context: ChartContext, item: SignalSeriesDto, x: (t: number) => number, y: (v: number) => number, displayUnit?: string): void {
     context.fillStyle = this.color(item.definition.id);
     for (const event of item.events) {
       const points = event.endTimestamp === undefined || event.endTimestamp === event.timestamp ? [event.timestamp] : [event.timestamp, event.endTimestamp];
@@ -616,17 +640,17 @@ export class TimeSeriesView {
     }
   }
 
-  private paintHoverValues(context: CanvasRenderingContext2D, cursorX: number, values: readonly CanvasHoverValue[], left: number, right: number, top: number, bottom: number, occupied: HoverLabelRect[] = []): void {
+  private paintHoverValues(context: ChartContext, cursorX: number, values: readonly CanvasHoverValue[], left: number, right: number, top: number, bottom: number, occupied: HoverLabelRect[] = []): void {
     paintValueBoxes(context, cursorX, values, { left, right, top, bottom }, occupied, { family: css('--vscode-editor-font-family', 'monospace'), background: css('--vscode-editorHoverWidget-background', '#252526') });
   }
 
 
-  private createTimestampMarker(context: CanvasRenderingContext2D, cursorX: number, text: string, left: number, right: number, bottom: number, occupied: readonly HoverLabelRect[] = [], top = 0, emphasized = false): CanvasTimestampMarker {
+  private createTimestampMarker(context: ChartContext, cursorX: number, text: string, left: number, right: number, bottom: number, occupied: readonly HoverLabelRect[] = [], top = 0, emphasized = false, maxRows = Number.POSITIVE_INFINITY): CanvasTimestampMarker {
     context.save(); context.font = `600 11px ${css('--vscode-editor-font-family', 'monospace')}`; const width = context.measureText(text).width + 12; context.restore();
-    return { text, cursorX, bottom, rect: layoutTimestampMarker(cursorX, width, 18, left, right, bottom, occupied, top), emphasized };
+    return { text, cursorX, bottom, rect: layoutTimestampMarker(cursorX, width, 18, left, right, bottom, occupied, top, maxRows), emphasized };
   }
 
-  private paintTimestampMarker(context: CanvasRenderingContext2D, marker: CanvasTimestampMarker): void {
+  private paintTimestampMarker(context: ChartContext, marker: CanvasTimestampMarker): void {
     context.save(); context.font = `600 11px ${css('--vscode-editor-font-family', 'monospace')}`; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillStyle = css('--vscode-editorHoverWidget-background', '#252526'); context.fillRect(marker.rect.x, marker.rect.y, marker.rect.width, marker.rect.height); context.strokeStyle = marker.color ?? (marker.emphasized ? css('--vscode-focusBorder', '#007acc') : css('--vscode-editorCursor-foreground', '#fff')); context.lineWidth = marker.emphasized ? 2 : 1; context.strokeRect(marker.rect.x, marker.rect.y, marker.rect.width, marker.rect.height); context.fillStyle = marker.color ?? css('--vscode-editor-foreground', '#ddd'); context.fillText(marker.text, marker.rect.x + marker.rect.width / 2, marker.rect.y + marker.rect.height / 2); context.restore();
   }
 
@@ -659,25 +683,26 @@ export class TimeSeriesView {
     return chartAxisGeometry(width, timeSeriesGroups(this.series, this.mode).length);
   }
 
-  private measureAxisGutters(width: number, interactive: boolean): readonly number[] {
+  /**
+   * The gutter under each graph's time axis: room for the rows its markers' Timestamps need. The Timestamps that move while
+   * the graph is in use (the pointer's, the Trace position's, the selected range's) keep within those rows, moving sideways
+   * when a row is taken, so hovering, playing or selecting never changes the graph's height and the views below stay put.
+   */
+  private measureAxisGutters(width: number, _interactive: boolean): readonly number[] {
     if (!this.viewRange) return [];
     const context = document.createElement('canvas').getContext('2d')!;
     context.font = `600 11px ${css('--vscode-editor-font-family', 'monospace')}`;
     const graphs = timeSeriesGraphs(this.series, this.mode, this.groupLayout);
     const ids = timeSeriesGraphSignalIds(graphs);
-    const rangeIndex = findGraphIndexBySignals(ids, this.rangeSignalIds);
     const range = this.viewRange;
     const { left, right, plotWidth } = this.axisGeometry(width);
     const x = (time: number) => left + (time - range.start) / (range.end - range.start || 1) * plotWidth;
     return graphs.map((_, index) => {
       const labels: { x: number; text: string }[] = [];
-      const add = (time: number | undefined, prefix = '') => { if (time !== undefined && time >= range.start && time <= range.end) labels.push({ x: x(time), text: `${prefix}${timeLabel(time, formatSeconds)}` }); };
-      for (const marker of this.markers.values()) if (findGraphIndexBySignals(ids, marker.signalIds) === index) add(this.measured.referenceTimestamp(`marker:${marker.id}`));
-      if (this.selectedRange && rangeIndex === index) { add(this.selectedRange.start, t('Start ', '開始 ')); add(this.selectedRange.end, t('End ', '終了 ')); }
-      add(this.timeline?.position);
-      const cursor = this.cursorTimestamp;
-      const matchesEdge = this.selectedRange && this.activeRangeEdge && cursor === this.selectedRange[this.activeRangeEdge] && rangeIndex === index;
-      if (interactive && this.hoverGraphIndex === index && !matchesEdge) add(cursor);
+      for (const marker of this.markers.values()) if (findGraphIndexBySignals(ids, marker.signalIds) === index) {
+        const time = this.measured.referenceTimestamp(`marker:${marker.id}`);
+        if (time !== undefined && time >= range.start && time <= range.end) labels.push({ x: x(time), text: timeLabel(time, formatSeconds) });
+      }
       return Math.max(this.timeline?.position === undefined ? 0 : 21, timestampGutter(context, labels, left, width - right));
     });
   }
@@ -692,7 +717,7 @@ export class TimeSeriesView {
       graphs[graphIndex].forEach((group) => {
         for (const item of group.items) {
           const entry = createLegendEntry(signalLegendLabel(item.definition, this.mode, group.displayUnit), this.color(item.definition.id), (active) => this.highlightSignal(active ? item.definition.id : undefined));
-          entry.className = 'chart-legend-entry'; entry.dataset.signalId = item.definition.id; emphasizeSignal(entry, item.definition.id === this.highlightedSignalId, this.color(item.definition.id)); items.appendChild(entry);
+          entry.className = 'chart-legend-entry'; entry.dataset.signalId = item.definition.id; markUnmeasured(entry, !this.selector.isMeasured(item.definition.id)); emphasizeSignal(entry, item.definition.id === this.highlightedSignalId, this.color(item.definition.id)); items.appendChild(entry);
         }
       }); if (graphIndex === 0 && lead && !this.noData) items.prepend(lead); row.append(items); legend.appendChild(row); const height = Math.max(34, Math.ceil(row.scrollHeight) + 1); row.style.height = `${height}px`; heights.push(height); top += height + GRAPH_HEIGHT;
     }
@@ -726,10 +751,10 @@ export class TimeSeriesView {
     const vector = createSvgCanvas(width, height); const svgContext = vector.context; svgContext.fillStyle = css('--vscode-editor-background', '#1e1e1e'); svgContext.fillRect(0, 0, width, height); svgContext.fillStyle = css('--vscode-foreground', '#ddd'); svgContext.font = '600 22px sans-serif'; svgContext.fillText(heading, 24, 34); svgContext.font = '12px sans-serif'; svgContext.fillStyle = css('--vscode-descriptionForeground', '#999'); svgContext.fillText(range, width - svgContext.measureText(range).width - 24, 32); this.paintChart(svgContext, width, height, chartTop, height - chartTop - contentHeight, false, legendHeights, gutters); if (lanes) this.paintLanes(svgContext, width, chartTop + contentHeight, false);
     return { canvas, pngDataUrl: canvas.toDataURL('image/png'), svg: vector.toSvg(), width, height };
   }
-  private paintGraphLegend(context: CanvasRenderingContext2D, groups: readonly TimeSeriesGroup[], width: number, top: number): void {
+  private paintGraphLegend(context: ChartContext, groups: readonly TimeSeriesGroup[], width: number, top: number): void {
     context.save(); let x = 24; let y = top + 20; context.font = '12px sans-serif'; groups.forEach((group) => { for (const item of group.items) { const label = signalLegendLabel(item.definition, this.mode, group.displayUnit); const entryWidth = 26 + context.measureText(label).width; if (x + entryWidth > width - 24) { x = 24; y += 20; } context.strokeStyle = this.color(item.definition.id); context.lineWidth = 3; context.beginPath(); context.moveTo(x, y - 4); context.lineTo(x + 16, y - 4); context.stroke(); context.fillStyle = css('--vscode-foreground', '#ddd'); context.fillText(ellipsize(context, label, width - x - 28), x + 22, y); x += Math.min(entryWidth, width - x - 24) + 16; } }); context.restore();
   }
-  private measureGraphLegendHeight(context: CanvasRenderingContext2D, groups: readonly TimeSeriesGroup[], width: number): number { context.save(); context.font = '12px sans-serif'; let x = 24; let rows = 1; groups.forEach((group) => { for (const item of group.items) { const label = signalLegendLabel(item.definition, this.mode, group.displayUnit); const entryWidth = 26 + context.measureText(label).width; if (x + entryWidth > width - 24) { x = 24; rows++; } x += Math.min(entryWidth, width - x - 24) + 16; } }); context.restore(); return Math.max(34, 12 + rows * 20); }
+  private measureGraphLegendHeight(context: ChartContext, groups: readonly TimeSeriesGroup[], width: number): number { context.save(); context.font = '12px sans-serif'; let x = 24; let rows = 1; groups.forEach((group) => { for (const item of group.items) { const label = signalLegendLabel(item.definition, this.mode, group.displayUnit); const entryWidth = 26 + context.measureText(label).width; if (x + entryWidth > width - 24) { x = 24; rows++; } x += Math.min(entryWidth, width - x - 24) + 16; } }); context.restore(); return Math.max(34, 12 + rows * 20); }
   private color(id: string): string { return this.colors.get(id) ?? SIGNAL_COLOR_PRESETS[Math.abs(hash(id)) % SIGNAL_COLOR_PRESETS.length]; }
   private snapshot(): Partial<LogViewState> { return { chartSignalGrouping: this.selector.groupingMode, chartSelectedIds: [...this.selected], chartColors: Object.fromEntries(this.colors), chartMode: this.mode, chartConnectGaps: this.connectGaps, chartAxisRange: this.axisRange, chartGroupLayout: this.groupLayout, chartPaneWidth: this.paneWidth, chartPaneCollapsed: this.paneCollapsed, chartLanesExpanded: this.lanesExpanded }; }
   private persist(): void { this.save(this.snapshot()); }
@@ -766,7 +791,7 @@ function reconcileViewRange(view: { readonly start: number; readonly end: number
 function seriesDisplayValue(item: SignalSeriesDto, value: number, mode: 'raw' | 'normalized', displayUnit?: string): number { return mode === 'normalized' ? normalizeValue(value, item.globalMinimum ?? value, item.globalMaximum ?? value) : convertDisplayUnit(value, item.definition.unit, displayUnit); }
 function displayValueLabel(item: SignalSeriesDto, value: number, mode: 'raw' | 'normalized', displayUnit?: string): string { const unit = (mode === 'normalized' ? item.definition.unit : displayUnit)?.trim(); const actual = mode === 'normalized' ? value : convertDisplayUnit(value, item.definition.unit, displayUnit); return `${formatNumber(actual)}${unit ? ` ${unit}` : ''}`; }
 function signalLegendLabel(definition: SignalDefinition, mode: 'raw' | 'normalized', displayUnit?: string): string { const sourceUnit = definition.unit?.trim(); const unit = mode === 'raw' && displayUnit && sourceUnit && displayUnit !== sourceUnit ? `${sourceUnit} → ${displayUnit}` : sourceUnit; return `${definition.name}${unit ? ` (${unit})` : ''}`; }
-function ellipsize(context: CanvasRenderingContext2D, text: string, maxWidth: number): string { if (context.measureText(text).width <= maxWidth) return text; let low = 0; let high = text.length; while (low < high) { const middle = Math.ceil((low + high) / 2); if (context.measureText(`${text.slice(0, middle)}…`).width <= maxWidth) low = middle; else high = middle - 1; } return `${text.slice(0, low)}…`; }
+function ellipsize(context: ChartContext, text: string, maxWidth: number): string { if (context.measureText(text).width <= maxWidth) return text; let low = 0; let high = text.length; while (low < high) { const middle = Math.ceil((low + high) / 2); if (context.measureText(`${text.slice(0, middle)}…`).width <= maxWidth) low = middle; else high = middle - 1; } return `${text.slice(0, low)}…`; }
 function css(name: string, fallback: string): string { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }
 /** Times in seconds: seven significant digits, but never rounding the whole seconds of a large (Unix) time. */
 function formatSeconds(value: number): string { return Number.isFinite(value) && Math.abs(value) >= 1e5 ? Number(value.toFixed(6)).toString() : formatNumber(value); }

@@ -1,3 +1,4 @@
+import type { ChartContext } from './svgCanvas';
 export interface HoverLabelInput {
   readonly y: number;
 }
@@ -68,29 +69,47 @@ export function layoutHoverLabelBoxes<T extends HoverLabelBoxInput>(
   return result;
 }
 
-/** Keep Timestamp badges in the existing time-axis gutter, never over plotted data. */
-export function layoutTimestampMarker(cursorX: number, width: number, height: number, left: number, right: number, bottom: number, occupied: readonly HoverLabelRect[] = [], _top = 0): HoverLabelRect {
+/**
+ * Keep Timestamp badges in the existing time-axis gutter, never over plotted data. A badge takes the first row where it
+ * is free. With `maxRows`, it stays within that many rows: when they are all taken at its time, it moves sideways on a row
+ * to the nearest free place (its connector still points at its time), so the gutter, and the graph's height, stay as they are.
+ */
+export function layoutTimestampMarker(cursorX: number, width: number, height: number, left: number, right: number, bottom: number, occupied: readonly HoverLabelRect[] = [], _top = 0, maxRows = Number.POSITIVE_INFINITY): HoverLabelRect {
   const availableWidth = Math.max(1, right - left - 4); const markerWidth = Math.min(width, availableWidth);
+  const minX = left + 2; const maxX = Math.max(minX, right - markerWidth - 2);
   const base = {
-    x: Math.max(left + 2, Math.min(right - markerWidth - 2, cursorX - markerWidth / 2)),
+    x: Math.max(minX, Math.min(maxX, cursorX - markerWidth / 2)),
     y: bottom + 5,
     width: markerWidth,
     height,
   };
-  for (let row = 0; row <= occupied.length; row++) {
+  const rows = Math.max(1, Math.min(occupied.length + 1, maxRows));
+  for (let row = 0; row < rows; row++) {
     const candidate = { ...base, y: base.y + row * (height + 3) };
     if (occupied.every((rect) => !rectsOverlap(candidate, rect))) return candidate;
   }
-  return base;
+  if (!Number.isFinite(maxRows)) return base;
+  let best: HoverLabelRect | undefined; let bestDistance = Number.POSITIVE_INFINITY;
+  for (let row = 0; row < rows; row++) {
+    const y = base.y + row * (height + 3);
+    for (const rect of occupied) for (const x of [rect.x + rect.width + 4, rect.x - markerWidth - 4]) {
+      if (x < minX || x > maxX) continue; const candidate = { ...base, x, y }; const distance = Math.abs(x - base.x);
+      if (distance < bestDistance && occupied.every((other) => !rectsOverlap(candidate, other))) { best = candidate; bestDistance = distance; }
+    }
+  }
+  return best ?? base;
 }
 
-export function timestampGutter(context: CanvasRenderingContext2D, labels: readonly { x: number; text: string }[], left: number, right: number): number {
+/** How many rows of Timestamp badges a gutter of `gutter` pixels holds, the row on the axis labels included. */
+export function timestampGutterRows(gutter: number): number { return Math.floor(Math.max(0, gutter) / 21) + 1; }
+
+export function timestampGutter(context: ChartContext, labels: readonly { x: number; text: string }[], left: number, right: number): number {
   const occupied: HoverLabelRect[] = [];
   for (const label of labels) occupied.push(layoutTimestampMarker(label.x, context.measureText(label.text).width + 12, 18, left, right, 0, occupied));
   return Math.max(0, ...occupied.map((rect) => rect.y + rect.height + 5 - 28));
 }
 
-export function paintTimestampConnector(context: CanvasRenderingContext2D, cursorX: number, bottom: number, rect: HoverLabelRect): void {
+export function paintTimestampConnector(context: ChartContext, cursorX: number, bottom: number, rect: HoverLabelRect): void {
   context.save(); context.lineWidth = 1; context.beginPath(); context.moveTo(cursorX, bottom);
   context.lineTo(cursorX, rect.y - 2); context.lineTo(Math.max(rect.x, Math.min(rect.x + rect.width, cursorX)), rect.y);
   context.stroke(); context.restore();
@@ -121,7 +140,7 @@ export interface ValueBox { readonly y: number; readonly sampleX: number; readon
  * Draws value boxes next to `cursorX` without overlapping `occupied`, and adds their areas to it. An emphasized box has
  * bolder text and a thicker border, and its width is measured in that font so the text is never cut off.
  */
-export function paintValueBoxes(context: CanvasRenderingContext2D, cursorX: number, values: readonly ValueBox[], bounds: { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number }, occupied: HoverLabelRect[], fonts: { readonly family: string; readonly background: string }): void {
+export function paintValueBoxes(context: ChartContext, cursorX: number, values: readonly ValueBox[], bounds: { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number }, occupied: HoverLabelRect[], fonts: { readonly family: string; readonly background: string }): void {
   const font = (emphasized?: boolean) => `${emphasized ? 800 : 600} 11px ${fonts.family}`;
   context.save(); context.textBaseline = 'middle';
   const measured = values.map((value) => { context.font = font(value.emphasized); return { ...value, cursorX, width: context.measureText(value.text).width + 10, height: 16 }; });

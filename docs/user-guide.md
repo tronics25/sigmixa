@@ -56,7 +56,7 @@ The value-label action names specific RAW integers, for example `0 = Off` and `1
 
 Enable Multiplexing on a Frame to show **ACTIVE WHEN**. One Signal is the `Multiplexer`; others are `Always`, a value such as `1`, or ranges such as `2-4`. Use the arrows above the layout to inspect each Multiplexer value.
 
-A Frame may set an **expected period**. The trace then shows how far each interval deviates from it.
+A Frame may set an **expected period** and a **send mode**: periodic, on events, or periodic + events (as a DBC's `GenMsgSendType`). Left automatic, each log estimates the send mode and the base cycle from the frame's receive times. The trace shows how far each interval deviates from the expected period, or from the cycle found in the log (marked `≈`).
 
 ## 3. Add Derived Signals
 
@@ -94,15 +94,15 @@ The Table shows selected Signals at their original event timestamps.
 
 ## 6. Visualize: graphs, trajectories and the trace
 
-**Visualize** holds any number of graph and trajectory views, one below another. All views share one time position.
+**Visualize** holds any number of views, one below another: graphs, trajectories, frame timing, receive intervals, state timelines, and distribution and statistics. All views share one time position.
 
-- **Add views.** Use **Add graph** to add a graph or a trajectory. Each view has its own Signals and settings. A view shows its name and legend on one row; point at a view, or select it, to show its actions (settings, move up, duplicate, delete). Click the name to rename it. A graph none of whose Signals are in the log shrinks to one line.
+- **Add views.** Use **Add view** to add a view of any of these kinds. Each view has its own Signals and settings. A view shows its name and legend on one row; point at a view, or select it, to show its actions (settings, move up, duplicate, delete). Click the name to rename it. A graph none of whose Signals are in the log shrinks to one line.
 - **Change a view's settings.** Click a view, or choose **Graph settings**, to open its settings beside the views: Signals, axes and display options.
 
 ### Graphs
 
 - **Unit systems.** Compatible units are converted onto one axis. For example, km/h and m/s share one speed axis. When all Signals already use one unit, that unit is kept. A graph shows up to two unit systems on real-value axes; with more, choose normalized display, or let SigMixa split the extra unit systems into further graphs.
-- **Gaps.** **Connect gaps** draws continuous lines between samples taken at different times or periods. It changes only the drawing, not the measured values.
+- **Gaps.** **Connect gaps** draws continuous lines between samples taken at different times or periods. It changes only the drawing, not the measured values. Turned off, a line is broken where reception broke off for the frame's send mode: where no frame came for 1.6 base cycles. A Signal of a frame sent on events is not broken. A Signal follows its frame, so a multiplexed Signal breaks only where the frame itself stopped, not between the frames of other multiplexer values. Measured Signals of MF4, MDF and CSV logs are judged from their own times.
 - **Values.** Hover to read values along the line. Click to pin a marker, which snaps to the original measured samples. A compact offset such as `@-3ms` marks a sample taken at a different time from the marker. Hover a legend entry to emphasize that Signal's line and values.
 - **One time axis.** Every graph shows the same time span. Zoom with the buttons at the top right of Visualize, or zoom and scroll with the wheel on any graph: all graphs follow.
 - **Time ranges.** Drag over a time range in any graph. The range belongs to the whole log, so its controls appear at the top right of Visualize: adjust its edges by CAN Timestamp, zoom to it, create a Clip from it, or clear it.
@@ -113,6 +113,24 @@ The Table shows selected Signals at their original event timestamps.
 - **Camera.** **X**, **Y** and **Z** look along that axis from its + side, and **Reset view** returns to the default angle. They only move the camera, and fit the whole trajectory to the view; the fit follows when the view is resized or rotated until you zoom or pan. Drag to rotate and scroll to zoom.
 - **Coordinate system.** A 3D trajectory is right-handed by default. If your axes are left-handed, such as X forward, Y right and Z up, choose **Left-handed** in the drawing settings; every view is then shown mirrored, so the axes appear the way they are defined.
 - **Inspection.** Show data points, inspect coordinates, or select two points to measure elapsed time, coordinate differences, straight distance, path length and average speed.
+
+These views work like graphs: each has the same actions (save image, settings, move up, duplicate, delete), its Signals or CAN IDs are chosen in the graph settings from the same kind of list, and on the views with a time axis you drag to select a time range and click to clear it. The selected range is shown on every view.
+
+### Frame timing and receive intervals
+
+- **Frame timing.** One row per CAN ID shows when its frames were received, on the same time axis as the graphs. A Frame's name is written above its row. Each row shows the base cycle: the Frame's expected period, or, without one, the cycle found in the log (marked `≈`); a CAN ID sent on events is marked as an event. The hover box names the send mode, with "(estimated)" when it was read from the log. For a Frame sent periodic + events, the frames sent on events between the cycle frames have a dot. Zoomed out, a row shows how many frames each stretch of time has; zoom in to see single frames.
+- **Gaps.** Where the time between two frames is more than 1.6 times the base cycle, the row marks the stretch without frames. The button beside the view's name counts these gaps; each click selects the next one as the time range, so its span shows on every graph and can be zoomed to with **Zoom to selected range**. The view keeps its zoom and moves only when the gap is not in it. Choose the CAN IDs to show in the graph settings.
+- **Receive interval.** Choose CAN IDs in the graph settings to see the time between each one's frames as one point per frame; several CAN IDs are drawn one below another, each on its own scale. The period is a dashed line with a band of ±10 % around it; intervals too long for the plot are marked at its top with their value. The count, mean, minimum, maximum and standard deviation of the intervals in the time span shown are written beside the view's name, or, with several CAN IDs, above each one's plot.
+
+### State timeline
+
+- **States as bands.** One row per Signal shows each stretch of time the Signal keeps one value as a band, with the value label as the state's name (or the value, when it has no label). The state at the pointer, or at the time position, is written at the end of each row. Hover a band to see when it starts and ends and how long it lasts.
+- **Signals.** A new view shows the log's Signals that have value labels; choose others in the graph settings. A Signal that changes too often to be read as states, such as a speed, is not drawn as bands.
+
+### Distribution and statistics
+
+- **For the time span shown.** One row per Signal shows how its values are spread, and their count, minimum, maximum, mean and standard deviation, over the time span the graphs show. Zoom or scroll a graph to count another span; the span is written beside the view's name. While a time range is selected, that range is counted instead, whatever the graphs show.
+- **Reading a row.** The bars divide the Signal's whole value range in the log, so they keep their places when the time span changes. The line under the bars runs from the least to the greatest value in the span, and the dashed mark is the mean. The pointed mark is the Signal's value at the time position (or at the time under the pointer on a graph), so it moves along the bars while playing. Every sample counts alike. Hover a bar for its value range and its share of the samples.
 
 ### The trace
 
@@ -132,7 +150,7 @@ Column widths are not saved: each time a log opens, every column of the RAW log,
 
 ### Export
 
-Use **Export** to save the views as SVG or PNG, or as an HTML report. The report is a single file that works offline, with interactive graphs and tables. Choose **Standard** (data thinned evenly where there is a lot, and the report says what was thinned) or **All samples**. The report of a log also marks the log's Clips on its graphs.
+Use **Export** to save the views as SVG or PNG, or as an HTML report. The report is a single file that works offline, with interactive graphs and tables. Choose **Standard** (data thinned evenly where there is a lot, and the report says what was thinned) or **All samples**. The report of a log also marks the log's Clips on its graphs, and includes the frame timing, receive interval, state timeline and distribution views after the graphs, on the same time axis. In the report these views have the same actions as its graphs (save image, settings, move up, duplicate, delete) and can be added with **Add view**. Their settings choose what they show from what the report holds: every CAN ID, the Signals with value labels, and, for a distribution view, the Signals of the report's graphs. A time range selected on a graph is what a distribution view counts. In a report, the statistics of a distribution view follow the time span in steps of 1/500 of the log (or Clip), and the view says which span they cover.
 
 ## 7. Clips and comparison
 
@@ -160,10 +178,14 @@ DBC import supports:
 - Frame and Signal names, standard and extended CAN IDs
 - Intel/Motorola byte order, signedness, Scale/Offset, Min/Max and units
 - Multiplexing and direct `VAL_` value labels
+- The cycle time (`GenMsgCycleTime`), as the Frame's expected period
+- The send type (`GenMsgSendType`), as the Frame's send mode: cyclic types as periodic, spontaneous ones as on events, and those that are both as periodic + events
+
+Files written in UTF-8, Shift_JIS or Windows-1252 are read. With nested multiplexing, the Frame is imported, but the Signals selected by a nested multiplexer are left out and listed in the diagnostics.
 
 Existing matching CAN IDs require confirmation before they are replaced.
 
-DBC export writes the same directly decoded Signal properties. Derived Signals have no standard DBC representation, so SigMixa reports them and leaves them out. DBC-only metadata such as comments, attributes and named value tables is not kept.
+DBC export writes the same directly decoded Signal properties, the expected period, the send mode, and CAN FD information for CAN FD Frames. Derived Signals have no standard DBC representation, so SigMixa reports them and leaves them out. DBC-only metadata such as comments, attributes and named value tables is not kept.
 
 ## 9. Use Plugins safely
 

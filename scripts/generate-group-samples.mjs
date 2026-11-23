@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { brakeFrame, parkingFrames, persistFrame } from './sample-frames.mjs';
-import { brakeViews, graph, logView, pinned, TRACE_COLUMNS, trajectory } from './sample-views.mjs';
+import { brakeViews, fileView, frameTiming, graph, logView, pinned, TRACE_COLUMNS, trajectory } from './sample-views.mjs';
 
 // Analysis groups. Each is a folder with its own `.sigmixa`: the definitions it adds to the common ones and the views
 // its logs share.
@@ -54,11 +54,22 @@ function writeLevel(folder, project) {
 const withDerived = (frame, derivedSignals, extra = {}) => ({ ...frame, ...extra, derivedSignals: [...frame.derivedSignals, ...derivedSignals] });
 
 // Brake analysis adds how much pressure each % of pedal travel gives. Its views are shared by all its logs and Clips.
-const pedalRatio = { id: 'sig-pedal-pressure-ratio', name: 'Pedal to Pressure Ratio', unit: 'bar/%', operation: { type: 'expression', expression: '[Brake Pressure] / max([Brake Pedal Position], 1)' } };
+const pedalRatio = { id: 'sig-pedal-pressure-ratio', name: 'Pedal to Pressure Ratio', unit: 'bar/%', operation: { type: 'expression', expression: '[Brake Pressure] / max([Brake Pedal Position], 5)' } };
 writeLevel('brake-analysis', level([withDerived(brakeFrame(), [pedalRatio])], {
-  addedLogs: ['../sigmixa-basic.asc'],
+  addedLogs: ['../basic/sigmixa-basic.asc'],
   clips: CLIP_STARTS.map((start, index) => ({ id: `clip-road-stop-${index + 1}`, name: `Stop ${index + 1}`, sourcePath: 'road-test.asc', sourceFileName: 'road-test.asc', range: { start, end: start + 4.5 } })),
-  viewStates: { 'group-view': brakeViews('Brake Analysis', [graph('view-pedal-ratio', 'Pedal to Pressure Ratio', ['sig-pedal-pressure-ratio'], ['unit:bar/%'], 200)]) },
+  viewStates: {
+    // Each log's own views: its pedal and pressure on axes of their own, and how its frames arrived.
+    'log:road-test.asc': fileView([
+      graph('view-pedal-pressure', 'Pedal and Brake Pressure', ['sig-pedal', 'sig-brake-pressure'], ['family:percentage', 'family:pressure']),
+      frameTiming('view-frame-timing', 'Frame Timing'),
+    ]),
+    'log:bench-test.asc': fileView([
+      graph('view-pedal-pressure', 'Pedal and Brake Pressure', ['sig-pedal', 'sig-brake-pressure'], ['family:percentage', 'family:pressure']),
+      frameTiming('view-frame-timing', 'Frame Timing'),
+    ]),
+    'group-view': brakeViews([graph('view-pedal-ratio', 'Pedal to Pressure Ratio', ['sig-pedal-pressure-ratio'], ['unit:bar/%'], 200)]),
+  },
 }));
 
 // Low-speed driving in a car park. It adds the inner wheel difference (内輪差): how far inside the front inner wheel the
@@ -79,6 +90,13 @@ const flat = ({ zId: _z, ...series }) => series;
 writeLevel('parking-drive', level([withDerived(motion, [innerWheelDifference])], {
   clips: [{ id: 'clip-parking-space', name: 'Into the Space', sourcePath: 'parking-garage.asc', sourceFileName: 'parking-garage.asc', range: { start: 72.6, end: 86 } }],
   viewStates: {
+    // The log's own views: its sensors against each other (dead reckoning and GNSS on the rear axle's path; the GNSS
+    // antenna is silent under the floors) and how the frames arrived.
+    'log:parking-garage.asc': fileView([
+      trajectory('view-sensors-2d', 'Rear Axle, IMU and GNSS from Above (2D)', [flat(axle), flat(position('series-imu', 'IMU', 'imu')), flat(gnss)], { height: 460, connectGaps: false }),
+      graph('view-heights', 'GNSS Antenna and Rear Axle Height', ['sig-gnss-z', 'sig-pose-z'], ['family:length'], 220),
+      frameTiming('view-frame-timing', 'Frame Timing'),
+    ], parkingTrace),
     'group-view': logView([
       trajectory('view-drive-3d', 'Drive up the Car Park (3D)', [axle, gnss], { view: OBLIQUE, height: 520, connectGaps: false }),
       trajectory('view-wheels-3d', 'Four Wheel Tracks (3D)', wheels, { view: OBLIQUE, height: 520 }),

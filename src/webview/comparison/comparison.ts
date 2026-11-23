@@ -6,6 +6,7 @@ import type { SignalDefinition } from '../../core/signal/signal';
 import type { ComparisonTargetStateDto, ComparisonToExtension, ComparisonToWebview } from '../../extension/comparison/comparisonProtocol';
 import type { SignalGroupDto } from '../../extension/editors/rawLogProtocol';
 import { CHOICE_GROUP_STYLES } from '../shared/choiceGroup';
+import { comparisonParts, type MoreView } from './comparisonParts';
 import { closeActionMenu, showActionMenu } from '../shared/contextMenu';
 import { COMPONENT_STYLES, DESIGN_TOKENS } from '../shared/designTokens';
 import { t } from '../shared/i18n';
@@ -49,8 +50,8 @@ const pendingSeries = new Map<number, string>();
 
 app.innerHTML = `<style>${DESIGN_TOKENS}${COMPARISON_STYLES}${ICON_BUTTON_STYLES}${CHOICE_GROUP_STYLES}${SIGNAL_LEGEND_STYLES}${CHART_LANES_STYLES}${COMPONENT_STYLES}</style>
 <section class="targets" aria-label="${t('Compared files and Clips', '比較するファイル／クリップ')}"><div class="targets-head"><strong>${t('Compared files and Clips', '比較するファイル／クリップ')}</strong><span class="targets-count muted"></span></div><div class="target-rows"></div></section>
-<div class="visualize-workspace"><div class="visualize-content"><div class="view-toolbar"><button class="add-graph" type="button"><span class="codicon codicon-add" aria-hidden="true"></span> ${t('Add graph', 'グラフを追加')}</button><span class="spacer"></span><div class="range-controls comparison-range" role="group" aria-label="${t('Selected range', '選択範囲')}" hidden><span class="clip-range muted"></span><button class="range-zoom" type="button"></button><button class="range-clear" type="button"></button></div><button class="zoom-all-in" type="button"></button><button class="zoom-all-out" type="button"></button><button class="zoom-all-reset" type="button"></button><button class="save-sheet" type="button"></button></div><div class="visualize-list"></div></div>
-<aside class="visualize-options" aria-label="${t('Graph settings', 'グラフ設定')}" hidden><header><strong>${t('Graph settings', 'グラフ設定')}</strong><button class="close-view-options" type="button"></button></header><div class="options-view-name"></div><p class="options-empty muted">${t('Add a graph to configure it.', 'グラフを追加すると設定できます。')}</p><div class="view-options-panels"></div></aside></div>`;
+<div class="visualize-workspace"><div class="visualize-content"><div class="view-toolbar"><button class="add-graph" type="button"><span class="codicon codicon-add" aria-hidden="true"></span> ${t('Add view', 'ビューを追加')}</button><span class="spacer"></span><div class="range-controls comparison-range" role="group" aria-label="${t('Selected range', '選択範囲')}" hidden><span class="clip-range muted"></span><button class="range-zoom" type="button"></button><button class="range-clear" type="button"></button></div><button class="zoom-all-in" type="button"></button><button class="zoom-all-out" type="button"></button><button class="zoom-all-reset" type="button"></button><button class="save-sheet" type="button"></button></div><div class="visualize-list"></div></div>
+<aside class="visualize-options" aria-label="${t('Graph settings', 'グラフ設定')}" hidden><header><strong>${t('Graph settings', 'グラフ設定')}</strong><button class="close-view-options" type="button"></button></header><div class="options-view-name"></div><p class="options-empty muted">${t('Add a graph to configure it.', 'ビューを追加すると設定できます。')}</p><div class="view-options-panels"></div></aside></div>`;
 
 const list = app.querySelector<HTMLElement>('.visualize-list')!;
 const optionsPanel = app.querySelector<HTMLElement>('.visualize-options')!;
@@ -99,13 +100,13 @@ const addGraphButton = app.querySelector<HTMLButtonElement>('.add-graph')!;
 addGraphButton.setAttribute('aria-haspopup', 'menu');
 addGraphButton.addEventListener('click', () => {
   const rect = addGraphButton.getBoundingClientRect();
-  showActionMenu((['graph', 'trajectory'] as const).map((kind) => ({ label: kind === 'graph' ? t('Time series', '時系列') : t('Trajectory', '軌跡'), icon: kind === 'graph' ? 'graph-line' : 'compass', run: () => addGraph(kind) })), t('Add graph', 'グラフを追加'), rect.left, rect.bottom + 4, addGraphButton, { trigger: addGraphButton });
+  showActionMenu([...(['graph', 'trajectory'] as const).map((kind) => ({ label: kind === 'graph' ? t('Time series', '時系列') : t('Trajectory', '軌跡'), icon: kind === 'graph' ? 'graph-line' : 'compass', run: () => addGraph(kind) })), ...comparisonParts.moreViews.map((view) => ({ label: view.label, icon: view.icon, run: () => addGraph(view.kind, view) }))], t('Add view', 'ビューを追加'), rect.left, rect.bottom + 4, addGraphButton, { trigger: addGraphButton });
 });
-function addGraph(kind: 'graph' | 'trajectory'): void {
+function addGraph(kind: NonNullable<ComparisonGraphDefinition['kind']>, more?: MoreView): void {
   if (!comparison) return;
-  const base = kind === 'graph' ? t('Graph', 'グラフ') : t('Trajectory', '軌跡');
+  const base = more?.label ?? (kind === 'graph' ? t('Graph', 'グラフ') : t('Trajectory', '軌跡'));
   let index = comparison.graphs.filter((graph) => (graph.kind ?? 'graph') === kind).length + 1; while (comparison.graphs.some((graph) => graph.name === `${base} ${index}`)) index++;
-  const definition: ComparisonGraphDefinition = { id: crypto.randomUUID(), kind, name: `${base} ${index}`, signalIds: [] };
+  const definition: ComparisonGraphDefinition = { id: crypto.randomUUID(), kind, name: `${base} ${index}`, signalIds: [], ...more?.settings() };
   comparison = { ...comparison, graphs: [...comparison.graphs, definition] }; persist();
   const card = addCard(definition); selectGraph(card, true); card.element.scrollIntoView({ block: 'nearest' }); card.focusHeader();
 }
@@ -150,7 +151,7 @@ const host: GraphHost = {
 };
 
 function addCard(definition: ComparisonGraphDefinition, before?: ComparisonCard): ComparisonCard {
-  const card: ComparisonCard = definition.kind === 'trajectory' ? new TrajectoryCard(definition, host, list, optionsHost) : new GraphCard(definition, host, list, optionsHost);
+  const card: ComparisonCard = comparisonParts.makeCard?.(definition, host, list, optionsHost) ?? (definition.kind === 'trajectory' ? new TrajectoryCard(definition, host, list, optionsHost) : new GraphCard(definition, host, list, optionsHost));
   if (before) { list.insertBefore(card.element, before.element); cards.splice(cards.indexOf(before), 0, card); } else cards.push(card);
   if (catalogReceived) card.setCatalog(definitions, groups, measuredIds); card.request();
   updateOptions(); return card;
@@ -293,7 +294,7 @@ function offsetOutput(target: ComparisonTarget): HTMLOutputElement {
 function currentOffset(targetId: string): number { return comparison?.targets.find((item) => item.id === targetId)?.offset ?? 0; }
 function setLocalOffset(targetId: string, offset: number): void {
   if (!comparison) return; comparison = { ...comparison, targets: comparison.targets.map((target) => target.id === targetId ? { ...target, offset } : target) };
-  measured.invalidate(); host.refreshMeasured(); cards.forEach((card) => card.scheduleDraw());
+  time.hold(); measured.invalidate(); host.refreshMeasured(); cards.forEach((card) => card.scheduleDraw());
 }
 function offsetText(offset: number): string { return `${offset >= 0 ? '+' : ''}${format(offset)} s`; }
 
@@ -302,12 +303,15 @@ function offsetText(offset: number): string { return `${offset >= 0 ? '+' : ''}$
 function applyComparison(next: ComparisonDefinition): void {
   const previous = comparison; comparison = next;
   for (const [id, value] of Object.entries(next.colors ?? {})) colors.set(id, value);
+  const sameTargets = previous && previous.targets.length === next.targets.length && previous.targets.every((target, index) => target.id === next.targets[index].id) && (previous.hiddenTargetIds ?? []).join() === (next.hiddenTargetIds ?? []).join();
+  // Shifting a target must not rescale the time axis under it; any other change lets the axis follow its graphs again.
+  // Decided before the graphs take the new definition, which redraws them (the first shift rescaled the axis).
+  if (sameTargets && previous.targets.some((target, index) => next.targets[index].offset !== target.offset)) time.hold(); else if (!sameTargets) time.release();
   const ids = new Set(next.graphs.map((graph) => graph.id));
   for (const card of [...cards]) if (!ids.has(card.id)) { card.dispose(); cards.splice(cards.indexOf(card), 1); }
   next.graphs.forEach((graph) => { const card = cards.find((item) => item.id === graph.id); if (card) card.setDefinition(graph); else addCard(graph); });
   cards.sort((a, b) => next.graphs.findIndex((graph) => graph.id === a.id) - next.graphs.findIndex((graph) => graph.id === b.id)).forEach((card) => list.appendChild(card.element));
   if (!previous || previous.targets.some((target, index) => next.targets[index]?.id !== target.id || next.targets[index]?.offset !== target.offset) || previous.targets.length !== next.targets.length ) { measured.invalidate(); host.refreshMeasured(); }
-  const sameTargets = previous && previous.targets.length === next.targets.length && previous.targets.every((target, index) => target.id === next.targets[index].id) && (previous.hiddenTargetIds ?? []).join() === (next.hiddenTargetIds ?? []).join();
   // Keep the rows while only offsets change, so a held ◀/▶ or a drag keeps its element.
   if (sameTargets) updateTargetOffsets(); else renderTargets();
   if (focusTarget) { app.querySelector<HTMLElement>(`.target-row[data-target-id="${focusTarget}"]`)?.focus(); focusTarget = undefined; }

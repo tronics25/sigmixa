@@ -1,3 +1,4 @@
+import type { SendMode } from '../timing/sendingPattern';
 import type { Diagnostic } from '../diagnostics/diagnostic';
 import { createDiagnostic } from '../diagnostics/diagnostic';
 import type { SignalDefinition } from '../signal/signal';
@@ -54,6 +55,8 @@ export interface ManualFrameDefinition {
   readonly name: string;
   readonly frameLength: number;
   readonly expectedPeriodMs?: number;
+  /** How the Frame is sent, as set by the user or a DBC (GenMsgSendType); absent: estimated from each log. */
+  readonly sendMode?: SendMode;
   readonly multiplexing?: boolean;
   readonly signals: readonly ManualSignalDefinition[];
   readonly derivedSignals?: readonly ManualDerivedSignalDefinition[];

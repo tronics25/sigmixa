@@ -432,6 +432,12 @@ function renderNow(viewport: { windowX: number; windowY: number }): void {
   multiplexingControl.append(multiplexing, multiplexingText); multiplexingField.append(multiplexingCaption, multiplexingControl); fields.appendChild(multiplexingField);
   if (pluginOwned) { const ownership = document.createElement('div'); ownership.className = 'muted'; const pluginId = frame.origin?.type === 'plugin' ? frame.origin.pluginId : ''; ownership.textContent = t(`Provided by ${pluginId}`, `${pluginId} が提供`); fields.appendChild(ownership); }
   fields.appendChild(inputField(t('Expected period (ms)', '期待周期 (ms)'), frame.expectedPeriodMs === undefined ? '' : String(frame.expectedPeriodMs), (value) => updateFrame({ expectedPeriodMs: value.trim() ? Number(value) : undefined }), { width: '120px' }));
+  // How the Frame is sent; left automatic, each log estimates it (shown in its frame timing).
+  const sendModeField = document.createElement('label'); sendModeField.className = 'field frame-send-mode-field'; sendModeField.innerHTML = `<span>${t('Send mode', '送信モード')}</span>`;
+  const sendMode = document.createElement('select'); sendMode.setAttribute('aria-label', t('Send mode', '送信モード'));
+  for (const [value, label] of [['', t('Automatic (estimated from each log)', '自動（ログから推定）')], ['periodic', t('Periodic', '周期')], ['event', t('On events', 'イベント')], ['mixed', t('Periodic + events', '周期＋イベント')]] as const) { const option = document.createElement('option'); option.value = value; option.textContent = label; option.selected = (frame.sendMode ?? '') === value; sendMode.appendChild(option); }
+  sendMode.addEventListener('change', () => updateFrame({ sendMode: sendMode.value === 'periodic' || sendMode.value === 'event' || sendMode.value === 'mixed' ? sendMode.value : undefined }));
+  sendModeField.appendChild(sendMode); fields.appendChild(sendModeField);
   content.append(title, fields);
 
   const bitHeading = document.createElement('div'); bitHeading.className = 'bit-heading';

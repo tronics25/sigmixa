@@ -8,10 +8,81 @@ import type { ExternalCsvTimeBase } from '../../core/project/schema';
 
 export interface VisualizeViewDefinition {
   readonly id: string;
-  readonly kind: 'graph' | 'trajectory';
+  readonly kind: 'graph' | 'trajectory' | 'frameTiming' | 'frameInterval' | 'stateTimeline' | 'distribution';
   readonly name: string;
   readonly settings: LogViewState;
   readonly height?: number;
+}
+
+/** One CAN ID in the frame timing view: how it is sent over the log, and what to draw of it in the requested span. */
+export interface FrameTimingRowDto {
+  /** `s:<id>` or `e:<id>` (extended). */
+  readonly key: string;
+  readonly canId: string;
+  readonly name: string;
+  /** Frames in the whole log (or Clip). */
+  readonly total: number;
+  /** Frames in the requested span. */
+  readonly count: number;
+  /** The base cycle in milliseconds; undefined for a CAN ID sent on events. `estimated` when read from the log instead of the Frame definition. */
+  readonly periodMs?: number;
+  readonly estimated: boolean;
+  /** How it is sent; `modeEstimated` when read from the log instead of the Frame definition. Undefined with too few frames to tell. */
+  readonly mode?: 'periodic' | 'event' | 'mixed';
+  readonly modeEstimated?: boolean;
+  /** For periodic + events: the frames in `times` sent on events, between the cycle frames. */
+  readonly eventTimes?: readonly number[];
+  /** Intervals much longer than the period over the whole log (the first 500), and how many there are in all. */
+  readonly gaps: readonly { readonly start: number; readonly end: number }[];
+  readonly gapCount: number;
+  /** Every receive time in the span, or, when those are too many to tell apart, frames per equal slice of it. */
+  readonly times?: readonly number[];
+  readonly bins?: readonly number[];
+}
+
+/** One Signal in the state timeline: its states, and what to draw of it in the requested span. */
+export interface StateRowDto {
+  readonly signalId: string;
+  readonly name: string;
+  readonly unit?: string;
+  /** The distinct states of the Signal over the whole log, by value: runs and slices refer to them by index. */
+  readonly states: readonly { readonly value: number; readonly label?: string }[];
+  /** True when the Signal changes too often to be shown as states. */
+  readonly tooMany: boolean;
+  /** The runs in the span, or, when those are too many to draw apart, the longest-lasting state per equal slice of it. */
+  readonly runs?: readonly { readonly start: number; readonly end: number; readonly state: number }[];
+  readonly bins?: readonly ({ readonly state: number; readonly mixed: boolean } | null)[];
+}
+
+/** One Signal of the distribution view: how its values are spread in the requested span, and their statistics. */
+export interface DistributionRowDto {
+  readonly signalId: string;
+  readonly name: string;
+  readonly unit?: string;
+  /** The Signal's least and greatest value over the whole log or Clip: the span the bars divide. */
+  readonly lo: number; readonly hi: number;
+  /** Samples in each equal part of `lo`…`hi`. */
+  readonly bins: readonly number[];
+  readonly count: number;
+  /** Undefined when the span has no sample. */
+  readonly min?: number; readonly max?: number; readonly mean?: number; readonly sd?: number;
+}
+
+/** The receive intervals of one CAN ID in the requested span, for the receive interval view. */
+export interface FrameIntervalsDto {
+  /** Every CAN ID of the log, to choose from. */
+  readonly ids: readonly { readonly key: string; readonly canId: string; readonly name: string }[];
+  /** The CAN ID shown: the one asked for, or the one chosen for a view that has none yet. Undefined when the log has no frames. */
+  readonly key?: string;
+  readonly canId?: string;
+  readonly name?: string;
+  readonly periodMs?: number;
+  readonly estimated?: boolean;
+  readonly stats?: { readonly count: number; readonly meanMs: number; readonly minMs: number; readonly maxMs: number; readonly sdMs: number };
+  /** Every interval (ms) with the time of the frame that ended it, or, when those are too many, the least, greatest and mean per equal slice of the span. */
+  readonly times?: readonly number[];
+  readonly intervals?: readonly number[];
+  readonly buckets?: { readonly minMs: readonly (number | null)[]; readonly maxMs: readonly (number | null)[]; readonly meanMs: readonly (number | null)[] };
 }
 
 export interface TrajectorySeriesDefinition { readonly id: string; readonly name: string; readonly xId?: string; readonly yId?: string; readonly zId?: string; }
@@ -23,6 +94,16 @@ export interface LogViewState {
   readonly rawWidths?: Readonly<Record<string, number>>;
   readonly traceSettings?: TraceDisplaySettings;
   readonly trajectorySeries?: readonly TrajectorySeriesDefinition[];
+  /** State timeline: the Signals shown, in order. Undefined for a new view, which starts with the Signals that have state names. */
+  readonly stateTimelineIds?: readonly string[];
+  /** The Signals of a distribution view; undefined in a new view, which then shows the first measured Signals without state names. */
+  readonly distributionIds?: readonly string[];
+  /** Receive interval: the CAN ID (`s:<id>` / `e:<id>`) shown. */
+  readonly frameIntervalKey?: string;
+  /** The CAN IDs of a receive interval view (`frameIntervalKey` in views saved before it could show several); undefined in a new view. */
+  readonly frameIntervalKeys?: readonly string[];
+  /** Frame timing: the CAN IDs (`s:<id>` / `e:<id>`) left out of the view. */
+  readonly frameTimingHiddenKeys?: readonly string[];
   readonly visualizeViews?: readonly VisualizeViewDefinition[];
   readonly visualizeSelectedViewId?: string;
   readonly visualizeOptionsCollapsed?: boolean;
@@ -127,7 +208,7 @@ export interface RawRowDto {
 }
 
 export interface TraceSignalDto { readonly id: string; readonly name: string; readonly unit?: string; readonly value?: number; readonly valueLabel?: string; readonly timestamp?: number; /** Received before the Clip's range. */ readonly carried?: boolean; }
-export interface LastFrameDto { readonly key: string; readonly parentKey?: string; readonly multiplexerRows?: readonly LastFrameDto[]; readonly multiplexer?: { readonly name: string; readonly value?: number }; readonly row: RawRowDto; readonly count: number; readonly age?: number; readonly intervalMs?: number; readonly minIntervalMs?: number; readonly maxIntervalMs?: number; readonly lastChangeAt?: number; readonly expectedPeriodMs?: number; readonly deviationMs?: number; readonly signals: readonly TraceSignalDto[]; }
+export interface LastFrameDto { readonly key: string; readonly parentKey?: string; readonly multiplexerRows?: readonly LastFrameDto[]; readonly multiplexer?: { readonly name: string; readonly value?: number }; readonly row: RawRowDto; readonly count: number; readonly age?: number; readonly intervalMs?: number; readonly minIntervalMs?: number; readonly maxIntervalMs?: number; readonly lastChangeAt?: number; readonly expectedPeriodMs?: number; /** True when `expectedPeriodMs` is the cycle found in the log, not a defined period. */ readonly expectedEstimated?: boolean; readonly deviationMs?: number; readonly signals: readonly TraceSignalDto[]; }
 export type TraceColumn = 'channel' | 'direction' | 'receivedAt' | 'age' | 'count' | 'interval' | 'minInterval' | 'maxInterval' | 'lastChange' | 'expected' | 'deviation';
 export type TraceSort = 'canId' | 'name' | 'multiplexer' | 'content' | TraceColumn;
 export interface TraceDisplaySettings {
@@ -158,6 +239,10 @@ export type ToExtensionMessage =
   | { readonly type: 'signalTableSampleRequest'; readonly requestId: number; readonly selectedIds: readonly string[] }
   | { readonly type: 'signalTableRowsRequest'; readonly action: 'copy' | 'open'; readonly ranges: readonly { readonly start: number; readonly end: number }[]; readonly selectedIds: readonly string[]; readonly timeDisplay?: TimeDisplayMode }
   /** `joined`: the axes of a trajectory, put together by their times, so they are thinned together. */
+  | { readonly type: 'frameTimingRequest'; readonly requestId: number; readonly range?: { readonly start: number; readonly end: number }; readonly bins: number; readonly maxTimes: number }
+  | { readonly type: 'frameIntervalRequest'; readonly requestId: number; readonly key?: string; readonly keys?: readonly string[]; readonly range?: { readonly start: number; readonly end: number }; readonly buckets: number; readonly maxPoints: number }
+  | { readonly type: 'distributionRequest'; readonly requestId: number; readonly selectedIds: readonly string[]; readonly range?: { readonly start: number; readonly end: number }; readonly bins: number }
+  | { readonly type: 'stateTimelineRequest'; readonly requestId: number; readonly selectedIds: readonly string[]; readonly range?: { readonly start: number; readonly end: number }; readonly bins: number; readonly maxRuns: number }
   | { readonly type: 'signalSeriesRequest'; readonly requestId: number; readonly selectedIds: readonly string[]; readonly joined?: boolean; readonly range?: { readonly start: number; readonly end: number }; readonly maxPoints: number }
   | { readonly type: 'timelineRangeRequest'; readonly requestId: number }
   | { readonly type: 'measuredSignalsRequest'; readonly requestId: number; readonly selectedIds: readonly string[]; readonly timestamp: number }
@@ -205,4 +290,8 @@ export type ToWebviewMessage =
   | { readonly type: 'signalCatalog'; readonly requestId: number; readonly definitions: readonly SignalDefinition[]; readonly groups: readonly SignalGroupDto[]; /** The Signals this log has samples of. Lists show only these (and what is already chosen). */ readonly measuredIds?: readonly string[]; /** True when the view settings are shared in a group (the workspace root included), where Signals another log has may be wanted too. */ readonly unmeasuredOption?: boolean }
   | { readonly type: 'signalTablePage'; readonly requestId: number; readonly offset: number; readonly total: number; readonly generation: number; readonly rows: readonly SignalTableRowDto[] }
   | { readonly type: 'signalTableSample'; readonly requestId: number; readonly rows: readonly SignalTableRowDto[] }
+  | { readonly type: 'frameTiming'; readonly requestId: number; readonly fullRange?: { readonly start: number; readonly end: number }; readonly rows: readonly FrameTimingRowDto[] }
+  | { readonly type: 'frameIntervals'; readonly requestId: number; readonly fullRange?: { readonly start: number; readonly end: number }; readonly data: FrameIntervalsDto; readonly items: readonly FrameIntervalsDto[] }
+  | { readonly type: 'distribution'; readonly requestId: number; readonly fullRange?: { readonly start: number; readonly end: number }; readonly rows: readonly DistributionRowDto[] }
+  | { readonly type: 'stateTimeline'; readonly requestId: number; readonly fullRange?: { readonly start: number; readonly end: number }; readonly rows: readonly StateRowDto[] }
   | { readonly type: 'signalSeries'; readonly requestId: number; readonly fullRange?: { readonly start: number; readonly end: number }; readonly series: readonly SignalSeriesDto[] };

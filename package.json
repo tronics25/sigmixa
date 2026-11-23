@@ -2,7 +2,7 @@
   "name": "sigmixa",
   "displayName": "SigMixa — CAN Log Analyzer",
   "description": "%sigmixa.description%",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "publisher": "tronics25",
   "license": "MIT",
   "private": true,
@@ -639,7 +639,7 @@
     ]
   },
   "scripts": {
-    "sample:generate": "node scripts/generate-basic-log.mjs && node scripts/add-plugin-diagnostic.mjs && node scripts/generate-basic-decoded.mjs && node scripts/add-trajectory-data.mjs && node scripts/add-2.0-coverage.mjs && node scripts/generate-basic-blf.mjs && node scripts/generate-basic-mf4.mjs && node scripts/generate-basic-mdf.mjs && node scripts/generate-sample-project.mjs && node scripts/generate-parking-sample.mjs && node scripts/generate-group-samples.mjs",
+    "sample:generate": "node scripts/generate-basic-log.mjs && node scripts/add-plugin-diagnostic.mjs && node scripts/generate-basic-decoded.mjs && node scripts/add-trajectory-data.mjs && node scripts/add-2.0-coverage.mjs && node scripts/generate-basic-blf.mjs && node scripts/generate-basic-mf4.mjs && node scripts/generate-basic-mdf.mjs && node scripts/generate-sample-project.mjs && node scripts/generate-parking-sample.mjs && node scripts/generate-group-samples.mjs && node scripts/generate-drive-sample.mjs",
     "vscode:prepublish": "npm run compile",
     "compile": "node esbuild.js",
     "package:vsix": "npm run verify && npx --offline @vscode/vsce package --no-dependencies --out outputs/sigmixa-${npm_package_version}.vsix",

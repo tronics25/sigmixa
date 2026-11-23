@@ -25,7 +25,7 @@ test('the ASC parser reports a date line before frames as its time reference, an
   assert.deepEqual(parseAscLine('date Sun Aug 30 12:00:00.000 2026', { sourceId: 's', line: 1, sequence: 0, base: 'hex' }), { type: 'date', start: Date.UTC(2026, 7, 30, 12) / 1000 });
   assert.deepEqual(parseAscLine('date unreadable', { sourceId: 's', line: 1, sequence: 0, base: 'hex' }), { type: 'ignored' });
   const seen: TimeReference[] = []; const frames: CanFrame[] = [];
-  const summary = await parseAscFile('sample/sigmixa-basic.asc', { sourceId: 'basic', onFrames: (items) => { frames.push(...items); }, onTimeReference: (reference) => { assert.equal(frames.length, 0); seen.push(reference); } });
+  const summary = await parseAscFile('sample/basic/sigmixa-basic.asc', { sourceId: 'basic', onFrames: (items) => { frames.push(...items); }, onTimeReference: (reference) => { assert.equal(frames.length, 0); seen.push(reference); } });
   const expected = Date.UTC(2026, 7, 30, 12) / 1000;
   assert.deepEqual(seen, [{ start: expected, offset: expected }]); assert.deepEqual(summary.timeReference, seen[0]);
   // Frame timestamps themselves stay relative: Clips saved with them keep their meaning.
@@ -40,7 +40,7 @@ test('the BLF parser reports its header start; its timestamps already are clock 
   assert.ok(frames.length > 0 && frames[0].timestamp >= seen[0].start && frames[0].timestamp - seen[0].start < 100);
   assert.match(formatExportTime(frames[0].timestamp, 'datetime', seen[0], String), /^2024-12-31 14:09:\d{2}\.\d{6}$/);
   // A header without a start (the sample's) gives none: its times are shown as seconds, as before.
-  const sample = parseBlfBuffer(readFileSync('sample/sigmixa-basic.blf'), { sourceId: 'basic', onFrames: () => undefined, onDiagnostics: () => undefined, onTimeReference: () => assert.fail('no start expected') });
+  const sample = parseBlfBuffer(readFileSync('sample/basic/sigmixa-basic.blf'), { sourceId: 'basic', onFrames: () => undefined, onDiagnostics: () => undefined, onTimeReference: () => assert.fail('no start expected') });
   assert.equal(sample.timeReference, undefined);
 });
 

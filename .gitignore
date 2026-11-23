@@ -16,10 +16,14 @@ README_INTERNAL.md
 !sample/.sigmixa/plugins/
 !sample/.sigmixa/plugins/**
 # Analysis-group examples in the sample (other .sigmixa folders under sample/ stay ignored)
+!sample/basic/.sigmixa/
+!sample/basic/.sigmixa/project.json
 !sample/brake-analysis/.sigmixa/
 !sample/brake-analysis/.sigmixa/project.json
 !sample/parking-drive/.sigmixa/
 !sample/parking-drive/.sigmixa/project.json
+!sample/city-drive/.sigmixa/
+!sample/city-drive/.sigmixa/project.json
 # Backups and temp files written by ProjectStore (migration, recovery, atomic save)
 sample/.sigmixa/*.bak
 sample/.sigmixa/*.tmp

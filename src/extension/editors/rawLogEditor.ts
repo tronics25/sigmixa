@@ -14,6 +14,7 @@ import * as path from 'path';
 import { signalCatalogGroups } from './signalCatalogGroups';
 import { reportCatalog, reportGraphs, reportSeries, reportTable, saveReport } from '../report/reportExporter';
 import { REPORT_FORMAT_VERSION } from '../report/reportData';
+import { inVisualizeOrder, reportAnalysis } from '../report/reportAnalysis';
 import { extensionVersion } from '../report/extensionVersion';
 import { groupUnusablePlugins, updateGroup } from '../../core/project/analysisGroups';
 import { portableClipPath, resolveClipPath } from '../clips/clipPaths';
@@ -213,6 +214,21 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
         void send({ type: 'measuredSignals', requestId: message.requestId, samples: document.measuredSignals(message.selectedIds, message.timestamp) });
       } else if (message.type === 'timelineRangeRequest') {
         void send({ type: 'timelineRange', requestId: message.requestId, range: document.timelineRange });
+      } else if (message.type === 'frameTimingRequest') {
+        const result = document.frameTiming(message.range, message.bins, message.maxTimes);
+        void send({ type: 'frameTiming', requestId: message.requestId, fullRange: result.range, rows: result.rows });
+      } else if (message.type === 'frameIntervalRequest') {
+        // One answer per CAN ID asked for; a new view (no CAN ID yet) gets the one the log suggests. An unknown CAN ID falls back to that one too.
+        // A view whose CAN IDs were all taken off shows none, but still lists what there is to choose.
+        const none = message.keys?.length === 0; const results = (none ? [undefined] : message.keys ?? [message.key]).map((key) => document.frameIntervals(key, message.range, message.buckets, message.maxPoints));
+        const items = none ? [] : results.map((result) => result.data).filter((item, index, all) => item.key !== undefined && all.findIndex((other) => other.key === item.key) === index);
+        void send({ type: 'frameIntervals', requestId: message.requestId, fullRange: results[0].range, data: results[0].data, items });
+      } else if (message.type === 'distributionRequest') {
+        const result = document.distribution(message.selectedIds, message.range, message.bins);
+        void send({ type: 'distribution', requestId: message.requestId, fullRange: result.range, rows: result.rows });
+      } else if (message.type === 'stateTimelineRequest') {
+        const result = document.stateTimeline(message.selectedIds, message.range, message.bins, message.maxRuns);
+        void send({ type: 'stateTimeline', requestId: message.requestId, fullRange: result.range, rows: result.rows });
       } else if (message.type === 'signalSeriesRequest') {
         const result = document.signalSeries(message.selectedIds, message.range, message.maxPoints, message.joined === true);
         void send({ type: 'signalSeries', requestId: message.requestId, fullRange: result.range, series: result.series.map((series) => ({ ...series, events: series.events ?? [] })) });
@@ -292,15 +308,17 @@ export class RawLogEditorProvider implements vscode.CustomReadonlyEditorProvider
     const series = reportSeries(document, [...included], clip ? clipRange(clip) : undefined);
     const catalog = reportCatalog(document.signalCatalog(), signalCatalogGroups(document.signalCatalog(), sourceProject(this.projectStore, document.uri), true), included);
     const clipSpan = clip ? clipRange(clip) : undefined;
+    const analysis = reportAnalysis(document, state, range, [...new Set(graphs.filter((graph) => graph.kind !== 'trajectory').flatMap((graph) => graph.signalIds))], notices, (ids) => reportCatalog(document.signalCatalog(), signalCatalogGroups(document.signalCatalog(), sourceProject(this.projectStore, document.uri), true), ids));
     const rangeLabel = clipSpan ? formatTimeRange(clipSpan.start, clipSpan.end, state.timeDisplay, document.timeReference) : t('Whole file', 'ファイル全体');
     await saveReport(this.extensionUri, {
       formatVersion: REPORT_FORMAT_VERSION, kind: 'log', title: name, generatedAt: new Date().toISOString(), appVersion: extensionVersion(this.extensionUri),
       source: [clip ? `${document.fileName} · ${rangeLabel}` : document.fileName, ...(groupName ? [groupName] : [])], notices,
-      comparison: { id: 'report', name, targets: [{ id: 'log', kind: clip ? 'clip' : 'file', offset: 0 }], graphs, colors: { ...Object.assign({}, ...(state.visualizeViews ?? []).map((view) => view.settings?.chartColors ?? {})), ...(state.chartColors ?? {}) } },
+      comparison: { id: 'report', name, targets: [{ id: 'log', kind: clip ? 'clip' : 'file', offset: 0 }], graphs: inVisualizeOrder(state, [...graphs, ...analysis.views]), colors: { ...Object.assign({}, ...(state.visualizeViews ?? []).map((view) => view.settings?.chartColors ?? {})), ...(state.chartColors ?? {}) } },
       targets: [{ id: 'log', kind: clip ? 'clip' : 'file', name, fileName: document.fileName, filePath: document.fileName, groupName, rangeLabel, status: 'ready', start: range.start, end: range.end }],
       definitions: catalog.definitions, groups: catalog.groups, availability: { log: [...included] },
       series: [{ targetId: 'log', items: series }], table: reportTable(document, tableIds, { columnOrder: state.tableColumnOrder, graphIds: graphs.flatMap((graph) => graph.signalIds), series }),
       clipSpans: clip ? undefined : this.clipRangesOf(document),
+      ...(analysis.analysis ? { analysis: analysis.analysis } : {}),
       time: { ...(document.timeReference ? { reference: document.timeReference } : {}), ...(state.timeDisplay ? { mode: state.timeDisplay } : {}) },
     }, name);
   }

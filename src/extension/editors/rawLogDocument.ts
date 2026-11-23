@@ -1,6 +1,13 @@
 import { decodedExplanation } from '../../core/manual/decodedExplanation';
 import { TraceIndex, type TraceSnapshot } from '../../core/frame/traceIndex';
 import type { LastFrameDto } from './rawLogProtocol';
+import type { DistributionRowDto, FrameIntervalsDto, FrameTimingRowDto, StateRowDto } from './rawLogProtocol';
+import { sliceStateRuns, type StateRuns } from '../../core/signal/stateRuns';
+import { dropouts, dropoutLimit, estimateSendMode, type SendMode, type SendModeEstimate } from '../../core/timing/sendingPattern';
+import type { SignalBreaks } from '../../core/signal/signalStore';
+import { estimatedMode, eventFlags, flaggedTimes, intervalSeries, lowerBound, sliceTimes, summarizeTiming, timingSlice, type FrameTimingSummary } from '../../core/frame/frameTiming';
+import type { ReportDistributionRow, ReportFrameIntervals, ReportStateRow } from '../report/reportData';
+import { mergeDistribution, type DistributionGrid } from '../../core/signal/distribution';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { describeLogReadError, notifyLogReadError } from '../storage/logReadError';
@@ -310,9 +317,11 @@ export class RawLogDocument implements vscode.CustomDocument {
         ...(definition?.derivedSignals ?? []).filter((signal) => !item.multiplexer || item.signals.has(signal.id))];
       const ids = [...new Set([...declared.map((signal) => signal.id), ...item.signals.keys()])].filter((id) => id !== selectorId);
       const signals = ids.map((id) => { const metadata = catalog.get(id) ?? declared.find((signal) => signal.id === id); const sample = item.signals.get(id); return { id, name: metadata?.name ?? id, unit: metadata?.unit, value: sample?.value, valueLabel: sample?.valueLabel, timestamp: sample?.timestamp, ...(sample?.carried ? { carried: true } : {}) }; });
-      // The CAN ID's cycle is not the cycle of an individual MUX branch.
-      const expected = item.multiplexer ? undefined : definition?.expectedPeriodMs;
-      return { key: item.key, multiplexer: item.multiplexer, row, count: item.count, age: item.age, intervalMs: item.intervalMs, minIntervalMs: item.minIntervalMs, maxIntervalMs: item.maxIntervalMs, lastChangeAt: item.lastChangeAt, expectedPeriodMs: expected, deviationMs: expected !== undefined && item.intervalMs !== undefined ? item.intervalMs - expected : undefined, signals };
+      // The CAN ID's cycle is not the cycle of an individual MUX branch. Without a defined period, the cycle found in the
+      // log (none for a CAN ID sent on events).
+      const send = item.multiplexer ? undefined : this.traceCycle(canId, extended, definition?.expectedPeriodMs);
+      const expected = send?.periodMs;
+      return { key: item.key, multiplexer: item.multiplexer, row, count: item.count, age: item.age, intervalMs: item.intervalMs, minIntervalMs: item.minIntervalMs, maxIntervalMs: item.maxIntervalMs, lastChangeAt: item.lastChangeAt, expectedPeriodMs: expected, ...(send?.estimated ? { expectedEstimated: true } : {}), deviationMs: expected !== undefined && item.intervalMs !== undefined ? item.intervalMs - expected : undefined, signals };
     };
     const branches = new Map<string, LastFrameDto[]>();
     for (const item of index.at(timestamp, this.scope?.start, this.scope?.end)) {
@@ -415,7 +424,7 @@ export class RawLogDocument implements vscode.CustomDocument {
       this.pluginDisplay = nextPluginDisplay;
       this.analysisDiagnostics = nextDiagnostics;
       this.publishAnalysisDiagnostics(nextDiagnostics, true);
-      this.signalStore = next;
+      this.signalStore = next; this.signalStoreEpoch++;
       this.analysisDefinitions = nextDefinitions;
       this.manualDecodeContexts = nextContexts;
       this.analyzedProject = project;
@@ -515,6 +524,231 @@ export class RawLogDocument implements vscode.CustomDocument {
     const requestedRange = intersectRange(range, this.scope);
     if (range && this.scope && !requestedRange) return { range: fullRange, series: [] };
     return { range: fullRange, series: this.signalStore.seriesSlice(selectedIds, requestedRange, boundedMaxPoints, bounds ? intersectRange(bounds, this.scope) : this.scope, joined) };
+  }
+  private readonly timingSummaries = new Map<string, FrameTimingSummary>();
+  private timingGeneration = -1;
+  /**
+   * Frame timing: every CAN ID of the log with its period and gaps, and its receive times in `range` (or counts per slice
+   * when those are too many to draw apart). The summaries read every frame once and are kept until frames are added.
+   */
+  frameTiming(range: { start: number; end: number } | undefined, bins: number, maxTimes: number): { range?: { start: number; end: number }; rows: FrameTimingRowDto[] } {
+    return this.serving(() => {
+      const full = this.timelineRange; if (!full) return { rows: [] };
+      const span = range ? intersectRange(range, full) ?? full : full;
+      const slices = Math.max(1, Math.min(4000, Math.floor(bins))); const most = Math.max(0, Math.min(5000, Math.floor(maxTimes)));
+      const refs = [...this.store.canRefs()].sort((left, right) => Number(left.extended) - Number(right.extended) || left.canId - right.canId);
+      const rows = refs.flatMap((ref): FrameTimingRowDto[] => {
+        const times = this.store.canRefTimes(ref.canId, ref.extended); if (!times) return [];
+        const key = `${ref.extended ? 'e' : 's'}:${ref.canId}`; const definition = this.definitions.get(key);
+        const summary = this.timingSummary(key, times);
+        if (!summary.count) return [];
+        const slice = timingSlice(times, span, slices, most);
+        return [{ key, canId: formatCanId(ref.canId, ref.extended), name: definition?.name ?? '', total: summary.count, count: slice.count, ...this.sendFields(key, summary, times, span, slice.times), gaps: summary.gaps, gapCount: summary.gapCount, times: slice.times, bins: slice.bins }];
+      });
+      return { range: { ...full }, rows };
+    });
+  }
+  private readonly stateRunCache = new Map<string, StateRuns>();
+  private stateRunGeneration = '';
+  /** Counts replacements of the Signal store: a new store (a Plugin or definition change) counts its versions from 0 again. */
+  private signalStoreEpoch = 0;
+  /**
+   * State timeline: the runs of each Signal in `range` (or the longest-lasting state per slice when those are too many).
+   * A Signal's runs are read once from all its samples and kept until the Signals change.
+   */
+  stateTimeline(selectedIds: readonly string[], range: { start: number; end: number } | undefined, bins: number, maxRuns: number): { range?: { start: number; end: number }; rows: StateRowDto[] } {
+    return this.serving(() => {
+      const full = this.timelineRange; if (!full) return { rows: [] };
+      const span = range ? intersectRange(range, full) ?? full : full;
+      const generation = `${this.signalStoreEpoch}:${this.signalStore.generation}:${this.signalStore.layout}`; if (generation !== this.stateRunGeneration) { this.stateRunCache.clear(); this.stateRunGeneration = generation; }
+      const catalog = new Map(this.signalStore.catalog().map((definition) => [definition.id, definition]));
+      const rows = [...new Set(selectedIds)].slice(0, 64).flatMap((id): StateRowDto[] => {
+        const definition = catalog.get(id); if (!definition) return [];
+        let runs = this.stateRunCache.get(id); if (!runs) { runs = this.signalStore.stateRuns(id); if (!runs) return []; this.stateRunCache.set(id, runs); }
+        const slice = runs.tooMany ? {} : sliceStateRuns(runs, span, Math.max(1, Math.min(5000, Math.floor(maxRuns))), Math.max(1, Math.min(4000, Math.floor(bins))));
+        return [{ signalId: id, name: definition.name, unit: definition.unit, states: runs.states, tooMany: runs.tooMany, runs: slice.runs, bins: slice.bins }];
+      });
+      return { range: { ...full }, rows };
+    });
+  }
+  private readonly valueExtents = new Map<string, { lo: number; hi: number }>();
+  private valueExtentGeneration = '';
+  /** A Signal's values over `range` in `slices` slices; its value span over the log or Clip is found once and kept until the Signals change. */
+  private distributionGrid(id: string, range: { start: number; end: number }, slices: number, bins: number): DistributionGrid | undefined {
+    const generation = `${this.signalStoreEpoch}:${this.signalStore.generation}:${this.signalStore.layout}:${this.scope?.start ?? ''}:${this.scope?.end ?? ''}`; if (generation !== this.valueExtentGeneration) { this.valueExtents.clear(); this.valueExtentGeneration = generation; }
+    const grid = this.signalStore.distribution(id, range, slices, Math.max(1, Math.min(200, Math.floor(bins))), this.scope, this.valueExtents.get(id));
+    if (grid) this.valueExtents.set(id, { lo: grid.lo, hi: grid.hi });
+    return grid;
+  }
+  /** Distribution: how the values of each Signal are spread in `range`, with their statistics. Signals without a value in the log or Clip are left out. */
+  distribution(selectedIds: readonly string[], range: { start: number; end: number } | undefined, bins: number): { range?: { start: number; end: number }; rows: DistributionRowDto[] } {
+    return this.serving(() => {
+      const full = this.timelineRange; if (!full) return { rows: [] };
+      const span = range ? intersectRange(range, full) ?? full : full; const catalog = new Map(this.signalStore.catalog().map((definition) => [definition.id, definition]));
+      const rows = [...new Set(selectedIds)].slice(0, 64).flatMap((id): DistributionRowDto[] => {
+        const definition = catalog.get(id); const grid = definition && this.distributionGrid(id, span, 1, bins); if (!definition || !grid) return [];
+        return [{ signalId: id, name: definition.name, unit: definition.unit, lo: grid.lo, hi: grid.hi, ...mergeDistribution(grid) }];
+      });
+      return { range: { ...full }, rows };
+    });
+  }
+  /** The Signals a new state timeline (those with state names) or distribution view (measured values) shows; `limit` asks for more of the same. */
+  newViewSignals(kind: 'stateTimeline' | 'distribution', limit = kind === 'stateTimeline' ? 8 : 4): string[] {
+    const measured = new Set(this.signalStore.measuredSignalIds());
+    return this.signalStore.catalog().filter((definition) => Boolean(definition.hasValueLabels) === (kind === 'stateTimeline') && measured.has(definition.id)).slice(0, limit).map((definition) => definition.id);
+  }
+  /**
+   * Distribution for a report: each Signal's values over `range` in `slices` slices, so the report's statistics can follow
+   * the time span it shows. Without `selectedIds`, the Signals a new view shows.
+   */
+  reportDistribution(selectedIds: readonly string[] | undefined, range: { start: number; end: number }, slices = 500, bins = 40): ReportDistributionRow[] {
+    const catalog = this.signalStore.catalog(); const byId = new Map(catalog.map((definition) => [definition.id, definition]));
+    const ids = selectedIds ? [...new Set(selectedIds)].slice(0, 64) : this.newViewSignals('distribution');
+    return ids.flatMap((id): ReportDistributionRow[] => { const definition = byId.get(id); const grid = definition && this.distributionGrid(id, range, slices, bins); return definition && grid ? [{ signalId: id, name: definition.name, unit: definition.unit, grid }] : []; });
+  }
+  /** How one CAN ID is sent over the log or Clip; read once and kept until frames are added. */
+  private timingSummary(key: string, times: { readonly length: number; at(index: number): number }): FrameTimingSummary {
+    if (this.timingGeneration !== this.store.generation) { this.timingSummaries.clear(); this.timingGeneration = this.store.generation; }
+    const definition = this.definitions.get(key); const expectedPeriodMs = definition?.expectedPeriodMs; const sendMode = definition?.sendMode;
+    const cacheKey = `${key}:${expectedPeriodMs ?? ''}:${sendMode ?? ''}:${this.scope?.start ?? ''}:${this.scope?.end ?? ''}`;
+    let summary = this.timingSummaries.get(cacheKey);
+    if (!summary) { summary = summarizeTiming(times, expectedPeriodMs, this.scope, sendMode, sendMode && expectedPeriodMs ? undefined : this.sendEstimate(key, times)); this.timingSummaries.set(cacheKey, summary); }
+    return summary;
+  }
+  /**
+   * How a CAN ID is sent, estimated from its frames in the log or Clip. Kept until frames are added; while the log is
+   * read, until it has a quarter more frames, so a growing log is not read again on every update.
+   */
+  private sendEstimate(key: string, times: { readonly length: number; at(index: number): number }): SendModeEstimate | undefined {
+    const from = this.scope ? lowerBound(times, this.scope.start) : 0; const to = this.scope ? lowerBound(times, this.scope.end + 1e-12) : times.length; const count = to - from;
+    const cacheKey = `${key}:${this.scope?.start ?? ''}:${this.scope?.end ?? ''}`; const cached = this.sendEstimates.get(cacheKey);
+    if (cached && (cached.generation === this.store.generation || (this.parsing && count >= cached.count && count < cached.count * 1.25))) return cached.estimate;
+    const estimate = estimateSendMode(sliceTimes(times, from, to)); this.sendEstimates.set(cacheKey, { count, generation: this.store.generation, estimate }); return estimate;
+  }
+  /** The Trace's expected period of a CAN ID: the defined one, else the base cycle found in the log (none for one sent on events). */
+  private traceCycle(canId: number, extended: boolean, defined: number | undefined): { periodMs?: number; estimated: boolean } | undefined {
+    const times = this.store.canRefTimes(canId, extended); if (!times) return defined === undefined ? undefined : { periodMs: defined, estimated: false };
+    return this.sendInfo(canKey(canId, extended), times);
+  }
+  /**
+   * How a CAN ID is sent, as `summarizeTiming` finds it but without reading its gaps: the Frame's send mode and expected
+   * period when defined, else the cached estimate. Cheap enough for every Trace update while the log is read.
+   */
+  private sendInfo(key: string, times: { readonly length: number; at(index: number): number }): { mode?: SendMode; periodMs?: number; estimated: boolean } {
+    const definition = this.definitions.get(key); const defined = definition?.expectedPeriodMs !== undefined && definition.expectedPeriodMs > 0 ? definition.expectedPeriodMs : undefined;
+    const estimate = definition?.sendMode && defined !== undefined ? undefined : this.sendEstimate(key, times);
+    const mode = definition?.sendMode ?? estimatedMode(estimate, defined !== undefined);
+    const periodMs = mode === 'event' ? undefined : defined ?? (estimate?.cycle !== undefined ? estimate.cycle * 1000 : undefined);
+    return { mode, periodMs, estimated: defined === undefined && periodMs !== undefined };
+  }
+  private readonly eventFlagCache = new Map<string, { generation: number; cycleMs: number; flags: Uint8Array }>();
+  /** A frame timing row's send mode and period, with the frames in `listed` (the row's times) that were sent on events. */
+  private sendFields(key: string, summary: FrameTimingSummary, times: { readonly length: number; at(index: number): number }, range: { start: number; end: number }, listed: readonly number[] | undefined): Pick<FrameTimingRowDto, 'periodMs' | 'estimated' | 'mode' | 'modeEstimated' | 'eventTimes'> {
+    let events: number[] | undefined;
+    if (listed?.length && summary.mode === 'mixed' && summary.periodMs !== undefined) {
+      let cached = this.eventFlagCache.get(key);
+      if (!cached || cached.generation !== this.store.generation || cached.cycleMs !== summary.periodMs) { cached = { generation: this.store.generation, cycleMs: summary.periodMs, flags: eventFlags(times, summary.periodMs) }; this.eventFlagCache.set(key, cached); }
+      events = flaggedTimes(times, cached.flags, range);
+    }
+    return { periodMs: summary.periodMs, estimated: summary.estimated, mode: summary.mode, modeEstimated: summary.modeEstimated, ...(events?.length ? { eventTimes: events } : {}) };
+  }
+  private readonly sendEstimates = new Map<string, { count: number; generation: number; estimate: SendModeEstimate | undefined }>();
+  private readonly signalBreakCache = new Map<string, { generation: number; settings: string; breaks: SignalBreaks }>();
+  /**
+   * Where the line of a Signal decoded from a CAN frame breaks: where the frame was not received for its send mode
+   * (none for a frame sent on events). Undefined for a Signal without a frame in the log.
+   */
+  private frameBreaks(definition: SignalDefinition): SignalBreaks | undefined {
+    const frameId = definition.source.type === 'manual-can' ? definition.source.frameDefinitionId : definition.source.type === 'plugin' ? this.currentProject.pluginBindings.find((binding) => binding.id === (definition.source as { bindingId: string }).bindingId)?.frameId : undefined;
+    const frame = frameId === undefined ? undefined : this.currentProject.frames.find((item) => item.id === frameId); if (!frame) return undefined;
+    const times = this.store.canRefTimes(frame.canId, frame.extended); if (!times || times.length < 2) return undefined;
+    const key = canKey(frame.canId, frame.extended); const summary = this.sendInfo(key, times);
+    const settings = `${summary.mode ?? ''}:${summary.periodMs ?? ''}:${this.scope?.start ?? ''}:${this.scope?.end ?? ''}`; const cached = this.signalBreakCache.get(key);
+    if (cached && cached.generation === this.store.generation && cached.settings === settings) return cached.breaks;
+    const limit = dropoutLimit(summary.mode, summary.periodMs === undefined ? undefined : summary.periodMs / 1000);
+    const breaks: SignalBreaks = { limit: Infinity, ...dropouts(times, limit) }; this.signalBreakCache.set(key, { generation: this.store.generation, settings, breaks }); return breaks;
+  }
+  /**
+   * Receive intervals of one CAN ID in `range`: each interval while they are few, else the least, greatest and mean per
+   * slice. Without `key` (a new view), the first periodic CAN ID with a gap is shown, else the first periodic one.
+   */
+  frameIntervals(key: string | undefined, range: { start: number; end: number } | undefined, buckets: number, maxPoints: number): { range?: { start: number; end: number }; data: FrameIntervalsDto } {
+    return this.serving(() => {
+      const full = this.timelineRange; if (!full) return { data: { ids: [] } };
+      const span = range ? intersectRange(range, full) ?? full : full;
+      const refs = [...this.store.canRefs()].sort((left, right) => Number(left.extended) - Number(right.extended) || left.canId - right.canId).flatMap((ref) => {
+        const times = this.store.canRefTimes(ref.canId, ref.extended); if (!times) return [];
+        const refKey = `${ref.extended ? 'e' : 's'}:${ref.canId}`; const definition = this.definitions.get(refKey); const summary = this.timingSummary(refKey, times);
+        return summary.count ? [{ key: refKey, canId: formatCanId(ref.canId, ref.extended), name: definition?.name ?? '', times, summary }] : [];
+      });
+      const ids = refs.map(({ key: refKey, canId, name }) => ({ key: refKey, canId, name }));
+      const shown = refs.find((ref) => ref.key === key) ?? refs.find((ref) => ref.summary.gapCount > 0) ?? refs.find((ref) => ref.summary.periodMs !== undefined) ?? refs[0];
+      if (!shown) return { range: { ...full }, data: { ids } };
+      const series = intervalSeries(shown.times, span, Math.max(1, Math.min(4000, Math.floor(buckets))), Math.max(0, Math.min(5000, Math.floor(maxPoints))), this.scope?.start);
+      return { range: { ...full }, data: { ids, key: shown.key, canId: shown.canId, name: shown.name, periodMs: shown.summary.periodMs, estimated: shown.summary.estimated, ...series } };
+    });
+  }
+  /**
+   * Frame timing for a report: every receive time of each CAN ID in `range`, so the report can be zoomed without the log.
+   * `budget` is how many times may be embedded in all; the CAN IDs with the fewest frames get theirs first, and the rest
+   * are given as frames per slice of the range (`bins`).
+   */
+  reportFrameTiming(range: { start: number; end: number }, budget = 1_000_000, bins = 4000): FrameTimingRowDto[] {
+    const refs = [...this.store.canRefs()].sort((left, right) => Number(left.extended) - Number(right.extended) || left.canId - right.canId);
+    const rows = refs.flatMap((ref) => {
+      const times = this.store.canRefTimes(ref.canId, ref.extended); if (!times) return [];
+      const key = `${ref.extended ? 'e' : 's'}:${ref.canId}`; const definition = this.definitions.get(key); const summary = summarizeTiming(times, definition?.expectedPeriodMs, range, definition?.sendMode);
+      return summary.count ? [{ key, ref, times, summary, name: definition?.name ?? '' }] : [];
+    });
+    let left = Math.max(0, budget); const whole = new Set<string>();
+    for (const row of [...rows].sort((a, b) => a.summary.count - b.summary.count)) { if (row.summary.count > left) break; left -= row.summary.count; whole.add(row.key); }
+    return rows.map(({ key, ref, times, summary, name }): FrameTimingRowDto => {
+      const slice = timingSlice(times, range, bins, whole.has(key) ? Infinity : -1);
+      return { key, canId: formatCanId(ref.canId, ref.extended), name, total: summary.count, count: slice.count, ...this.sendFields(key, summary, times, range, slice.times), gaps: summary.gaps, gapCount: summary.gapCount, times: slice.times, bins: slice.bins };
+    });
+  }
+  /**
+   * Receive intervals for a report: every receive time of one CAN ID in `range` (with the frame before it, whose interval
+   * ends in the range), so the report can be zoomed without the log; over `budget` times, the least, greatest and mean
+   * interval per slice of the range instead. Without `key` (or with one the range has no frame of), the CAN ID a new view shows.
+   */
+  reportFrameIntervals(key: string | undefined, range: { start: number; end: number }, budget = 1_000_000, buckets = 4000): ReportFrameIntervals | undefined {
+    const sorted = [...this.store.canRefs()].sort((left, right) => Number(left.extended) - Number(right.extended) || left.canId - right.canId);
+    const entry = (ref: { readonly canId: number; readonly extended: boolean }) => {
+      const times = this.store.canRefTimes(ref.canId, ref.extended); if (!times) return undefined;
+      const refKey = `${ref.extended ? 'e' : 's'}:${ref.canId}`; const definition = this.definitions.get(refKey); const summary = summarizeTiming(times, definition?.expectedPeriodMs, range, definition?.sendMode);
+      return summary.count ? { key: refKey, canId: formatCanId(ref.canId, ref.extended), name: definition?.name ?? '', times, summary } : undefined;
+    };
+    // The CAN ID asked for is read alone: a report asks once per chosen CAN ID, and reading every CAN ID each time
+    // took minutes on large logs. Only the default (no such CAN ID in the range) needs them all.
+    const asked = key === undefined ? undefined : sorted.find((ref) => `${ref.extended ? 'e' : 's'}:${ref.canId}` === key);
+    const direct = asked && entry(asked);
+    const refs = direct ? [] : sorted.flatMap((ref) => { const item = entry(ref); return item ? [item] : []; });
+    const shown = direct ?? refs.find((ref) => ref.summary.gapCount > 0) ?? refs.find((ref) => ref.summary.periodMs !== undefined) ?? refs[0];
+    if (!shown) return undefined;
+    const head = { key: shown.key, canId: shown.canId, name: shown.name, periodMs: shown.summary.periodMs, estimated: shown.summary.estimated };
+    if (shown.summary.count > budget) { const series = intervalSeries(shown.times, range, buckets, -1, range.start); return { ...head, stats: series.stats, buckets: series.buckets }; }
+    const from = lowerBound(shown.times, range.start); const times: number[] = [];
+    for (let index = from; index < shown.times.length && shown.times.at(index) <= range.end; index++) times.push(shown.times.at(index));
+    return { ...head, times };
+  }
+  /**
+   * State timeline for a report: every run of each Signal in `range`. `budget` is how many runs may be embedded in all;
+   * the Signals with the fewest get theirs first, and the rest are given as the longest-lasting state per slice of the
+   * range. Without `selectedIds`, the Signals a new view shows.
+   */
+  reportStateTimeline(selectedIds: readonly string[] | undefined, range: { start: number; end: number }, budget = 1_000_000, bins = 4000): ReportStateRow[] {
+    const catalog = this.signalStore.catalog(); const byId = new Map(catalog.map((definition) => [definition.id, definition]));
+    const ids = selectedIds ? [...new Set(selectedIds)].slice(0, 64) : this.newViewSignals('stateTimeline');
+    const found = ids.flatMap((id) => { const definition = byId.get(id); const runs = definition && this.signalStore.stateRuns(id); return definition && runs ? [{ definition, runs, cut: runs.tooMany ? [] : sliceStateRuns(runs, range, Infinity, 1).runs ?? [] }] : []; });
+    let left = Math.max(0, budget); const whole = new Set<string>();
+    for (const row of [...found].sort((a, b) => a.cut.length - b.cut.length)) { if (row.cut.length > left) break; left -= row.cut.length; whole.add(row.definition.id); }
+    return found.map(({ definition, runs, cut }): ReportStateRow => {
+      const head = { signalId: definition.id, name: definition.name, unit: definition.unit, states: runs.states, tooMany: runs.tooMany };
+      if (runs.tooMany) return head;
+      if (!whole.has(definition.id)) return { ...head, bins: sliceStateRuns(runs, range, -1, bins).bins };
+      return { ...head, starts: cut.map((run) => run.start), stateOf: cut.map((run) => run.state), end: cut.length ? cut[cut.length - 1].end : range.start };
+    });
   }
   nearestSignals(selectedIds: readonly string[], timestamp: number, range = this.scope) { return this.signalStore.nearest(selectedIds, timestamp, range); }
 
@@ -616,7 +850,7 @@ export class RawLogDocument implements vscode.CustomDocument {
     this.displayRevision++;
   }
 
-  private newSignalStore(): InMemorySignalStore { return new InMemorySignalStore({ frameId: (ordinal) => this.store.idAt(ordinal) }); }
+  private newSignalStore(): InMemorySignalStore { return new InMemorySignalStore({ frameId: (ordinal) => this.store.idAt(ordinal), frameBreaks: (definition) => this.frameBreaks(definition) }); }
 
   /** How the Signal store and the Plugin tags name a frame: by its place in the frame store, which keeps no text per frame. */
   private frameRef(frame: CanFrame): SignalFrameRef { return this.store.ordinalOf(frame) ?? frame.id; }

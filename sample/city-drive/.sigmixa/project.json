@@ -1,0 +1,590 @@
+{
+  "schemaVersion": 4,
+  "frames": [
+    {
+      "id": "ff-2b0",
+      "name": "Drive Status",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "expectedPeriodMs": 100,
+      "derivedSignals": [],
+      "signals": [
+        {
+          "id": "sig-transmission-gear",
+          "name": "Transmission Gear",
+          "unit": "",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          },
+          "valueLabels": {
+            "0": "P",
+            "1": "1st",
+            "2": "2nd",
+            "3": "3rd",
+            "4": "4th",
+            "5": "5th",
+            "6": "6th"
+          }
+        },
+        {
+          "id": "sig-road-type",
+          "name": "Road Type",
+          "unit": "",
+          "byteOffset": 1,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          },
+          "valueLabels": {
+            "0": "Parked",
+            "1": "City",
+            "2": "On-Ramp",
+            "3": "Highway",
+            "4": "Off-Ramp"
+          }
+        },
+        {
+          "id": "sig-brake-phase",
+          "name": "Brake Phase",
+          "unit": "",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          },
+          "valueLabels": {
+            "0": "Released",
+            "1": "Holding",
+            "2": "Braking",
+            "3": "Hard Braking",
+            "4": "ABS Active"
+          }
+        },
+        {
+          "id": "sig-collision-warning",
+          "name": "Forward Collision Warning",
+          "unit": "",
+          "byteOffset": 3,
+          "bitOffset": 0,
+          "lengthBits": 8,
+          "signedness": "unsigned",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 1,
+            "lsbText": "1",
+            "offset": 0
+          },
+          "valueLabels": {
+            "0": "No Car Ahead",
+            "1": "Car Ahead",
+            "2": "Closing In",
+            "3": "Collision Warning"
+          }
+        }
+      ],
+      "canId": "2B0"
+    },
+    {
+      "id": "ff-1d0",
+      "name": "Route Position",
+      "frameLength": 8,
+      "origin": {
+        "type": "manual"
+      },
+      "expectedPeriodMs": 100,
+      "derivedSignals": [],
+      "signals": [
+        {
+          "id": "sig-route-x",
+          "name": "Route X",
+          "unit": "m",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 32,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        },
+        {
+          "id": "sig-route-y",
+          "name": "Route Y",
+          "unit": "m",
+          "byteOffset": 4,
+          "bitOffset": 0,
+          "lengthBits": 32,
+          "signedness": "signed",
+          "byteOrder": "little",
+          "conversion": {
+            "type": "scale-offset",
+            "lsb": 0.01,
+            "lsbText": "0.01",
+            "offset": 0
+          }
+        }
+      ],
+      "canId": "1D0"
+    }
+  ],
+  "plugins": [],
+  "pluginBindings": [],
+  "externalCsvSources": [],
+  "lookupTables": [],
+  "calculations": [],
+  "clips": [
+    {
+      "id": "clip-highway-merge",
+      "name": "Highway Merge",
+      "sourcePath": "drive.asc",
+      "sourceFileName": "drive.asc",
+      "range": {
+        "start": 90,
+        "end": 128
+      }
+    },
+    {
+      "id": "clip-hard-braking",
+      "name": "Hard Braking",
+      "sourcePath": "drive.asc",
+      "sourceFileName": "drive.asc",
+      "range": {
+        "start": 136,
+        "end": 152
+      }
+    }
+  ],
+  "viewStates": {
+    "log:drive.asc": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-power",
+          "kind": "graph",
+          "name": "Engine Torque and Mechanical Power",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-engine-torque",
+              "sig-mechanical-power"
+            ],
+            "chartColors": {
+              "sig-engine-torque": "#7c3aed",
+              "sig-mechanical-power": "#16a34a"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:torque",
+                "family:power"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-temperatures",
+          "kind": "graph",
+          "name": "Coolant and Motor Temperature",
+          "height": 200,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-coolant-temp",
+              "sig-temp"
+            ],
+            "chartColors": {
+              "sig-coolant-temp": "#0891b2",
+              "sig-temp": "#db2777"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:temperature"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-battery",
+          "kind": "graph",
+          "name": "Battery Voltage",
+          "height": 180,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-batt"
+            ],
+            "chartColors": {
+              "sig-batt": "#ca8a04"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:voltage"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-power-states",
+          "kind": "stateTimeline",
+          "name": "Drive Mode",
+          "settings": {
+            "stateTimelineIds": [
+              "sig-drive-mode"
+            ]
+          }
+        },
+        {
+          "id": "view-frame-timing",
+          "kind": "frameTiming",
+          "name": "Frame Timing",
+          "settings": {
+            "frameTimingHiddenKeys": []
+          }
+        },
+        {
+          "id": "view-motion-interval",
+          "kind": "frameInterval",
+          "name": "Motion Sensor Receive Interval",
+          "settings": {
+            "frameIntervalKeys": [
+              "s:417"
+            ]
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-power",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
+      "viewStateScope": "group"
+    },
+    "group-view": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-overview",
+          "kind": "graph",
+          "name": "Speed and Engine Speed",
+          "height": 300,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-speed",
+              "sig-engine-speed"
+            ],
+            "chartColors": {
+              "sig-speed": "#2563eb",
+              "sig-engine-speed": "#16a34a"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:speed",
+                "family:rotational-speed"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-overview-states",
+          "kind": "stateTimeline",
+          "name": "Road and Gear",
+          "settings": {
+            "stateTimelineIds": [
+              "sig-road-type",
+              "sig-transmission-gear"
+            ]
+          }
+        },
+        {
+          "id": "view-inputs",
+          "kind": "graph",
+          "name": "Accelerator and Brake Pedal",
+          "height": 200,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-accelerator",
+              "sig-pedal"
+            ],
+            "chartColors": {
+              "sig-accelerator": "#f97316",
+              "sig-pedal": "#ec4899"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:percentage"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-input-states",
+          "kind": "stateTimeline",
+          "name": "Drive Mode and Selector",
+          "settings": {
+            "stateTimelineIds": [
+              "sig-drive-mode",
+              "sig-gear-position",
+              "sig-seatbelt",
+              "sig-driver-door"
+            ]
+          }
+        },
+        {
+          "id": "view-turns",
+          "kind": "graph",
+          "name": "Steering Angle and Front Wheel Speed Difference",
+          "height": 220,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-steering-angle",
+              "sig-wheel-speed-difference"
+            ],
+            "chartColors": {
+              "sig-steering-angle": "#7c3aed",
+              "sig-wheel-speed-difference": "#0ea5e9"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:angle",
+                "family:speed"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-turn-states",
+          "kind": "stateTimeline",
+          "name": "Turn Signals",
+          "settings": {
+            "stateTimelineIds": [
+              "sig-turn-left",
+              "sig-turn-right"
+            ]
+          }
+        },
+        {
+          "id": "view-car-ahead",
+          "kind": "graph",
+          "name": "Distance and Relative Speed to the Car Ahead",
+          "height": 220,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-object-distance",
+              "sig-relative-speed"
+            ],
+            "chartColors": {
+              "sig-object-distance": "#0d9488",
+              "sig-relative-speed": "#7c3aed"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:length",
+                "family:speed"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-warning-states",
+          "kind": "stateTimeline",
+          "name": "Forward Collision Warning",
+          "settings": {
+            "stateTimelineIds": [
+              "sig-collision-warning",
+              "sig-horn"
+            ]
+          }
+        },
+        {
+          "id": "view-braking",
+          "kind": "graph",
+          "name": "Brake Pressure and Front Wheel Speeds",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-brake-pressure",
+              "sig-wheel-speed-fl",
+              "sig-wheel-speed-fr"
+            ],
+            "chartColors": {
+              "sig-brake-pressure": "#dc2626",
+              "sig-wheel-speed-fl": "#0ea5e9",
+              "sig-wheel-speed-fr": "#6366f1"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:pressure",
+                "family:speed"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-brake-states",
+          "kind": "stateTimeline",
+          "name": "Brake Phase",
+          "settings": {
+            "stateTimelineIds": [
+              "sig-brake-phase"
+            ]
+          }
+        },
+        {
+          "id": "view-route",
+          "kind": "trajectory",
+          "name": "Route from Above (2D)",
+          "height": 420,
+          "settings": {
+            "trajectorySeries": [
+              {
+                "id": "series-route",
+                "name": "Vehicle",
+                "xId": "sig-route-x",
+                "yId": "sig-route-y"
+              }
+            ],
+            "trajectoryXId": "sig-route-x",
+            "trajectoryYId": "sig-route-y",
+            "trajectoryInvert": {
+              "x": false,
+              "y": false,
+              "z": false
+            },
+            "trajectoryEqualAspect": true,
+            "trajectoryConnectGaps": true,
+            "trajectoryShowGrid": true,
+            "trajectoryShowPoints": false,
+            "trajectoryTrail": "all",
+            "trajectoryTrailSeconds": 10
+          }
+        },
+        {
+          "id": "view-profile",
+          "kind": "distribution",
+          "name": "Driving Profile",
+          "settings": {
+            "distributionIds": [
+              "sig-speed",
+              "sig-engine-speed",
+              "sig-accelerator"
+            ]
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-overview",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
+      "tableSelectedIds": [
+        "sig-speed",
+        "sig-engine-speed",
+        "sig-accelerator",
+        "sig-pedal",
+        "sig-brake-pressure",
+        "sig-gear-position",
+        "sig-steering-angle",
+        "sig-object-distance",
+        "sig-relative-speed"
+      ],
+      "traceSettings": {
+        "pinnedIds": [
+          "s:768",
+          "s:417"
+        ],
+        "defaultMode": "decoded",
+        "columns": [
+          "channel",
+          "direction",
+          "receivedAt",
+          "age",
+          "count",
+          "interval",
+          "minInterval",
+          "maxInterval",
+          "expected",
+          "deviation"
+        ],
+        "sort": "canId",
+        "descending": false
+      }
+    }
+  }
+}

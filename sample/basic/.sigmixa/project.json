@@ -1,0 +1,829 @@
+{
+  "schemaVersion": 4,
+  "frames": [],
+  "plugins": [],
+  "pluginBindings": [],
+  "externalCsvSources": [],
+  "addedLogs": [
+    "sigmixa-basic-decoded.csv"
+  ],
+  "clips": [],
+  "lookupTables": [],
+  "calculations": [],
+  "viewStates": {
+    "group-view": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-shared-speed",
+          "kind": "graph",
+          "name": "Vehicle Speed",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-speed",
+              "mdf::Vehicle%20Speed",
+              "mdf:Reference:Vehicle%20Speed"
+            ],
+            "chartColors": {
+              "sig-speed": "#2563eb",
+              "mdf::Vehicle%20Speed": "#2563eb",
+              "mdf:Reference:Vehicle%20Speed": "#93c5fd"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:speed"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-shared-coolant",
+          "kind": "graph",
+          "name": "Coolant Temperature",
+          "height": 200,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-coolant-temp",
+              "mdf::Coolant%20Temperature",
+              "mdf:Reference:Coolant%20Temperature"
+            ],
+            "chartColors": {
+              "sig-coolant-temp": "#0891b2",
+              "mdf::Coolant%20Temperature": "#0891b2",
+              "mdf:Reference:Coolant%20Temperature": "#67e8f9"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:temperature"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-shared-distribution",
+          "kind": "distribution",
+          "name": "Speed and Coolant Temperature",
+          "settings": {
+            "distributionIds": [
+              "sig-speed",
+              "mdf::Vehicle%20Speed",
+              "mdf:Reference:Vehicle%20Speed",
+              "sig-coolant-temp",
+              "mdf::Coolant%20Temperature",
+              "mdf:Reference:Coolant%20Temperature"
+            ]
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-shared-speed",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame"
+    },
+    "log:sigmixa-basic.asc": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-speed-engine",
+          "kind": "graph",
+          "name": "Speed and Engine",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-speed",
+              "sig-smoothed-speed",
+              "sig-engine-speed"
+            ],
+            "chartColors": {
+              "sig-speed": "#2563eb",
+              "sig-smoothed-speed": "#93c5fd",
+              "sig-engine-speed": "#16a34a"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:speed",
+                "family:rotational-speed"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-drive-states",
+          "kind": "stateTimeline",
+          "name": "Drive Mode and Gear",
+          "settings": {
+            "stateTimelineIds": [
+              "sig-drive-mode",
+              "sig-gear-position",
+              "sig-drive-state"
+            ]
+          }
+        },
+        {
+          "id": "view-torque-brake",
+          "kind": "graph",
+          "name": "Torque and Brake",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-engine-torque",
+              "sig-brake-pressure"
+            ],
+            "chartColors": {
+              "sig-engine-torque": "#7c3aed",
+              "sig-brake-pressure": "#dc2626"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:torque",
+                "family:pressure"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-mux-states",
+          "kind": "stateTimeline",
+          "name": "Multiplexer of 320",
+          "settings": {
+            "stateTimelineIds": [
+              "sig-mux-mode"
+            ]
+          }
+        },
+        {
+          "id": "view-temperatures",
+          "kind": "graph",
+          "name": "Temperatures",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-temp",
+              "sig-coolant-temp"
+            ],
+            "chartColors": {
+              "sig-temp": "#db2777",
+              "sig-coolant-temp": "#0891b2"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:temperature"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-body-states",
+          "kind": "stateTimeline",
+          "name": "Body Control",
+          "settings": {
+            "stateTimelineIds": [
+              "sig-headlight",
+              "sig-turn-left",
+              "sig-turn-right",
+              "sig-horn",
+              "sig-driver-door",
+              "sig-passenger-door",
+              "sig-seatbelt"
+            ]
+          }
+        },
+        {
+          "id": "view-distribution",
+          "kind": "distribution",
+          "name": "Speed, Torque and Brake",
+          "settings": {
+            "distributionIds": [
+              "sig-speed",
+              "sig-engine-speed",
+              "sig-engine-torque",
+              "sig-brake-pressure"
+            ]
+          }
+        },
+        {
+          "id": "view-path-3d",
+          "kind": "trajectory",
+          "name": "Vehicle Path (3D)",
+          "height": 380,
+          "settings": {
+            "trajectorySeries": [
+              {
+                "id": "series-vehicle",
+                "name": "Vehicle Position",
+                "xId": "sig-position-x",
+                "yId": "sig-position-y",
+                "zId": "sig-position-z"
+              }
+            ],
+            "trajectoryXId": "sig-position-x",
+            "trajectoryYId": "sig-position-y",
+            "trajectoryZId": "sig-position-z",
+            "trajectoryInvert": {
+              "x": false,
+              "y": false,
+              "z": false
+            },
+            "trajectoryEqualAspect": true,
+            "trajectoryConnectGaps": true,
+            "trajectoryShowGrid": true,
+            "trajectoryShowPoints": false,
+            "trajectoryTrail": "all",
+            "trajectoryTrailSeconds": 10,
+            "trajectoryView": {
+              "yaw": 5.374,
+              "pitch": 0.419,
+              "zoom": 1.49,
+              "panX": -4.11,
+              "panY": 0.58
+            }
+          }
+        },
+        {
+          "id": "view-door-module-states",
+          "kind": "stateTimeline",
+          "name": "Door Module State",
+          "settings": {
+            "stateTimelineIds": [
+              "sig-door-module-state"
+            ]
+          }
+        },
+        {
+          "id": "view-intervals",
+          "kind": "frameInterval",
+          "name": "Door Module Heartbeat Interval",
+          "settings": {
+            "frameIntervalKeys": [
+              "s:960"
+            ]
+          }
+        },
+        {
+          "id": "view-frame-timing",
+          "kind": "frameTiming",
+          "name": "Frame Timing",
+          "settings": {
+            "frameTimingHiddenKeys": []
+          }
+        },
+        {
+          "id": "view-property-service",
+          "kind": "graph",
+          "name": "Property Service",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p1-value",
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a0:p1-requested",
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p4-value",
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a0:p4-requested"
+            ],
+            "chartColors": {
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p1-value": "#2563eb",
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a0:p1-requested": "#f97316",
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p4-value": "#16a34a",
+              "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a0:p4-requested": "#dc2626"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:temperature",
+                "family:percentage"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-speed-engine",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
+      "tableSelectedIds": [
+        "sig-speed",
+        "sig-engine-speed",
+        "sig-engine-torque",
+        "sig-mechanical-power",
+        "sig-brake-pressure",
+        "sig-wheel-speed-difference",
+        "sig-headlight",
+        "sig-gear-position",
+        "sig-object-distance",
+        "sig-time-to-collision",
+        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte",
+        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric",
+        "sig-door-module-state",
+        "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a0:request",
+        "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p2-value",
+        "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p2-result",
+        "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p2-response-time"
+      ],
+      "traceSettings": {
+        "pinnedIds": [
+          "s:960",
+          "s:1696",
+          "s:1704"
+        ],
+        "defaultMode": "decoded",
+        "columns": [
+          "channel",
+          "direction",
+          "receivedAt",
+          "age",
+          "count",
+          "interval",
+          "minInterval",
+          "maxInterval",
+          "expected",
+          "deviation"
+        ],
+        "sort": "canId",
+        "descending": false
+      },
+      "viewStateScope": "file"
+    },
+    "log:sigmixa-basic.blf": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-speed-engine",
+          "kind": "graph",
+          "name": "Speed and Engine",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-speed",
+              "sig-smoothed-speed",
+              "sig-engine-speed"
+            ],
+            "chartColors": {
+              "sig-speed": "#2563eb",
+              "sig-smoothed-speed": "#93c5fd",
+              "sig-engine-speed": "#16a34a"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:speed",
+                "family:rotational-speed"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-drive-states",
+          "kind": "stateTimeline",
+          "name": "Drive Mode and Gear",
+          "settings": {
+            "stateTimelineIds": [
+              "sig-drive-mode",
+              "sig-gear-position",
+              "sig-drive-state"
+            ]
+          }
+        },
+        {
+          "id": "view-torque-brake",
+          "kind": "graph",
+          "name": "Torque and Brake",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-engine-torque",
+              "sig-brake-pressure"
+            ],
+            "chartColors": {
+              "sig-engine-torque": "#7c3aed",
+              "sig-brake-pressure": "#dc2626"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:torque",
+                "family:pressure"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-mux-states",
+          "kind": "stateTimeline",
+          "name": "Multiplexer of 320",
+          "settings": {
+            "stateTimelineIds": [
+              "sig-mux-mode"
+            ]
+          }
+        },
+        {
+          "id": "view-temperatures",
+          "kind": "graph",
+          "name": "Temperatures",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-temp",
+              "sig-coolant-temp"
+            ],
+            "chartColors": {
+              "sig-temp": "#db2777",
+              "sig-coolant-temp": "#0891b2"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:temperature"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-body-states",
+          "kind": "stateTimeline",
+          "name": "Body Control",
+          "settings": {
+            "stateTimelineIds": [
+              "sig-headlight",
+              "sig-turn-left",
+              "sig-turn-right",
+              "sig-horn",
+              "sig-driver-door",
+              "sig-passenger-door",
+              "sig-seatbelt"
+            ]
+          }
+        },
+        {
+          "id": "view-distribution",
+          "kind": "distribution",
+          "name": "Speed, Torque and Brake",
+          "settings": {
+            "distributionIds": [
+              "sig-speed",
+              "sig-engine-speed",
+              "sig-engine-torque",
+              "sig-brake-pressure"
+            ]
+          }
+        },
+        {
+          "id": "view-path-3d",
+          "kind": "trajectory",
+          "name": "Vehicle Path (3D)",
+          "height": 380,
+          "settings": {
+            "trajectorySeries": [
+              {
+                "id": "series-vehicle",
+                "name": "Vehicle Position",
+                "xId": "sig-position-x",
+                "yId": "sig-position-y",
+                "zId": "sig-position-z"
+              }
+            ],
+            "trajectoryXId": "sig-position-x",
+            "trajectoryYId": "sig-position-y",
+            "trajectoryZId": "sig-position-z",
+            "trajectoryInvert": {
+              "x": false,
+              "y": false,
+              "z": false
+            },
+            "trajectoryEqualAspect": true,
+            "trajectoryConnectGaps": true,
+            "trajectoryShowGrid": true,
+            "trajectoryShowPoints": false,
+            "trajectoryTrail": "all",
+            "trajectoryTrailSeconds": 10,
+            "trajectoryView": {
+              "yaw": 5.374,
+              "pitch": 0.419,
+              "zoom": 1.49,
+              "panX": -4.11,
+              "panY": 0.58
+            }
+          }
+        },
+        {
+          "id": "view-frame-timing",
+          "kind": "frameTiming",
+          "name": "Frame Timing",
+          "settings": {
+            "frameTimingHiddenKeys": []
+          }
+        },
+        {
+          "id": "view-intervals",
+          "kind": "frameInterval",
+          "name": "Door Module Heartbeat Interval",
+          "settings": {
+            "frameIntervalKeys": [
+              "s:960"
+            ]
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-speed-engine",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
+      "tableSelectedIds": [
+        "sig-speed",
+        "sig-engine-speed",
+        "sig-engine-torque",
+        "sig-mechanical-power",
+        "sig-brake-pressure",
+        "sig-wheel-speed-difference",
+        "sig-headlight",
+        "sig-gear-position",
+        "sig-object-distance",
+        "sig-time-to-collision",
+        "plugin:sample.byte-scaler:plugin-binding%3Asample.byte-scaler%3Aff-2a0:scaled-byte",
+        "plugin:sample.payload-metric:plugin-binding%3Asample.payload-metric%3Aff-2a0:payload-metric",
+        "sig-door-module-state",
+        "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a0:request",
+        "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p2-value",
+        "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p2-result",
+        "plugin:sample.property-service:plugin-binding%3Asample.property-service%3Aplugin-frame%253Asample.property-service%253As%253A6a8:p2-response-time"
+      ],
+      "viewStateScope": "file"
+    },
+    "log:sigmixa-basic-decoded.csv": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-decoded",
+          "kind": "graph",
+          "name": "Decoded Speed and Coolant Temperature",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "mdf::Vehicle%20Speed",
+              "mdf::Coolant%20Temperature"
+            ],
+            "chartColors": {
+              "mdf::Vehicle%20Speed": "#2563eb",
+              "mdf::Coolant%20Temperature": "#0891b2"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:speed",
+                "family:temperature"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-decoded",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
+      "tableSelectedIds": [
+        "mdf::Vehicle%20Speed",
+        "mdf::Coolant%20Temperature"
+      ],
+      "viewStateScope": "file"
+    },
+    "log:sigmixa-basic-decoded.mdf": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-decoded",
+          "kind": "graph",
+          "name": "Decoded Speed and Coolant Temperature",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "mdf:Reference:Vehicle%20Speed",
+              "mdf:Reference:Coolant%20Temperature"
+            ],
+            "chartColors": {
+              "mdf:Reference:Vehicle%20Speed": "#93c5fd",
+              "mdf:Reference:Coolant%20Temperature": "#67e8f9"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:speed",
+                "family:temperature"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-speed-band",
+          "kind": "graph",
+          "name": "Speed Band",
+          "height": 200,
+          "settings": {
+            "chartSelectedIds": [
+              "mdf:Reference:Speed%20Band"
+            ],
+            "chartColors": {
+              "mdf:Reference:Speed%20Band": "#2563eb"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "empty"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-decoded",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
+      "tableSelectedIds": [
+        "mdf:Reference:Vehicle%20Speed",
+        "mdf:Reference:Coolant%20Temperature",
+        "mdf:Reference:Speed%20Band"
+      ],
+      "viewStateScope": "file"
+    },
+    "log:sigmixa-basic.mf4": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-speed-check",
+          "kind": "graph",
+          "name": "CAN Speed and Stored Speed",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-speed",
+              "mdf:Reference:Vehicle%20Speed"
+            ],
+            "chartColors": {
+              "sig-speed": "#2563eb",
+              "mdf:Reference:Vehicle%20Speed": "#93c5fd"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:speed"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-wheels",
+          "kind": "graph",
+          "name": "Wheel Speeds (Array)",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "mdf:Chassis:WheelSpeed%5B0%5D",
+              "mdf:Chassis:WheelSpeed%5B1%5D",
+              "mdf:Chassis:WheelSpeed%5B2%5D",
+              "mdf:Chassis:WheelSpeed%5B3%5D"
+            ],
+            "chartColors": {
+              "mdf:Chassis:WheelSpeed%5B0%5D": "#2563eb",
+              "mdf:Chassis:WheelSpeed%5B1%5D": "#f97316",
+              "mdf:Chassis:WheelSpeed%5B2%5D": "#16a34a",
+              "mdf:Chassis:WheelSpeed%5B3%5D": "#dc2626"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:speed"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-position",
+          "kind": "trajectory",
+          "name": "Position (Structure)",
+          "height": 380,
+          "settings": {
+            "trajectorySeries": [
+              {
+                "id": "series-position",
+                "name": "Position",
+                "xId": "mdf:Chassis:Position.X",
+                "yId": "mdf:Chassis:Position.Y"
+              }
+            ],
+            "trajectoryXId": "mdf:Chassis:Position.X",
+            "trajectoryYId": "mdf:Chassis:Position.Y",
+            "trajectoryInvert": {
+              "x": false,
+              "y": false,
+              "z": false
+            },
+            "trajectoryEqualAspect": true,
+            "trajectoryConnectGaps": true,
+            "trajectoryShowGrid": true,
+            "trajectoryShowPoints": false,
+            "trajectoryTrail": "all",
+            "trajectoryTrailSeconds": 10
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-speed-check",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
+      "tableSelectedIds": [
+        "sig-speed",
+        "mdf:Reference:Vehicle%20Speed",
+        "mdf:Reference:Coolant%20Temperature"
+      ],
+      "viewStateScope": "file"
+    }
+  }
+}

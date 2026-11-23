@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-// The values of sample/sigmixa-basic.asc's frame 0x2A0 (Vehicle Powertrain Status) as the frame definitions decode them,
+// The values of sample/basic/sigmixa-basic.asc's frame 0x2A0 (Vehicle Powertrain Status) as the frame definitions decode them,
 // at the frame's own times: a log of values converted from CAN data, so it matches the CAN log exactly when compared.
 // The same formulas as scripts/generate-basic-log.mjs, rounded as that frame's bytes round them.
 function speedAt(time) {
@@ -23,7 +23,7 @@ for (let step = 0; step <= 1200; step += 2) {
   const coolant = Math.round(72 + time * 0.35 + Math.sin(time / 7) * 3 + 40) - 40;
   csvLines.push(`${step * 50 + 1},${+(speed / 3.6).toPrecision(15)},${coolant}`);
 }
-const csvOutput = path.resolve('sample/sigmixa-basic-decoded.csv');
+const csvOutput = path.resolve('sample/basic/sigmixa-basic-decoded.csv');
 writeFileSync(csvOutput, `${csvLines.join('\n')}\n`, 'utf8');
 
 console.log(`Generated ${csvOutput}: ${csvLines.length - 1} rows from 0.001s to 60.001s`);

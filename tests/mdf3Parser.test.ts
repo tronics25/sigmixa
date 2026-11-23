@@ -96,10 +96,10 @@ test('MDF 3 measured signals: sorted and unsorted data groups, linear and text c
 test('bundled basic MDF 3 log holds the reference signals, with the ASC start time', async () => {
   const { readFileSync } = await import('fs');
   const { parseAscFile } = await import('../src/parsers/asc/parseAscStream');
-  const { diagnostics, reference, signals } = await parse(readFileSync('sample/sigmixa-basic-decoded.mdf'));
+  const { diagnostics, reference, signals } = await parse(readFileSync('sample/basic/sigmixa-basic-decoded.mdf'));
   let ascReference: TimeReference | undefined;
-  await parseAscFile('sample/sigmixa-basic.asc', { sourceId: 'asc', onFrames: () => undefined, onTimeReference: (value) => { ascReference = value; } });
-  const csv = readFileSync('sample/sigmixa-basic-decoded.csv', 'utf8').trim().split(/\r?\n/).slice(1).map((line) => line.split(',').map(Number));
+  await parseAscFile('sample/basic/sigmixa-basic.asc', { sourceId: 'asc', onFrames: () => undefined, onTimeReference: (value) => { ascReference = value; } });
+  const csv = readFileSync('sample/basic/sigmixa-basic-decoded.csv', 'utf8').trim().split(/\r?\n/).slice(1).map((line) => line.split(',').map(Number));
   assert.deepEqual(diagnostics, []); assert.deepEqual(reference, ascReference);
   assert.deepEqual(signals.map((item) => [item.group, item.channel, item.unit]), [['Reference', 'Vehicle Speed', 'm/s'], ['Reference', 'Coolant Temperature', '°C'], ['Reference', 'Speed Band', undefined]]);
   assert.deepEqual(Array.from(signals[0].times), csv.map(([milliseconds]) => milliseconds / 1000));
@@ -131,7 +131,7 @@ test('an MDF log with measured signals only has their time range, so comparison 
   const { RawLogDocument } = await import('../src/extension/editors/rawLogDocument');
   const { PluginRegistry } = await import('../src/core/plugin/pluginHost');
   const { emptyProject } = await import('../src/core/project/schema');
-  const file = path.resolve('sample/sigmixa-basic-decoded.mdf');
+  const file = path.resolve('sample/basic/sigmixa-basic-decoded.mdf');
   (vscode.workspace as any).workspaceFolders = [{ uri: vscode.Uri.file(path.dirname(file)) }];
   (vscode.workspace as any).getWorkspaceFolder = () => vscode.workspace.workspaceFolders![0];
   const doc = new RawLogDocument(vscode.Uri.file(file), file, emptyProject(), 1, new PluginRegistry());

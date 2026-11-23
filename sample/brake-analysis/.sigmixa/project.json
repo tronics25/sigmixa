@@ -81,7 +81,7 @@
           "unit": "bar/%",
           "operation": {
             "type": "expression",
-            "expression": "[Brake Pressure] / max([Brake Pedal Position], 1)"
+            "expression": "[Brake Pressure] / max([Brake Pedal Position], 5)"
           }
         }
       ],
@@ -126,13 +126,133 @@
   "lookupTables": [],
   "calculations": [],
   "viewStates": {
+    "log:road-test.asc": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-pedal-pressure",
+          "kind": "graph",
+          "name": "Pedal and Brake Pressure",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-pedal",
+              "sig-brake-pressure"
+            ],
+            "chartColors": {
+              "sig-pedal": "#ec4899",
+              "sig-brake-pressure": "#dc2626"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:percentage",
+                "family:pressure"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-frame-timing",
+          "kind": "frameTiming",
+          "name": "Frame Timing",
+          "settings": {
+            "frameTimingHiddenKeys": []
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-pedal-pressure",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
+      "viewStateScope": "group"
+    },
+    "log:bench-test.asc": {
+      "activeTab": "visualize-view",
+      "visualizeViews": [
+        {
+          "id": "view-pedal-pressure",
+          "kind": "graph",
+          "name": "Pedal and Brake Pressure",
+          "height": 240,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-pedal",
+              "sig-brake-pressure"
+            ],
+            "chartColors": {
+              "sig-pedal": "#ec4899",
+              "sig-brake-pressure": "#dc2626"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:percentage",
+                "family:pressure"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
+          "id": "view-frame-timing",
+          "kind": "frameTiming",
+          "name": "Frame Timing",
+          "settings": {
+            "frameTimingHiddenKeys": []
+          }
+        }
+      ],
+      "visualizeSelectedViewId": "view-pedal-pressure",
+      "visualizeOptionsCollapsed": true,
+      "chartSignalGrouping": "frame",
+      "tableSignalGrouping": "frame",
+      "viewStateScope": "group"
+    },
     "group-view": {
       "activeTab": "visualize-view",
       "visualizeViews": [
         {
+          "id": "view-pedal",
+          "kind": "graph",
+          "name": "Brake Pedal",
+          "height": 200,
+          "settings": {
+            "chartSelectedIds": [
+              "sig-pedal"
+            ],
+            "chartColors": {
+              "sig-pedal": "#ec4899"
+            },
+            "chartMode": "raw",
+            "chartConnectGaps": true,
+            "chartAxisRange": {
+              "mode": "visible",
+              "includeZero": false
+            },
+            "chartGroupLayout": [
+              [
+                "family:percentage"
+              ]
+            ],
+            "chartSignalGrouping": "frame"
+          }
+        },
+        {
           "id": "view-brake",
           "kind": "graph",
-          "name": "Brake Analysis: Brake Pressure and Wheel Speed",
+          "name": "Brake Pressure and Wheel Speed",
           "height": 240,
           "settings": {
             "chartSelectedIds": [
@@ -140,8 +260,8 @@
               "sig-wheel-speed-fl"
             ],
             "chartColors": {
-              "sig-brake-pressure": "#2563eb",
-              "sig-wheel-speed-fl": "#f97316"
+              "sig-brake-pressure": "#dc2626",
+              "sig-wheel-speed-fl": "#0ea5e9"
             },
             "chartMode": "raw",
             "chartConnectGaps": true,
@@ -159,32 +279,6 @@
           }
         },
         {
-          "id": "view-pedal",
-          "kind": "graph",
-          "name": "Brake Pedal",
-          "height": 200,
-          "settings": {
-            "chartSelectedIds": [
-              "sig-pedal"
-            ],
-            "chartColors": {
-              "sig-pedal": "#2563eb"
-            },
-            "chartMode": "raw",
-            "chartConnectGaps": true,
-            "chartAxisRange": {
-              "mode": "visible",
-              "includeZero": false
-            },
-            "chartGroupLayout": [
-              [
-                "family:percentage"
-              ]
-            ],
-            "chartSignalGrouping": "frame"
-          }
-        },
-        {
           "id": "view-pedal-ratio",
           "kind": "graph",
           "name": "Pedal to Pressure Ratio",
@@ -194,7 +288,7 @@
               "sig-pedal-pressure-ratio"
             ],
             "chartColors": {
-              "sig-pedal-pressure-ratio": "#2563eb"
+              "sig-pedal-pressure-ratio": "#7c3aed"
             },
             "chartMode": "raw",
             "chartConnectGaps": true,
@@ -211,7 +305,7 @@
           }
         }
       ],
-      "visualizeSelectedViewId": "view-brake",
+      "visualizeSelectedViewId": "view-pedal",
       "visualizeOptionsCollapsed": true,
       "chartSignalGrouping": "frame",
       "tableSignalGrouping": "frame",
@@ -239,6 +333,6 @@
     }
   },
   "addedLogs": [
-    "../sigmixa-basic.asc"
+    "../basic/sigmixa-basic.asc"
   ]
 }

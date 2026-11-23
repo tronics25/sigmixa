@@ -1,19 +1,34 @@
 import { TraceTableView } from './traceTable';
 import { bindSidePanelResizer } from '../shared/sidePanelResizer';
 import type { ViewContextAction } from '../shared/viewContextAction';
-import { iconButton, labeledIconButton, type ViewCardState } from '../shared/iconButton';
+import { iconButton, labeledIconButton, viewActionGroup, type ViewCardState } from '../shared/iconButton';
+import { withBrandMark } from '../shared/brandMark';
 import { bindPressRepeat } from '../shared/pressRepeat';
 import type { LogViewState, ToExtensionMessage, ToWebviewMessage, VisualizeViewDefinition } from '../../extension/editors/rawLogProtocol';
 import { TimeSeriesView } from '../timeseries/timeSeriesView';
 import { TrajectoryView } from '../trajectory/trajectoryView';
+import { FrameTimingView } from '../timing/frameTimingView';
+import { FrameIntervalView } from '../timing/frameIntervalView';
+import { StateTimelineView } from '../timing/stateTimelineView';
+import { DistributionView } from '../timing/distributionView';
 import { advancePlayback } from '../../core/trajectory/trajectory';
 import { SEEK_STEPS, seekTimestamp, TimelineController } from '../shared/timelineController';
 import { t } from '../shared/i18n';
 import { closeActionMenu, showActionMenu } from '../shared/contextMenu';
 import { composeImageSheet } from '../shared/imageSheet';
 import { onTimeDisplayChange, timeCopyText, timeLabel, timeRangeLabel } from '../shared/timeDisplay';
+import type { ChartContext } from '../shared/svgCanvas';
 
-interface Entry { definition: VisualizeViewDefinition; view: TimeSeriesView | TrajectoryView; element: HTMLElement; options: HTMLElement; title: HTMLInputElement; }
+/** The kinds of view Visualize can add. */
+const VIEW_KINDS: Record<VisualizeViewDefinition['kind'], { readonly icon: string; label(): string }> = {
+  graph: { icon: 'graph-line', label: () => t('Time series', '時系列') },
+  trajectory: { icon: 'compass', label: () => t('Trajectory', '軌跡') },
+  frameTiming: { icon: 'pulse', label: () => t('Frame timing', 'フレームタイミング') },
+  frameInterval: { icon: 'graph-scatter', label: () => t('Receive interval', '受信間隔') },
+  stateTimeline: { icon: 'layers', label: () => t('State timeline', '状態タイムライン') },
+  distribution: { icon: 'graph', label: () => t('Distribution and statistics', '分布と統計') },
+};
+interface Entry { definition: VisualizeViewDefinition; view: TimeSeriesView | TrajectoryView | FrameTimingView | FrameIntervalView | StateTimelineView | DistributionView; element: HTMLElement; options: HTMLElement; title: HTMLInputElement; }
 
 /** Owns each view's settings and routes responses using unique request IDs. */
 const trimSeconds = (value: number) => value.toFixed(6).replace(/\.?0+$/, '');
@@ -23,6 +38,9 @@ export class VisualizeView {
   private readonly entries: Entry[] = [];
   private updateTimeControls: () => void = () => undefined;
   private readonly requests = new Map<number, { id: string; requestId: number }>();
+  /** The request that moves an edge of the selected range, when no graph is there to do it. */
+  private rangeRequest = 0;
+  private noGraphs: () => boolean = () => true;
   private nextRequest = 1_000_000;
   private lastRequest = 0;
   private lastRequestTimer?: number;
@@ -49,7 +67,7 @@ export class VisualizeView {
     this.traceHeight = typeof initial.visualizeTraceHeight === 'number' && Number.isFinite(initial.visualizeTraceHeight) ? Math.max(0, initial.visualizeTraceHeight) : 220;
     this.selectedId = initial.visualizeSelectedViewId;
     this.optionsCollapsed = initial.visualizeOptionsCollapsed ?? initial.visualizeOptionsPinned !== true;
-    host.innerHTML = `<div class="view-toolbar"><button class="add-view" type="button" aria-haspopup="menu" aria-expanded="false"><span class="codicon codicon-add" aria-hidden="true"></span> ${t('Add graph', 'グラフを追加')}</button><span class="spacer"></span><span class="reference-time muted"></span><div class="range-controls visualize-range" role="group" aria-label="${t('Selected range', '選択範囲')}" hidden><span class="clip-range muted"></span><span class="range-edge"><span class="clip-edge-label">${t('Start', '開始')}</span><span class="segmented"><button class="vr-start-prev" type="button"></button><button class="vr-start-next" type="button"></button></span></span><span class="range-edge"><span class="clip-edge-label">${t('End', '終了')}</span><span class="segmented"><button class="vr-end-prev" type="button"></button><button class="vr-end-next" type="button"></button></span></span><span class="range-actions segmented"><button class="vr-zoom" type="button"></button><button class="vr-clip" type="button"></button></span><button class="vr-clear" type="button"></button></div><div class="view-action-group visualize-zoom-all" role="group" aria-label="${t('Zoom', 'ズーム')}" hidden><span class="segmented"><button class="zoom-all-in" type="button"></button><button class="zoom-all-out" type="button"></button><button class="zoom-all-reset" type="button"></button></span></div><button class="save-sheet" type="button"></button></div><div class="visualize-workspace"><div class="visualize-content"><div class="visualize-list"></div><div class="trace-splitter" role="separator" tabindex="0" aria-orientation="horizontal" aria-controls="visualize-trace" aria-label="${t('Trace height', 'トレースの高さ')}"></div><section id="visualize-trace" class="last-values"><button class="trace-toggle" type="button" aria-controls="visualize-trace-data"><span class="codicon codicon-chevron-down" aria-hidden="true"></span>${t('Trace', 'トレース')}</button><div class="trace-playback"><div class="trace-playback-actions"><button class="trace-marker-toggle" type="button"></button><button class="trace-start"></button><button class="trace-play"></button><button class="trace-end"></button></div><output class="trace-time" aria-live="off">—</output><input class="trace-seek" type="range" min="0" max="1000000" step="1" value="0" aria-label="${t('Trace position', 'トレース位置')}"><span class="trace-range-end" aria-label="${t('End time', '終端時刻')}"></span><select class="trace-speed" aria-label="${t('Playback speed', '再生速度')}"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option></select><span class="trace-selection-status status selection-status" hidden></span></div><div id="visualize-trace-data" class="trace-data"><div class="last-value-table"></div></div></section></div><aside id="visualize-options" class="visualize-options" aria-label="${t('Graph settings', 'グラフ設定')}"><header><strong>${t('Graph settings', 'グラフ設定')}</strong><button class="close-view-options" type="button"></button></header><div class="options-view-name"></div><p class="options-empty muted">${t('Add a graph to configure it.', 'グラフを追加すると設定できます。')}</p><div class="view-options-panels"></div></aside></div>`;
+    host.innerHTML = `<div class="view-toolbar"><button class="add-view" type="button" aria-haspopup="menu" aria-expanded="false"><span class="codicon codicon-add" aria-hidden="true"></span> ${t('Add view', 'ビューを追加')}</button><span class="spacer"></span><span class="reference-time muted"></span><div class="range-controls visualize-range" role="group" aria-label="${t('Selected range', '選択範囲')}" hidden><span class="clip-range muted"></span><span class="range-edge"><span class="clip-edge-label">${t('Start', '開始')}</span><span class="segmented"><button class="vr-start-prev" type="button"></button><button class="vr-start-next" type="button"></button></span></span><span class="range-edge"><span class="clip-edge-label">${t('End', '終了')}</span><span class="segmented"><button class="vr-end-prev" type="button"></button><button class="vr-end-next" type="button"></button></span></span><span class="range-actions segmented"><button class="vr-zoom" type="button"></button><button class="vr-clip" type="button"></button></span><button class="vr-clear" type="button"></button></div><div class="view-action-group visualize-zoom-all" role="group" aria-label="${t('Zoom', 'ズーム')}" hidden><span class="segmented"><button class="zoom-all-in" type="button"></button><button class="zoom-all-out" type="button"></button><button class="zoom-all-reset" type="button"></button></span></div><button class="save-sheet" type="button"></button></div><div class="visualize-workspace"><div class="visualize-content"><div class="visualize-list"></div><div class="trace-splitter" role="separator" tabindex="0" aria-orientation="horizontal" aria-controls="visualize-trace" aria-label="${t('Trace height', 'トレースの高さ')}"></div><section id="visualize-trace" class="last-values"><button class="trace-toggle" type="button" aria-controls="visualize-trace-data"><span class="codicon codicon-chevron-down" aria-hidden="true"></span>${t('Trace', 'トレース')}</button><div class="trace-playback"><div class="trace-playback-actions"><button class="trace-marker-toggle" type="button"></button><button class="trace-start"></button><button class="trace-play"></button><button class="trace-end"></button></div><output class="trace-time" aria-live="off">—</output><input class="trace-seek" type="range" min="0" max="1000000" step="1" value="0" aria-label="${t('Trace position', 'トレース位置')}"><span class="trace-range-end" aria-label="${t('End time', '終端時刻')}"></span><select class="trace-speed" aria-label="${t('Playback speed', '再生速度')}"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option></select><span class="trace-selection-status status selection-status" hidden></span></div><div id="visualize-trace-data" class="trace-data"><div class="last-value-table"></div></div></section></div><aside id="visualize-options" class="visualize-options" aria-label="${t('Graph settings', 'グラフ設定')}"><header><strong>${t('Graph settings', 'グラフ設定')}</strong><button class="close-view-options" type="button"></button></header><div class="options-view-name"></div><p class="options-empty muted">${t('Add a graph to configure it.', 'ビューを追加すると設定できます。')}</p><div class="view-options-panels"></div></aside></div>`;
     this.list = host.querySelector('.visualize-list')!;
     this.content = host.querySelector('.visualize-content')!;
     this.trace = host.querySelector('.last-values')!;
@@ -109,18 +127,30 @@ export class VisualizeView {
     // Time belongs to the whole log: every graph shows the same span. Zooming and everything done with the selected range
     // is up here; a zoom is given to one graph, which shares it with the others through the timeline.
     const graphs = () => this.entries.flatMap((entry) => entry.view instanceof TimeSeriesView ? [entry.view] : []);
+    // Without a graph (only frame timing, state timeline and the like), the time span is changed on the timeline itself.
+    const zoomTimeline = (factor: number) => {
+      const full = this.timeline.bounds; if (!full || !(full.end > full.start)) return; const view = this.timeline.viewRange ?? full; const whole = full.end - full.start;
+      const span = Math.max(whole * 0.0005, Math.min(whole, (view.end - view.start) * factor)); const start = Math.max(full.start, Math.min((view.start + view.end) / 2 - span / 2, full.end - span));
+      this.timeline.setViewRange(span >= whole ? undefined : { start, end: start + span }, 'visualize');
+    };
+    this.noGraphs = () => graphs().length === 0;
     for (const [selector, icon, text, label, factor] of [['.zoom-all-in', 'zoom-in', t('Zoom in', '拡大'), t('Zoom in; hold to repeat', '拡大・長押しで連続'), 1 / 1.5], ['.zoom-all-out', 'zoom-out', t('Zoom out', '縮小'), t('Zoom out; hold to repeat', '縮小・長押しで連続'), 1.5]] as const)
-      bindPressRepeat(labeledIconButton(host.querySelector<HTMLButtonElement>(selector)!, icon, text, label), () => graphs().find((graph) => graph.canZoom)?.zoomBy(factor), { intervalMs: 180 });
-    labeledIconButton(host.querySelector<HTMLButtonElement>('.zoom-all-reset')!, 'discard', t('Reset', 'リセット'), t('Reset zoom', 'ズームをリセット')).addEventListener('click', () => graphs().find((graph) => graph.canZoom)?.resetZoom());
+      bindPressRepeat(labeledIconButton(host.querySelector<HTMLButtonElement>(selector)!, icon, text, label), () => { const graph = graphs().find((item) => item.canZoom); if (graph) graph.zoomBy(factor); else zoomTimeline(factor); }, { intervalMs: 180 });
+    labeledIconButton(host.querySelector<HTMLButtonElement>('.zoom-all-reset')!, 'discard', t('Reset', 'リセット'), t('Reset zoom', 'ズームをリセット')).addEventListener('click', () => { const graph = graphs().find((item) => item.canZoom); if (graph) graph.resetZoom(); else this.timeline.setViewRange(undefined, 'visualize'); });
     for (const [selector, edge, direction, label] of [['.vr-start-prev', 'start', -1, t('Move start to previous CAN Timestamp', '開始を前のCANタイムスタンプへ移動')], ['.vr-start-next', 'start', 1, t('Move start to next CAN Timestamp', '開始を次のCANタイムスタンプへ移動')], ['.vr-end-prev', 'end', -1, t('Move end to previous CAN Timestamp', '終了を前のCANタイムスタンプへ移動')], ['.vr-end-next', 'end', 1, t('Move end to next CAN Timestamp', '終了を次のCANタイムスタンプへ移動')]] as const)
-      bindPressRepeat(iconButton(host.querySelector<HTMLButtonElement>(selector)!, direction < 0 ? 'chevron-left' : 'chevron-right', label), () => graphs()[0]?.adjustSelectedRange(edge, direction));
+      bindPressRepeat(iconButton(host.querySelector<HTMLButtonElement>(selector)!, direction < 0 ? 'chevron-left' : 'chevron-right', label), () => {
+        const graph = graphs()[0]; const range = this.timeline.range; if (graph) { graph.adjustSelectedRange(edge, direction); return; } if (!range) return;
+        this.rangeRequest = ++this.nextRequest; this.post({ type: 'adjustTimeRangeRequest', requestId: this.rangeRequest, edge, direction, startTimestamp: range.start, endTimestamp: range.end });
+      });
     labeledIconButton(host.querySelector<HTMLButtonElement>('.vr-zoom')!, 'zoom-in', t('Zoom to range', '選択範囲を拡大'), t('Zoom to selected range', '選択範囲を拡大')).addEventListener('click', () => {
-      const range = this.timeline.range; if (!range) return; const all = graphs(); all.find((graph) => graph.canZoom)?.zoomToRange(range); all[0]?.clearSelectedRange();
+      const range = this.timeline.range; if (!range) return; const all = graphs();
+      if (all.length) { all.find((graph) => graph.canZoom)?.zoomToRange(range); all[0].clearSelectedRange(); } else if (range.end > range.start) { this.timeline.setViewRange({ ...range }, 'visualize'); this.timeline.setRange(undefined, 'visualize'); }
     });
-    labeledIconButton(host.querySelector<HTMLButtonElement>('.vr-clip')!, 'new-file', t('Create Clip', 'クリップ作成')).addEventListener('click', () => graphs()[0]?.createClipFromSelectedRange());
-    labeledIconButton(host.querySelector<HTMLButtonElement>('.vr-clear')!, 'close', t('Clear', '解除'), t('Clear selected range', '選択範囲を解除')).addEventListener('click', () => graphs()[0]?.clearSelectedRange());
+    labeledIconButton(host.querySelector<HTMLButtonElement>('.vr-clip')!, 'new-file', t('Create Clip', 'クリップ作成')).addEventListener('click', () => { const graph = graphs()[0]; const range = this.timeline.range; if (graph) graph.createClipFromSelectedRange(); else if (range && range.end > range.start) this.post({ type: 'createClip', startTimestamp: range.start, endTimestamp: range.end, signalIds: [] }); });
+    labeledIconButton(host.querySelector<HTMLButtonElement>('.vr-clear')!, 'close', t('Clear', '解除'), t('Clear selected range', '選択範囲を解除')).addEventListener('click', () => { const graph = graphs()[0]; if (graph) graph.clearSelectedRange(); else this.timeline.setRange(undefined, 'visualize'); });
     this.updateTimeControls = () => {
-      const range = this.timeline.range; const any = graphs().length > 0;
+      // Every view but a trajectory is on the time axis (or counts over it), so the zoom and the selected range are theirs too.
+      const range = this.timeline.range; const any = this.entries.some((entry) => entry.definition.kind !== 'trajectory');
       host.querySelector<HTMLElement>('.visualize-zoom-all')!.hidden = !any;
       host.querySelector<HTMLElement>('.visualize-range')!.hidden = !range || !any;
       // With a range selected, the only zoom offered is zooming to it, so there is one zoom button, not two kinds.
@@ -149,6 +179,8 @@ export class VisualizeView {
   hide(): void { this.finishSeek?.(); this.pausePlayback(); closeActionMenu(); this.visible = false; for (const entry of this.entries) entry.view.hide(); }
   handle(message: ToWebviewMessage): void {
     if (message.type === 'clipRanges') { this.timeline.setClipRanges(message.clips); return; }
+    if (message.type === 'timeRangeAdjusted' && message.requestId === this.rangeRequest) { this.rangeRequest = 0; this.timeline.setRange({ start: message.startTimestamp, end: message.endTimestamp }, 'visualize'); return; }
+    if (message.type === 'clipCreated' && this.noGraphs()) this.timeline.setRange(undefined, 'visualize');
     if (message.type === 'timelineRange') { if (message.requestId === this.boundsRequest) this.timeline.setBounds(message.range); return; }
     if (this.visible && (message.type === 'progress' || message.type === 'parseComplete' || message.type === 'analysisComplete')) this.requestBounds();
     if (message.type === 'definitionsChanged') { this.requestBounds(); this.requests.clear(); this.lastRequest = 0; this.lastValues = []; this.renderLastValues(); }
@@ -258,7 +290,7 @@ export class VisualizeView {
   private updateOptionsHeading(): void {
     const selected = this.entries.find((entry) => entry.definition.id === this.selectedId); const heading = this.host.querySelector<HTMLElement>('.options-view-name')!; heading.replaceChildren();
     if (selected) {
-      const icon = document.createElement('span'); icon.className = `codicon codicon-${selected.definition.kind === 'graph' ? 'graph-line' : 'compass'}`; icon.setAttribute('aria-hidden', 'true');
+      const icon = document.createElement('span'); icon.className = `codicon codicon-${VIEW_KINDS[selected.definition.kind].icon}`; icon.setAttribute('aria-hidden', 'true');
       // The graph's name can be changed here as well as on the graph itself.
       const name = document.createElement('input'); name.className = 'options-view-title'; name.value = selected.definition.name;
       name.setAttribute('aria-label', t('Graph name', 'グラフ名'));
@@ -334,18 +366,18 @@ export class VisualizeView {
     this.select(this.selectedId === entry.definition.id ? this.entries[0]?.definition.id : this.selectedId, false, false); this.persist();
   }
   private showAddViewMenu(trigger: HTMLButtonElement): void {
-    const actions: ViewContextAction[] = (['graph', 'trajectory'] as const).map((kind) => ({
-      label: kind === 'graph' ? t('Time series', '時系列') : t('Trajectory', '軌跡'),
-      icon: kind === 'graph' ? 'graph-line' : 'compass',
+    const actions: ViewContextAction[] = (['graph', 'trajectory', 'frameTiming', 'frameInterval', 'stateTimeline', 'distribution'] as const).map((kind) => ({
+      label: VIEW_KINDS[kind].label(),
+      icon: VIEW_KINDS[kind].icon,
       run: () => {
-        const added = this.add({ id: crypto.randomUUID(), kind, name: kind === 'graph' ? t('Time series', '時系列') : t('Trajectory', '軌跡'), settings: {} });
+        const added = this.add({ id: crypto.randomUUID(), kind, name: VIEW_KINDS[kind].label(), settings: {} });
         this.select(added.definition.id);
         added.element.scrollIntoView({ block: 'nearest' });
         added.element.querySelector<HTMLElement>('.visualize-card-header')!.focus({ preventScroll: true });
       },
     }));
     const rect = trigger.getBoundingClientRect();
-    this.showActionMenu(actions, t('Add graph', 'グラフを追加'), rect.left, rect.bottom + 4, trigger, trigger);
+    this.showActionMenu(actions, t('Add view', 'ビューを追加'), rect.left, rect.bottom + 4, trigger, trigger);
   }
   private showViewMenu(entry: Entry, x: number, y: number, pointer?: { clientX: number; clientY: number }): void {
     const index = this.entries.indexOf(entry);
@@ -364,6 +396,8 @@ export class VisualizeView {
     showActionMenu(actions, label, x, y, returnFocus, { trigger, scroller: this.list });
   }
   private bindViewResize(entry: Entry): void {
+    // Frame timing and the state timeline are as tall as their rows, and the receive interval has one fixed plot.
+    if (entry.view instanceof FrameTimingView || entry.view instanceof FrameIntervalView || entry.view instanceof StateTimelineView || entry.view instanceof DistributionView) return;
     const handle = document.createElement('div'); handle.className = 'view-resizer'; handle.tabIndex = 0;
     handle.setAttribute('role', 'separator'); handle.setAttribute('aria-orientation', 'horizontal'); handle.setAttribute('aria-label', t('Graph height', 'グラフの高さ'));
  entry.element.appendChild(handle);
@@ -384,7 +418,7 @@ export class VisualizeView {
     handle.addEventListener('dblclick', () => { apply(defaultHeight); this.persist(); });
     handle.addEventListener('keydown', (event) => { if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return; event.preventDefault(); apply(height + (event.key === 'ArrowUp' ? -20 : 20)); this.persist(); });
   }
-  private titleMeasure?: CanvasRenderingContext2D;
+  private titleMeasure?: ChartContext;
   /** Sizes the title to its text, so the legend follows it directly. */
   private fitTitle(title: HTMLInputElement): void {
     const context = this.titleMeasure ??= document.createElement('canvas').getContext('2d')!; const style = getComputedStyle(title);
@@ -415,7 +449,7 @@ export class VisualizeView {
       } else this.post(message);
     };
     const save = (partial: Partial<LogViewState>) => { entry.definition = { ...entry.definition, settings: { ...entry.definition.settings, ...partial } }; this.updateOptionsVisibility(); this.persist(); };
-    const view = definition.kind === 'graph' ? new TimeSeriesView(body, definition.settings, send, save, this.timeline, controls, headerActions, (settings) => this.insertActualViews(entry, settings)) : new TrajectoryView(body, definition.settings, send, save, this.timeline, controls, headerActions);
+    const view = definition.kind === 'graph' ? new TimeSeriesView(body, definition.settings, send, save, this.timeline, controls, headerActions, (settings) => this.insertActualViews(entry, settings)) : definition.kind === 'frameTiming' ? new FrameTimingView(body, definition.settings, send, save, this.timeline, controls) : definition.kind === 'frameInterval' ? new FrameIntervalView(body, definition.settings, send, save, this.timeline, controls) : definition.kind === 'stateTimeline' ? new StateTimelineView(body, definition.settings, send, save, this.timeline, controls) : definition.kind === 'distribution' ? new DistributionView(body, definition.settings, send, save, this.timeline, controls) : new TrajectoryView(body, definition.settings, send, save, this.timeline, controls, headerActions);
     const entry: Entry = { definition, view, element, options, title }; this.entries.push(entry); this.updateTimeControls();
     // The title sits at the start of the view's legend row, so title and legend share one flow; the header then holds only
     // the actions, shown while the card is hovered, selected or focused. Without a legend the title stays in the header.
@@ -449,6 +483,12 @@ export class VisualizeView {
       const optionId = legend?.dataset.signalId ?? legend?.dataset.trackId;
       if (optionId) entry.view.revealOption(optionId);
     });
+    // A graph and a trajectory bring their own export button; the other views get the same one here, before the graph actions.
+    if (!(view instanceof TimeSeriesView) && !(view instanceof TrajectoryView)) {
+      const save = iconButton(document.createElement('button'), 'export', t('Save image', '画像を保存')); save.type = 'button';
+      save.addEventListener('click', (event) => { event.stopPropagation(); const image = view.renderImage(`SigMixa · ${entry.definition.name}`); if (image) this.post({ type: 'saveTimeSeriesImage', ...withBrandMark(image, getComputedStyle(document.documentElement).getPropertyValue('--vscode-foreground').trim() || '#ddd') }); });
+      headerActions.appendChild(viewActionGroup(t('Export', 'エクスポート'), save));
+    }
     const actions = document.createElement('div'); actions.className = 'view-header-actions view-action-group'; actions.setAttribute('role', 'group'); actions.setAttribute('aria-label', t('Graph actions', 'グラフ操作')); headerActions.appendChild(actions);
     title.addEventListener('change', () => { entry.definition = { ...entry.definition, name: title.value.trim() || entry.definition.name }; title.value = entry.definition.name; this.updateOptionsHeading(); this.persist(); });
     title.addEventListener('keydown', (event) => {

@@ -378,7 +378,7 @@ test('measured signals of an MF4 log are in its Signal catalog, grouped by chann
   const root = mkdtempSync(path.join(tmpdir(), 'sigmixa-mdf-signals-'));
   (vscode.workspace as any).workspaceFolders = [{ uri: vscode.Uri.file(root) }];
   (vscode.workspace as any).getWorkspaceFolder = () => vscode.workspace.workspaceFolders![0];
-  const file = path.join(root, 'basic.mf4'); writeFileSync(file, readFileSync('sample/sigmixa-basic.mf4'));
+  const file = path.join(root, 'basic.mf4'); writeFileSync(file, readFileSync('sample/basic/sigmixa-basic.mf4'));
   const project = emptyProject();
   const doc = new RawLogDocument(vscode.Uri.file(file), file, project, 1, new PluginRegistry());
   try {
@@ -538,9 +538,9 @@ test('readNumber reads bit fields in both byte orders, signed values and 64-bit 
 });
 
 test('bundled basic MF4 log mirrors every ASC frame, remote frames included, with the ASC start time, and holds the reference signals', async () => {
-  const { frames, diagnostics, reference, signals } = await parseFile(path.resolve('sample/sigmixa-basic.mf4'));
+  const { frames, diagnostics, reference, signals } = await parseFile(path.resolve('sample/basic/sigmixa-basic.mf4'));
   const ascFrames: CanFrame[] = []; let ascReference: TimeReference | undefined;
-  await parseAscFile('sample/sigmixa-basic.asc', { sourceId: 'sample/sigmixa-basic.asc', onFrames: (items) => ascFrames.push(...items), onTimeReference: (value) => { ascReference = value; } });
+  await parseAscFile('sample/basic/sigmixa-basic.asc', { sourceId: 'sample/basic/sigmixa-basic.asc', onFrames: (items) => ascFrames.push(...items), onTimeReference: (value) => { ascReference = value; } });
   const comparable = (frame: CanFrame) => ({
     timestampNs: Math.round(frame.timestamp * 1_000_000_000), channel: frame.channel, direction: frame.direction,
     canId: frame.canId, extended: frame.extended, dlcCode: frame.dlcCode, dataLength: frame.dataLength, data: [...frame.data],
@@ -550,7 +550,7 @@ test('bundled basic MF4 log mirrors every ASC frame, remote frames included, wit
   assert.deepEqual(frames.map(comparable), ascFrames.map(comparable));
   assert.deepEqual(reference, ascReference);
   // Its measured signals are the reference CSV's columns, on the same time base.
-  const csv = readFileSync('sample/sigmixa-basic-decoded.csv', 'utf8').trim().split(/\r?\n/).slice(1).map((line) => line.split(',').map(Number));
+  const csv = readFileSync('sample/basic/sigmixa-basic-decoded.csv', 'utf8').trim().split(/\r?\n/).slice(1).map((line) => line.split(',').map(Number));
   assert.deepEqual(signals.map((item) => [item.group, item.channel, item.unit, item.parent?.label]), [
     ['Reference', 'Vehicle Speed', 'm/s', undefined], ['Reference', 'Coolant Temperature', '°C', undefined],
     ...[0, 1, 2, 3].map((wheel) => ['Chassis', `WheelSpeed[${wheel}]`, 'm/s', 'WheelSpeed [4]']), ['Chassis', 'Position.X', 'm', 'Position'], ['Chassis', 'Position.Y', 'm', 'Position'],

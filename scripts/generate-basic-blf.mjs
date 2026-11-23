@@ -2,8 +2,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 
-const input = path.resolve('sample/sigmixa-basic.asc');
-const output = path.resolve('sample/sigmixa-basic.blf');
+const input = path.resolve('sample/basic/sigmixa-basic.asc');
+const output = path.resolve('sample/basic/sigmixa-basic.blf');
 const objects = [];
 
 for (const line of readFileSync(input, 'utf8').split(/\r?\n/)) {

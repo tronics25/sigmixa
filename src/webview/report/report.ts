@@ -1,7 +1,9 @@
 // The shim must run before the comparison page asks for `acquireVsCodeApi`.
 import { brandIconSvg } from '../shared/brandMark';
 import { reportData } from './reportShim';
+import './reportViews';
 import '../comparison/comparison';
+import { FRAME_TIMING_STYLES } from '../timing/frameTimingStyle';
 import { t } from '../shared/i18n';
 import { REPORT_TABLE_STYLES, renderReportTable } from './reportTable';
 
@@ -23,7 +25,8 @@ body{margin:0}
 /* A report shows results; it cannot open logs or change what is compared. */
 body[data-report] .target-open,body[data-report] .target-remove{display:none}
 body[data-report=log] .targets{display:none}
-${REPORT_TABLE_STYLES}`;
+${REPORT_TABLE_STYLES}
+${FRAME_TIMING_STYLES}`;
 document.head.appendChild(style);
 
 const header = document.querySelector<HTMLElement>('.report-header')!;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { layoutHoverLabelBoxes, layoutHoverLabels, layoutTimestampMarker, timestampGutter } from '../src/webview/shared/chartHoverLabels';
+import { layoutHoverLabelBoxes, layoutHoverLabels, layoutTimestampMarker, timestampGutter, timestampGutterRows } from '../src/webview/shared/chartHoverLabels';
 
 test('hover labels retain isolated intersections and separate overlapping values', () => {
   assert.deepEqual(layoutHoverLabels([{ y: 20 }, { y: 60 }], 10, 90).map((item) => item.labelY), [20, 60]);
@@ -52,4 +52,18 @@ test('time-axis gutter expands only for overlapping Timestamp badges', () => {
   assert.equal(timestampGutter(context, [{ x: 100, text: '1s' }], 10, 310), 0);
   assert.equal(timestampGutter(context, [{ x: 100, text: '1s' }, { x: 220, text: '2s' }], 10, 310), 0);
   assert.equal(timestampGutter(context, [{ x: 100, text: '1s' }, { x: 104, text: '2s' }], 10, 310), 21);
+});
+
+test('moving Timestamp badges stay within the gutter rows and move sideways when they are taken', () => {
+  assert.equal(timestampGutterRows(0), 1);
+  assert.equal(timestampGutterRows(21), 2);
+  const first = layoutTimestampMarker(100, 64, 18, 10, 410, 100, [], 0, 2);
+  const second = layoutTimestampMarker(104, 64, 18, 10, 410, 100, [first], 0, 2);
+  assert.equal(second.y, 126);
+  // Both rows are taken at this time: the third badge keeps to them, beside the others, without overlapping.
+  const third = layoutTimestampMarker(108, 64, 18, 10, 410, 100, [first, second], 0, 2);
+  assert.ok(third.y === 105 || third.y === 126);
+  for (const other of [first, second]) assert.ok(third.y !== other.y || third.x >= other.x + other.width + 3 || third.x + third.width + 3 <= other.x);
+  // Without a row limit, badges still stack downward as before.
+  assert.equal(layoutTimestampMarker(108, 64, 18, 10, 410, 100, [first, second]).y, 147);
 });

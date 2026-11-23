@@ -1,3 +1,4 @@
+import type { ChartContext } from './svgCanvas';
 /** The space a label takes on a trajectory plot. */
 export interface LabelBox { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 
@@ -23,7 +24,7 @@ export function separateTitles<T extends LabelBox>(titles: readonly T[], top: nu
  * each other where axes start together or an axis is seen end-on. What is already there stays: first the titles, which
  * say what an axis is.
  */
-export function placeTickLabel(context: Pick<CanvasRenderingContext2D, 'measureText'>, text: string, x: number, y: number, occupied: LabelBox[]): boolean {
+export function placeTickLabel(context: Pick<ChartContext, 'measureText'>, text: string, x: number, y: number, occupied: LabelBox[]): boolean {
   const box = { x, y: y - 11, width: context.measureText(text).width, height: 14 };
   if (occupied.some((item) => overlaps(box, item))) return false;
   occupied.push(box); return true;

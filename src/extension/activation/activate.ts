@@ -18,7 +18,7 @@ import { ProjectStore } from '../storage/projectStore';
 import { FrameDefinitionEditor, type NewFramePrefill } from '../frame-editor/frameDefinitionEditor';
 import { PluginManager } from '../plugins/pluginManager';
 import { PluginEditor } from '../plugin-editor/pluginEditor';
-import { exportDbc, importDbc } from '../../core/dbc/dbc';
+import { decodeDbcBytes, exportDbc, importDbc } from '../../core/dbc/dbc';
 import type { ClipDefinition } from '../../core/project/schema';
 import { resolveClipPath } from '../clips/clipPaths';
 import { ComparisonEditor } from '../comparison/comparisonEditor';
@@ -387,7 +387,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const selected = await vscode.window.showOpenDialog({ title: t('Import DBC Frame Definitions', "DBCからフレーム定義をインポート"), canSelectFiles: true, canSelectFolders: false, canSelectMany: false, filters: { 'CAN database': ['dbc'] } });
       if (!selected?.[0]) return;
       try {
-        const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(selected[0]));
+        const text = decodeDbcBytes(await vscode.workspace.fs.readFile(selected[0]));
         const result = importDbc(text, selected[0].fsPath);
         writeDbcDiagnostics(dbcOutput, result.diagnostics);
         if (!result.frames.length) { void vscode.window.showErrorMessage(t(`No valid CAN Frames were imported from ${selected[0].path.split('/').pop() ?? 'DBC'}. See “SigMixa DBC” output for details.`, `${selected[0].path.split('/').pop() ?? 'DBC'}から有効なフレームをインポートできませんでした。詳細は「SigMixa DBC」出力を確認してください。`)); return; }

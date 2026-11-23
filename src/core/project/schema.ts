@@ -1,3 +1,4 @@
+import { SEND_MODES } from '../timing/sendingPattern';
 import type { ManualDerivedSignalDefinition, ManualFrameDefinition, ManualSignalDefinition } from '../manual/manualDefinition';
 import { formatCanId, parseCanId } from '../frame/canId';
 
@@ -330,6 +331,7 @@ function coerceFrame(value: unknown): ManualFrameDefinition {
     name: String(frame.name ?? ''),
     frameLength: Number(frame.frameLength ?? 8),
     expectedPeriodMs: frame.expectedPeriodMs === undefined ? undefined : Number(frame.expectedPeriodMs),
+    sendMode: SEND_MODES.find((mode) => mode === frame.sendMode),
     multiplexing: frame.multiplexing === true || undefined,
     signals: Array.isArray(frame.signals) ? frame.signals.map(coerceSignal) : [],
     derivedSignals: Array.isArray(frame.derivedSignals) ? frame.derivedSignals.map(coerceDerivedSignal) : [],

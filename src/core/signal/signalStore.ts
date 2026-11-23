@@ -1,9 +1,12 @@
 import type { SignalDefinition, SignalEvent, SignalSample } from './signal';
+import { buildStateRuns, type StateRuns } from './stateRuns';
+import { buildDistribution, valueExtent, type DistributionGrid } from './distribution';
 import { signalCellChange, type SignalCellChange } from './tableChanges';
 import { finishScan, memoCells, SCAN_STEP, tagTextCells, TAG_SPACING, textCells, valueTextCells, WidestPicker } from '../frame/widestText';
 import type { TimeRange } from '../timeline/timeline';
 import { watchedSteps } from '../storage/steps';
 import { Column, F64Column, I32Column, mergedOrder, stableOrder, U16Column, U32Column, U8Column } from '../storage/column';
+import { dropoutLimit, estimateSendMode } from '../timing/sendingPattern';
 
 export interface SignalEventRow {
   readonly id: string;
@@ -45,7 +48,19 @@ export type SignalFrameRef = string | number;
 export interface SignalStoreOptions {
   /** The frame ID of a frame ordinal, for rows handed out. */
   readonly frameId?: (ordinal: number) => string | undefined;
+  /**
+   * Where the line of a Signal decoded from a CAN frame breaks: where its frame was not received (see `SignalBreaks`).
+   * Undefined for a Signal without a frame in the log; its own receive times are read instead.
+   */
+  readonly frameBreaks?: (definition: SignalDefinition) => SignalBreaks | undefined;
 }
+
+/**
+ * When a Signal's reception broke off. `limit`: the longest interval between two of its samples that is still continuous
+ * (Infinity: sent on events). `starts`/`ends`: intervals its frame was not received, ascending; a Signal interval that
+ * holds one breaks too, so a multiplexed Signal, which skips the frames of other multiplexer values, breaks only there.
+ */
+export interface SignalBreaks { readonly limit: number; readonly starts?: Float64Array; readonly ends?: Float64Array }
 
 /** No row: a sample that came without a frame (External CSV). */
 const NO_ROW = 0xffffffff;
@@ -82,6 +97,7 @@ interface Series {
   sorted: boolean; lastTimestamp: number;
   /** `rows` never decreases, so a row's samples are found by binary search; otherwise through `rowOrder`. */
   rowsAscending: boolean; rowOrder?: Uint32Array;
+  /** The longest interval of continuous reception, from the series' own times while it has this many samples. */
   cadence?: { length: number; threshold: number };
   /** Per block of SUMMARY_BLOCK samples, made as the series grows (see `summaryOf`); dropped when samples are reordered. */
   summary?: BlockSummary;
@@ -604,8 +620,7 @@ export class InMemorySignalStore {
         const target = this.seriesList[entry.series]; const id = target.definition.id;
         if (!selected.has(id) || entry.sample === 0) continue;
         if (range && this.timeAt(target, entry.sample - 1) < range.start) continue;
-        if (!target.cadence || target.cadence.length !== target.values.n) target.cadence = { length: target.values.n, threshold: this.cadenceThreshold(target, 0, target.values.n) };
-        const change = signalCellChange(row.values.get(id)!, this.sampleAt(target, entry.sample - 1), target.minimum, target.maximum, target.cadence.threshold);
+        const change = signalCellChange(row.values.get(id)!, this.sampleAt(target, entry.sample - 1), target.minimum, target.maximum, this.ownLimit(target));
         if (change) changes[id] = change;
       }
       return { ...row, changes };
@@ -640,8 +655,9 @@ export class InMemorySignalStore {
         visibleFrom = this.lowerBound(target, Math.min(range.start, range.end), from, to); visibleTo = this.upperBound(target, Math.max(range.start, range.end), from, to);
         renderedFrom = Math.max(from, visibleFrom - 1); renderedTo = Math.min(to, visibleTo + 1);
       }
-      const threshold = this.cadenceThreshold(target, renderedFrom, renderedTo);
-      return [{ target, from, to, carriedFirst, carriedLast, renderedFrom, renderedTo, threshold,
+      // How the Signal is sent is read from its frame (or from all its own samples), so a zoomed view knows it too.
+      const rule = this.breakRule(target);
+      return [{ target, from, to, carriedFirst, carriedLast, renderedFrom, renderedTo, rule,
         total: visibleTo - visibleFrom - (visibleTo > visibleFrom && visibleFrom === from && carriedFirst ? 1 : 0) }];
     });
     // Keep peaks, dips and break boundaries within the drawing budget. Gap metadata below still describes every break
@@ -649,7 +665,7 @@ export class InMemorySignalStore {
     const thin = (item: typeof prepared[number], limit: number): number[] => {
       const length = item.renderedTo - item.renderedFrom;
       if (length <= Math.max(0, Math.floor(limit))) return range0(item.renderedFrom, item.renderedTo, Math.max(0, Math.floor(limit)) === 0 ? 0 : length);
-      return this.thinExtremes(item.target, item.renderedFrom, item.renderedTo, limit, this.lineBreaks(item.target, item.renderedFrom, item.renderedTo, item.threshold));
+      return this.thinExtremes(item.target, item.renderedFrom, item.renderedTo, limit, this.lineBreaks(item.target, item.renderedFrom, item.renderedTo, item.rule));
     };
     const times = joined ? new Set(prepared.flatMap((item) => thin(item, Math.floor(maxPoints / Math.max(1, prepared.length))).map((index) => this.timeAt(item.target, index)))) : undefined;
     return prepared.map((item) => {
@@ -667,7 +683,7 @@ export class InMemorySignalStore {
         totalSamplesInRange: item.total,
         globalMinimum: Number.isFinite(target.minimum) ? target.minimum : undefined,
         globalMaximum: Number.isFinite(target.maximum) ? target.maximum : undefined,
-        gaps: this.gaps(target, renderedFrom, renderedTo, item.threshold, gapResolution(range, renderedTo > renderedFrom ? this.timeAt(target, renderedFrom) : undefined, renderedTo > renderedFrom ? this.timeAt(target, renderedTo - 1) : undefined, maxPoints)),
+        gaps: this.gaps(target, renderedFrom, renderedTo, item.rule, gapResolution(range, renderedTo > renderedFrom ? this.timeAt(target, renderedFrom) : undefined, renderedTo > renderedFrom ? this.timeAt(target, renderedTo - 1) : undefined, maxPoints)),
       };
     });
   }
@@ -695,6 +711,26 @@ export class InMemorySignalStore {
       if (sample >= 0 && Number.isFinite(target.values.a[sample]) && this.qualityAt(target, sample) <= 1) result.push({ signalId: id, sample: this.sampleAt(target, sample) });
     }
     return result;
+  }
+
+  /** A Signal as runs of equal values (see `StateRuns`); undefined for an unknown Signal. */
+  stateRuns(signalId: string): StateRuns | undefined {
+    const index = this.seriesIndex.get(signalId); if (index === undefined) return undefined;
+    const target = this.seriesList[index]; this.ensureSeriesSorted(target);
+    return buildStateRuns(target.values.n, (at) => this.timeAt(target, at), (at) => target.values.a[at], (at) => this.labelOf(target, at), (at) => this.usable(target, at));
+  }
+
+  /**
+   * How a Signal's values are spread over `range`, in `slices` equal slices of it (see `DistributionGrid`). The value span
+   * is the Signal's over `bounds` (a Clip) or the whole log, so the bars keep their places while the time span changes; `known` is that span when it was found before.
+   */
+  distribution(signalId: string, range: TimeRange, slices: number, bins: number, bounds?: TimeRange, known?: { readonly lo: number; readonly hi: number }): DistributionGrid | undefined {
+    const index = this.seriesIndex.get(signalId); if (index === undefined) return undefined;
+    const target = this.seriesList[index]; this.ensureSeriesSorted(target); const total = target.values.n;
+    const from = bounds ? this.lowerBound(target, bounds.start, 0, total) : 0; const to = bounds ? this.upperBound(target, bounds.end, 0, total) : total;
+    const valueAt = (at: number) => target.values.a[at]; const usable = (at: number) => this.usable(target, at);
+    const extent = known ?? valueExtent(from, to, valueAt, usable); if (!extent) return undefined;
+    return buildDistribution(this.lowerBound(target, range.start, from, to), this.upperBound(target, range.end, from, to), (at) => this.timeAt(target, at), valueAt, usable, range, slices, extent, bins);
   }
 
   fullRange(selectedIds: readonly string[]): TimeRange | undefined {
@@ -1051,19 +1087,14 @@ export class InMemorySignalStore {
     return Math.abs(this.timeAt(target, low - 1) - timestamp) <= Math.abs(this.timeAt(target, low) - timestamp) ? low - 1 : low;
   }
 
-  /** Four times the median interval between usable samples of [from, to), from up to 2048 evenly picked pairs; Infinity when unknown. */
-  private cadenceThreshold(target: Series, from: number, to: number): number {
-    const length = to - from; const deltas: number[] = [];
-    const candidateCount = Math.min(MAX_CADENCE_SAMPLES, length - 1);
-    for (let pair = 0; pair < candidateCount; pair++) {
-      const index = from + 1 + Math.floor(pair * (length - 1) / candidateCount);
-      const delta = this.timeAt(target, index) - this.timeAt(target, index - 1);
-      if (this.usable(target, index - 1) && this.usable(target, index) && Number.isFinite(delta) && delta > 0) deltas.push(delta);
-    }
-    deltas.sort((left, right) => left - right);
-    const median = deltas.length ? deltas[Math.floor(deltas.length / 2)] : undefined;
-    return median === undefined ? Infinity : median * 4;
+  /** The longest interval of continuous reception of `target`, from the send mode of its own times; kept until it grows. */
+  private ownLimit(target: Series): number {
+    if (target.cadence?.length === target.values.n) return target.cadence.threshold;
+    const estimate = estimateSendMode({ length: target.values.n, at: (index) => this.timeAt(target, index) });
+    const threshold = dropoutLimit(estimate?.mode, estimate?.cycle); target.cadence = { length: target.values.n, threshold }; return threshold;
   }
+  /** Where `target`'s line breaks: by its frame's reception when it has a frame in the log, else by its own times. */
+  private breakRule(target: Series): SignalBreaks { return this.options.frameBreaks?.(target.definition) ?? { limit: this.ownLimit(target) }; }
 
   /** The summary of every full block of `target`, brought up to date. */
   private summaryOf(target: Series): BlockSummary {
@@ -1090,19 +1121,31 @@ export class InMemorySignalStore {
   }
 
   /**
-   * Visits, in order, each i in (from, to) where samples i-1 and i are not both usable within `threshold` of each other.
-   * Blocks whose samples are all usable and close enough are skipped without reading them.
+   * Visits, in order, each i in (from, to) where samples i-1 and i are not both usable within `rule.limit` of each other,
+   * or hold an interval in which the Signal's frame was not received. Blocks whose samples are all usable and close
+   * enough, with no such interval in their span, are skipped without reading them.
    */
-  private forEachBreak(target: Series, from: number, to: number, threshold: number, visit: (index: number, previousUsable: boolean, usable: boolean) => void): void {
-    const summary = this.summaryOf(target); const maxDelta = summary.maxDelta.a;
+  private forEachBreak(target: Series, from: number, to: number, rule: SignalBreaks, visit: (index: number, previousUsable: boolean, usable: boolean) => void): void {
+    const summary = this.summaryOf(target); const maxDelta = summary.maxDelta.a; const threshold = rule.limit;
+    const starts = rule.starts && rule.starts.length ? rule.starts : undefined; const ends = rule.ends;
+    // Whether a frame dropout lies within [start, end] (the dropout's two receive times are frames of this Signal or in
+    // between). Asked with `start` never decreasing, so the first dropout not before it is followed, not searched for.
+    let next = 0;
+    if (starts && from + 1 < to) { const first = this.timeAt(target, from) - DROPOUT_EPSILON; let high = starts.length; while (next < high) { const middle = (next + high) >>> 1; if (starts[middle] < first) next = middle + 1; else high = middle; } }
+    const dropoutWithin = (start: number, end: number): boolean => {
+      if (!starts || !ends) return false;
+      while (next < starts.length && starts[next] < start - DROPOUT_EPSILON) next++;
+      return next < starts.length && ends[next] <= end + DROPOUT_EPSILON;
+    };
     for (let index = from + 1; index < to;) {
       // index - 1 is the first sample of a block: when the whole block lies in range and has no break, go to its last pair.
       if ((index - 1) % SUMMARY_BLOCK === 0) {
-        const block = (index - 1) / SUMMARY_BLOCK;
-        if (block < summary.blocks && index - 1 + SUMMARY_BLOCK <= to && maxDelta[block] <= threshold) { index = index - 1 + SUMMARY_BLOCK; continue; }
+        const block = (index - 1) / SUMMARY_BLOCK; const last = index - 1 + SUMMARY_BLOCK;
+        if (block < summary.blocks && last <= to && maxDelta[block] <= threshold && !dropoutWithin(this.timeAt(target, index - 1), this.timeAt(target, last - 1))) { index = last; continue; }
       }
       const previousUsable = this.usable(target, index - 1); const usable = this.usable(target, index);
-      if (!(previousUsable && usable && this.timeAt(target, index) - this.timeAt(target, index - 1) <= threshold)) visit(index, previousUsable, usable);
+      const previousTime = this.timeAt(target, index - 1); const time = this.timeAt(target, index);
+      if (!(previousUsable && usable && time - previousTime <= threshold && !dropoutWithin(previousTime, time))) visit(index, previousUsable, usable);
       index++;
     }
   }
@@ -1112,12 +1155,12 @@ export class InMemorySignalStore {
    * sample that is not a usable value. Thinning keeps them, so the line on each side of a break keeps its ends.
    * Their positions in [from, to), ascending.
    */
-  private lineBreaks(target: Series, from: number, to: number, threshold: number): number[] {
+  private lineBreaks(target: Series, from: number, to: number, rule: SignalBreaks): number[] {
     const kept: number[] = []; const length = to - from; if (length < 2) return kept;
     const mark = (position: number): void => { if (kept.length === 0 || kept[kept.length - 1] < position) kept.push(position); };
     if (!this.usable(target, from)) mark(0);
     // The interior of one invalid interval adds no new break. Its boundaries are sufficient to represent it.
-    this.forEachBreak(target, from, to, threshold, (index, previousUsable, usable) => { if (previousUsable || usable) { mark(index - 1 - from); mark(index - from); } });
+    this.forEachBreak(target, from, to, rule, (index, previousUsable, usable) => { if (previousUsable || usable) { mark(index - 1 - from); mark(index - from); } });
     if (!this.usable(target, to - 1)) mark(length - 1);
     return kept;
   }
@@ -1126,9 +1169,9 @@ export class InMemorySignalStore {
    * Every break in the line (see `lineBreaks`). Breaks less than `resolution` apart are merged, which bounds the list by
    * the point budget without ever hiding a line longer than that.
    */
-  private gaps(target: Series, from: number, to: number, threshold: number, resolution: number): SignalGap[] {
+  private gaps(target: Series, from: number, to: number, rule: SignalBreaks, resolution: number): SignalGap[] {
     const gaps: SignalGap[] = []; if (to - from < 2) return gaps;
-    this.forEachBreak(target, from, to, threshold, (index) => {
+    this.forEachBreak(target, from, to, rule, (index) => {
       const previousTime = this.timeAt(target, index - 1); const time = this.timeAt(target, index);
       const last = gaps.at(-1);
       if (last && previousTime - last.endTimestamp <= resolution) gaps[gaps.length - 1] = { startTimestamp: last.startTimestamp, endTimestamp: Math.max(last.endTimestamp, time) };
@@ -1209,7 +1252,6 @@ function indexRowInto(rowOfOrdinal: Column<Int32Array>, moreRows: Map<number, nu
   const list = moreRows.get(key); if (list) list.push(row); else moreRows.set(key, [row]);
 }
 
-const MAX_CADENCE_SAMPLES = 2048;
 
 type FilterEvidence = NonNullable<SignalSample['filterEvidence']>;
 const TWO_FIELDS = ['previousValue', 'deltaSeconds']; const FOUR_FIELDS = ['previousValue', 'deltaSeconds', 'sampleCount', 'sum'];
@@ -1365,18 +1407,12 @@ export function lineBreakSamples(samples: readonly SignalSample[]): ReadonlySet<
 }
 
 function signalCadenceThreshold(samples: readonly SignalSample[]): number {
-  const deltas: number[] = [];
-  const candidateCount = Math.min(MAX_CADENCE_SAMPLES, samples.length - 1);
-  for (let sampleIndex = 0; sampleIndex < candidateCount; sampleIndex++) {
-    const index = 1 + Math.floor(sampleIndex * (samples.length - 1) / candidateCount);
-    const previous = samples[index - 1]; const current = samples[index];
-    const delta = current.timestamp - previous.timestamp;
-    if (isUsableSample(previous) && isUsableSample(current) && Number.isFinite(delta) && delta > 0) deltas.push(delta);
-  }
-  deltas.sort((left, right) => left - right);
-  const median = deltas.length ? deltas[Math.floor(deltas.length / 2)] : undefined;
-  return median === undefined ? Infinity : median * 4;
+  const estimate = estimateSendMode({ length: samples.length, at: (index) => samples[index].timestamp });
+  return dropoutLimit(estimate?.mode, estimate?.cycle);
 }
+
+/** Two times this close are the same receive time (a Signal's samples and its frame's times). */
+const DROPOUT_EPSILON = 1e-9;
 
 function isUsableSample(sample: SignalSample): boolean {
   return Number.isFinite(sample.timestamp) && Number.isFinite(sample.value) && (sample.quality === undefined || sample.quality === 'valid');

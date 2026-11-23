@@ -1,5 +1,26 @@
 # Change Log
 
+## 2.5.0 - 2026-11-23
+
+- Added a city drive to the sample workspace: a three-minute drive through city streets, onto a highway and into hard braking behind a car ahead, with prepared views and Clips.
+- Added **Frame timing** to Visualize. It shows when each CAN ID's frames were received on the time axis, and marks where the time between frames was much longer than the period.
+- Added **Receive interval** to Visualize. Choose CAN IDs to see the time between each one's frames on the time axis, with the deviation from the period and statistics.
+- Added **State timeline** to Visualize. It shows the stretches of time a Signal keeps one value as bands, with the names of states that have value labels. Signal names are written in full: when one does not fit beside the rows (or in an HTML report), each name is written above its row.
+- Added **Distribution and statistics** to Visualize. For the time span shown, or the selected time range, it shows how each Signal's values are spread, with their count, minimum, maximum, mean and standard deviation, and marks the value at the time position.
+- HTML reports now include the Frame timing, Receive interval, State timeline and Distribution and statistics views of Visualize. In a report of a log or Clip they can be added, changed, moved, duplicated and deleted like its graphs.
+- **Add graph** in Visualize, on the comparison screen and in HTML reports is now **Add view**.
+- Graphs in Visualize and on the comparison screen now follow the wheel and pinch gestures at once when moving and zooming. Before, they did not move until the gesture stopped, and moved in fixed steps.
+- Shifting a target in time on the comparison screen no longer stretches or shrinks the time axis.
+- DBC import and export now carry `GenMsgCycleTime` as the expected period.
+- DBC export now writes CAN FD information.
+- Fixed units and value labels of DBC files written in Shift_JIS being garbled.
+- Fixed DBC files whose lines end with CR alone not being imported.
+- Fixed a Frame not being imported at all from a DBC file with nested multiplexing. Signals selected by a nested multiplexer are not imported, and are listed in the diagnostics.
+- In views shared by a group, a Signal the open log does not record now has a warning icon in graph legends, as in the Signal list. Hover the icon to see why.
+- Frames now have a **send mode**: periodic, on events, or periodic + events, as in a DBC's `GenMsgSendType`. Set it in the Frame editor, next to the expected period, or import it from a DBC; DBC export writes it. Left automatic, each log estimates it from the frame's receive times: the base cycle at which the frame keeps coming, with frames between the cycle frames counted as events. **Frame timing** names the send mode in a row's hover box, marked "(estimated)" when it was read from the log, and marks the frames sent on events with a dot. The Trace compares intervals with the base cycle found in the log when the Frame defines no expected period (marked `≈`), and marks a frame that has stopped arriving.
+- Fixed graphs going blank when **Connect gaps** was turned off ([#2](https://github.com/tronics25/sigmixa/issues/2)). Lines now break where reception broke off for the frame's send mode: where no frame came for 1.6 base cycles. A frame sent on events is never broken. A Signal decoded from a frame follows its frame, so a multiplexed Signal, which is not in the frames of other multiplexer values, and a Plugin's Signal break only where the frame itself stopped. Measured Signals of MF4, MDF and CSV logs are judged from their own times in the same way. A lone value between breaks is drawn as a dot.
+- Fixed the views under a graph in Visualize jumping down for a moment, partly out of sight, when a time range was being selected on the graph or the pointer passed near the Trace position. Graphs now keep their height, and time labels that would overlap move aside. On the comparison screen, the pointer's time label likewise moves aside instead of being drawn below the graph.
+
 ## 2.4.0 - 2026-11-14
 
 - Added ASAM MDF 4 (.mf4) support for CAN bus logging and measured Signals, and MDF 3 (.mdf) support for measured Signals. Measured Signals are listed by channel group, with structure members and array elements grouped under their structure or array.

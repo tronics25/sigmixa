@@ -1,3 +1,4 @@
+import type { ChartContext } from './svgCanvas';
 /** Shared density and labels for RAW, decoded Signal tables, and Trace. */
 export const DATA_TABLE_ROW_HEIGHT = 28;
 export const FRAME_TABLE_LABELS = { canId: 'CAN ID', name: 'NAME', channel: 'CH', direction: 'TX/RX', content: 'CONTENT', multiplexer: 'MUX' } as const;
@@ -94,7 +95,7 @@ export const DATA_TABLE_STYLES = `${TABLE_BASE_STYLES}
 .cell.table-center,.last-values td.table-center{text-align:center}
 .last-values th.table-number .trace-sort{justify-content:flex-start}
 `;
-let context: CanvasRenderingContext2D | null | undefined;
+let context: ChartContext | null | undefined;
 export function measureTableText(text: string): number {
   context ??= document.createElement('canvas').getContext('2d');
   if (!context) return text.length * 7;

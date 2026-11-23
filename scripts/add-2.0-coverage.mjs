@@ -6,7 +6,7 @@ import path from 'node:path';
 // - 0x3C0 heartbeat: nominal 100 ms with jitter, stops at 41 s and resumes at 50 s (trace stop marker, interval columns)
 // - one 0x320 Frame with only 2 bytes (FRAME_TOO_SHORT, multiplexed value that cannot be read)
 // - 0x6A0/0x6A8 property request/response exchanges for the stateful sample Plugin
-const output = path.resolve('sample/sigmixa-basic.asc');
+const output = path.resolve('sample/basic/sigmixa-basic.asc');
 const lines = readFileSync(output, 'utf8').split('\n');
 const added = [];
 
