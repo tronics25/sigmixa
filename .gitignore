@@ -27,3 +27,5 @@ README_INTERNAL.md
 # Backups and temp files written by ProjectStore (migration, recovery, atomic save)
 sample/.sigmixa/*.bak
 sample/.sigmixa/*.tmp
+# Large local test logs (not for publishing)
+/sample/large-logs/

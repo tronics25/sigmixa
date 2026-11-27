@@ -82,3 +82,28 @@ test('a thinned slice shows the state that lasts longest in it in all, counting 
   const runs = { starts: [0, 3, 7], stateOf: [0, 1, 0], states: [{ value: 0 }, { value: 1 }], end: 10, tooMany: false };
   assert.deepEqual(sliceStateRuns(runs, { start: 0, end: 10 }, 1, 1).bins, [{ state: 0, mixed: true }]);
 });
+
+
+test('a rebuild that changes values but not how many there are shows the new values in the state timeline and the distribution', async () => {
+  const path = await import('path'); const vscode = await import('vscode');
+  const { RawLogDocument } = await import('../src/extension/editors/rawLogDocument');
+  const { PluginRegistry } = await import('../src/core/plugin/pluginHost');
+  const { parseProjectJson } = await import('../src/core/project/schema');
+  const file = path.resolve('sample/basic/sigmixa-basic.asc');
+  (vscode.workspace as any).workspaceFolders = [{ uri: vscode.Uri.file(path.dirname(file)) }];
+  (vscode.workspace as any).getWorkspaceFolder = () => vscode.workspace.workspaceFolders![0];
+  const project = parseProjectJson(readFileSync('sample/.sigmixa/project.json', 'utf8'));
+  const doc = new RawLogDocument(vscode.Uri.file(file), file, project, 1, new PluginRegistry());
+  try {
+    await doc.whenReady();
+    const find = (name: string) => doc.signalCatalog().find((definition) => definition.name === name)!;
+    const mode = find('Drive Mode'); const speed = find('Vehicle Speed');
+    const before = { states: doc.stateTimeline([mode.id], undefined, 200, 300).rows[0].states.map((state) => state.value), speed: doc.distribution([speed.id], undefined, 20).rows[0] };
+    // Every value 100 higher: the same samples, the same counts.
+    const shifted = { ...project, frames: project.frames.map((frame) => ({ ...frame, signals: frame.signals.map((signal) => [mode.name, speed.name].includes(signal.name) ? { ...signal, conversion: { ...signal.conversion, offset: signal.conversion.offset + 100 } } : signal) })) } as typeof project;
+    await doc.rebuildSignals(shifted, 2, true);
+    const after = { states: doc.stateTimeline([find('Drive Mode').id], undefined, 200, 300).rows[0].states.map((state) => state.value), speed: doc.distribution([find('Vehicle Speed').id], undefined, 20).rows[0] };
+    assert.deepEqual(after.states, before.states.map((value) => value + 100), 'the state timeline is read again');
+    assert.ok(Math.abs(after.speed.lo - (before.speed.lo + 100)) < 1e-6 && Math.abs(after.speed.hi - (before.speed.hi + 100)) < 1e-6, 'the distribution bounds are found again');
+  } finally { doc.dispose(); }
+});

@@ -122,6 +122,21 @@ test('the width of Plugin tags is counted without spelling them', async () => {
   for (const frame of [3, 'x', 4]) assert.equal(tags.cells(frame), (tags.get(frame)?.tags ?? []).reduce((sum, tag) => sum + textCells(tag) + TAG_SPACING, 0));
 });
 
+test('a Plugin value is measured as the RAW log spells it, all of its digits, so the widest value is never ranked lower', async () => {
+  const { textCells, TAG_SPACING } = await import('../src/core/frame/widestText');
+  // 0.1 + 0.2 is spelled 0.30000000000000004: counted at 12 digits it would look narrower than it is shown.
+  const tags = pluginTags([[1, [{ id: 'p', name: 'P', value: 0.1 + 0.2 }]], [2, [{ id: 'p', name: 'P', value: 0.25 }]]]);
+  assert.deepEqual(tags.get(1)?.tags, ['P=0.30000000000000004']);
+  assert.equal(tags.cells(1), textCells('P=0.30000000000000004') + TAG_SPACING);
+  assert.ok(tags.cells(1) > tags.cells(2));
+});
+
+test('Plugin names and units that hold a NUL are kept apart: each tag shows the name and unit it came with', () => {
+  const tags = pluginTags([[1, [{ id: 's', name: 'a\0b', unit: 'c', value: 1 }]], [2, [{ id: 's', name: 'a', unit: 'b\0c', value: 2 }]]]);
+  assert.deepEqual(tags.get(1)?.tags, ['a\0b=1 c']);
+  assert.deepEqual(tags.get(2)?.tags, ['a=2 b\0c']);
+});
+
 test('the Trace index built in steps is the index built at once', async () => {
   const { TraceIndex } = await import('../src/core/frame/traceIndex');
   const store = new InMemorySignalStore(); const definition = { id: 's', name: 's', source: { type: 'manual' } } as never;

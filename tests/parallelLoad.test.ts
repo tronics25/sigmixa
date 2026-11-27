@@ -310,3 +310,39 @@ test('definitions changed after a log is read are decoded again on workers with 
   assert.ok((expected[0] as { ids: string[] }).ids.length > 40);
   assert.deepEqual(actual, expected);
 });
+
+test('a load cancelled while a piece is read again for a changed number base hands over no frames after the cancel', async () => {
+  // The base changes to decimal in the first piece, so every later piece is read again with it.
+  const lines = ['date Sun Aug 30 12:00:00.000 2026', 'base hex  timestamps absolute'];
+  for (let index = 0; index < 200; index++) lines.push(`   ${(index * 0.01).toFixed(6)} 1  100             Rx   d 2 ${(index & 0xff).toString(16).padStart(2, '0')} 00`);
+  lines.push('base dec  timestamps absolute');
+  for (let index = 200; index < 2000; index++) lines.push(`   ${(index * 0.01).toFixed(6)} 1  256             Rx   d 2 ${index & 0xff} 0`);
+  const file = write('rebase.asc', `${lines.join('\n')}\n`);
+  const controller = new AbortController(); let afterCancel = 0; let chunks = 0;
+  small();
+  try {
+    const summary = await loadAscInParallel(file, {
+      sourceId: 'file:///log', signal: controller.signal, decodeSpec: () => ({ owner: settings, spec: { definitions: [], signalIds: [], pluginKeys: [] } }),
+      onChunk: () => { if (controller.signal.aborted) afterCancel++; chunks++; if (chunks === 1) controller.abort(); },
+      onDiagnostics: () => undefined,
+    });
+    assert.equal(summary.cancelled, true);
+    assert.equal(afterCancel, 0, 'frames handed over after the cancel');
+  } finally { restore(); }
+});
+
+test('a broken container after more than 2,000 frames in one piece keeps those frames on workers, as read in one go', async () => {
+  const objects: Buffer[] = [];
+  for (let index = 0; index < 3000; index++) objects.push(object(1, classic(1, 0x100 + (index % 7), [index & 0xff, (index >> 8) & 0xff]), BigInt(index) * 1_000_000n));
+  const log = blf(Buffer.concat(objects), () => 4000);
+  // The second last container cannot be expanded.
+  const starts: number[] = []; for (let at = log.indexOf('LOBJ', 144); at >= 0; at = log.indexOf('LOBJ', at + log.readUInt32LE(at + 8))) starts.push(at);
+  const at = starts[starts.length - 2]; log.fill(0xaa, at + 34, at + 50);
+  const file = write('late-break.blf', log);
+  const expected = await sequential(file);
+  assert.ok(expected.frames.length > 2000);
+  // One piece for the whole log, so the frames before the broken container are all still in the worker's hands.
+  Object.assign(parallelLoadSettings, { minBytes: 0, blfRangeBytes: 1 << 30, workers: 1, workerScript: path.join(__dirname, 'logWorker.js') });
+  try { const actual = await parallel(file); assert.equal(actual.frames.length, expected.frames.length); assert.deepEqual(actual.diagnostics, expected.diagnostics); }
+  finally { restore(); }
+});

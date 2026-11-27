@@ -90,3 +90,24 @@ test('a CSV log\'s group, which has no name of its own, stays marked as unnamed 
   const split = splitSignalGroupsByTarget(groups, [{ id: 'csv', name: 'csv', signalIds: new Set(['speed', 'lat']) }, { id: 'asc', name: 'asc', signalIds: new Set(['speed', 'rpm']) }], (names) => `${names} only`);
   assert.deepEqual(split.map((group) => [group.section?.label, group.label, group.unnamed]), [[undefined, 'CSV', true], ['csv only', 'CSV', true], ['asc only', '100 Engine', undefined]]);
 });
+
+test('stepping through a log reaches both ends of its shown time span, for every kind of log', async () => {
+  const path = await import('path'); const fs = await import('fs'); const vscode = await import('vscode');
+  const { RawLogDocument } = await import('../src/extension/editors/rawLogDocument');
+  const { PluginRegistry } = await import('../src/core/plugin/pluginHost');
+  const { parseProjectJson } = await import('../src/core/project/schema');
+  const project = parseProjectJson(fs.readFileSync('sample/.sigmixa/project.json', 'utf8'));
+  for (const name of ['sigmixa-basic.asc', 'sigmixa-basic.blf', 'sigmixa-basic.mf4', 'sigmixa-basic-decoded.mdf', 'sigmixa-basic-decoded.csv']) {
+    const file = path.resolve('sample/basic', name);
+    (vscode.workspace as any).workspaceFolders = [{ uri: vscode.Uri.file(path.resolve('sample')) }];
+    (vscode.workspace as any).getWorkspaceFolder = () => vscode.workspace.workspaceFolders![0];
+    const doc = new RawLogDocument(vscode.Uri.file(file), file, project, 1, new PluginRegistry());
+    try {
+      await doc.whenReady();
+      const range = doc.timelineRange!; assert.ok(range && range.end > range.start, `${name}: a time span`);
+      const near = (range.end - range.start) * 1e-6;
+      assert.equal(doc.adjacentFrameTimestamp(range.end - near, 1), range.end, `${name}: the last step lands on the end`);
+      assert.equal(doc.adjacentFrameTimestamp(range.start + near, -1), range.start, `${name}: the first step lands on the start`);
+    } finally { doc.dispose(); }
+  }
+});

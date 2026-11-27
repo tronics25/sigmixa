@@ -295,3 +295,16 @@ test('a gap in a zoomed view stays a gap even when it is a large part of the vie
     assert.ok(crossesSeriesGap(series.gaps, 0.99, 10), `${range.start}–${range.end} s`);
   }
 });
+
+test('samples without a time, before or after a timed one, leave the timed sample its row and its value', () => {
+  const reference: SignalDefinition = { id: 'mdf:Ref:Speed', name: 'Speed', unit: 'm/s', source: { type: 'mdf-channel', group: 'Ref', channel: 'Speed' } };
+  for (const samples of [[{ timestamp: 1, value: 7 }, { timestamp: Number.NaN, value: 8 }, { timestamp: Number.NaN, value: 9 }], [{ timestamp: Number.NaN, value: 8 }, { timestamp: Number.NaN, value: 9 }, { timestamp: 1, value: 7 }]]) {
+    const store = new InMemorySignalStore();
+    store.appendSeriesRows('mdf:Ref', [{ definition: reference, samples }]);
+    store.finalize();
+    const page = store.tablePage([reference.id], 0, 10);
+    assert.equal(page.total, 1);
+    assert.equal(page.rows[0].timestamp, 1);
+    assert.equal(page.rows[0].values.get(reference.id)?.value, 7);
+  }
+});

@@ -517,6 +517,77 @@ test('a value-to-text table whose entries name numeric conversions converts thos
   assert.equal(seriesLabel(signals[0], 0), 'Off'); assert.equal(seriesLabel(signals[0], 1), undefined);
 });
 
+/** A sorted group of one float time master and one float value, with its records. */
+function measuredGroup(mdf: Mdf, conversion: Link, samples: readonly [number, number][]): { group: Ref; data: Ref } {
+  const channels = chain([(next) => cn(mdf, 't', { type: 2, sync: 1, dataType: 4, bits: 64, next }), (next) => cn(mdf, 'Value', { dataType: 4, byteOffset: 8, bits: 64, conversion, next })]);
+  const group = cg(mdf, 0, 16, channels, 'G', 0);
+  const records = Buffer.alloc(16 * samples.length); samples.forEach(([time, value], i) => { records.writeDoubleLE(time, 16 * i); records.writeDoubleLE(value, 16 * i + 8); });
+  return { group, data: mdf.add('##DT', [], records) };
+}
+
+test('a value range to text (CC type 8) range [1, 1) holds nothing: raw 1.0 takes the default, as asammdf does', async () => {
+  const mdf = new Mdf();
+  const header = hd(mdf, 0n);
+  const table = cc(mdf, 8, [1, 1, 2, 3]); mdf.link(table, 4, mdf.text('Empty')); mdf.link(table, 5, mdf.text('Two')); mdf.link(table, 6, mdf.text('Other'));
+  const { group, data } = measuredGroup(mdf, table, [[0, 1], [1, 2.5]]);
+  mdf.link(header, 0, dg(mdf, 0, group, data));
+  const { signals } = await parse(mdf.build());
+  assert.equal(seriesLabel(signals[0], 0), 'Other');
+  assert.equal(seriesLabel(signals[0], 1), 'Two');
+});
+
+test('a value-to-text entry with a NaN key never names a NaN sample: it takes the default, as asammdf does', async () => {
+  const mdf = new Mdf();
+  const header = hd(mdf, 0n);
+  const table = cc(mdf, 7, [Number.NaN, 1]); mdf.link(table, 4, mdf.text('Not a number')); mdf.link(table, 5, mdf.text('One')); mdf.link(table, 6, mdf.text('Other'));
+  const { group, data } = measuredGroup(mdf, table, [[0, Number.NaN], [1, 1]]);
+  mdf.link(header, 0, dg(mdf, 0, group, data));
+  const { signals } = await parse(mdf.build());
+  assert.notEqual(seriesLabel(signals[0], 0), 'Not a number');
+  assert.equal(seriesLabel(signals[0], 1), 'One');
+});
+
+test('a record whose time master is invalid (NaN) is left out without moving the times of the records after it', async () => {
+  const mdf = new Mdf();
+  const header = hd(mdf, 0n);
+  const { group, data } = measuredGroup(mdf, 0, [[0, 10], [Number.NaN, 20], [2, 30]]);
+  mdf.link(header, 0, dg(mdf, 0, group, data));
+  const { signals } = await parse(mdf.build());
+  const pairs = Array.from(signals[0].times).map((time, i) => [time, signals[0].values[i]]).filter(([time]) => Number.isFinite(time));
+  assert.deepEqual(pairs, [[0, 10], [2, 30]]);
+});
+
+test('frames of sorted groups come out in time order, also when one group holds more frames than the merge keeps waiting', async () => {
+  const mdf = new Mdf();
+  const header = hd(mdf, 0n);
+  const many = 70_000;
+  const records = Buffer.concat(Array.from({ length: many }, (_, i) => sortedRecord(0.001 + i * 0.001, 0x100, i & 0xff)));
+  const late = dg(mdf, 0, sortedCanGroup(mdf), mdf.add('##DT', [], sortedRecord(0.0005, 0x200, 1)));
+  const first = dg(mdf, 0, sortedCanGroup(mdf), mdf.add('##DT', [], records));
+  mdf.link(first, 0, late); mdf.link(header, 0, first);
+  const { frames } = await parse(mdf.build());
+  assert.equal(frames.length, many + 1);
+  for (let i = 1; i < frames.length; i++) if (frames[i].timestamp < frames[i - 1].timestamp) assert.fail(`frame ${i} at ${frames[i].timestamp} s comes after ${frames[i - 1].timestamp} s`);
+  assert.equal(frames[0].canId, 0x200);
+});
+
+test('record IDs above 2^53 are never taken for one another: read apart, or refused', async () => {
+  const mdf = new Mdf();
+  const header = hd(mdf, 0n);
+  const a = sortedCanGroup(mdf); const b = sortedCanGroup(mdf);
+  // 8-byte record IDs 2^53 and 2^53 + 1, which are one number once they become a JavaScript number.
+  mdf.blockBody(a).writeBigUInt64LE(2n ** 53n, 0); mdf.blockBody(b).writeBigUInt64LE(2n ** 53n + 1n, 0);
+  mdf.link(a, 0, b);
+  const record = (id: bigint, seconds: number, canId: number) => { const r = Buffer.alloc(8 + 19); r.writeBigUInt64LE(id, 0); sortedRecord(seconds, canId, 1).copy(r, 8); return r; };
+  const data = Buffer.concat([record(2n ** 53n, 0.1, 0x111), record(2n ** 53n + 1n, 0.2, 0x222)]);
+  // Different record lengths would hide the mix-up: both groups use the same layout, so only the ID tells them apart.
+  mdf.link(header, 0, dg(mdf, 8, a, mdf.add('##DT', [], data)));
+  // Read apart, or refused as too large: never read with another group's channels.
+  const result = await parse(mdf.build()).catch((error: Error) => error);
+  if (result instanceof Error) assert.match(result.message, /record ID.*too large/);
+  else assert.deepEqual(result.frames.map((frame) => [frame.timestamp, frame.canId]), [[0.1, 0x111], [0.2, 0x222]]);
+});
+
 test('an MF4 file with neither CAN frames nor readable signals is an error', async () => {
   const mdf = new Mdf();
   const header = hd(mdf, 0n);
@@ -589,4 +660,22 @@ test('a CAN frame whose time the logger marked invalid is reported and not impor
   const { frames, diagnostics } = await parse(mdf.build());
   assert.deepEqual(frames.map((frame) => frame.data[0]), [1, 3]);
   assert.deepEqual(codes(diagnostics), ['MDF_TIME_INVALID:warning']);
+});
+
+test('an array that steps backwards out of the record is not read, and the rest of the log still is', async () => {
+  const mdf = new Mdf();
+  const header = hd(mdf, 0n);
+  // Two uint16 elements from byte offset 8 of the record, 2 bytes apart backwards then forwards again: the second backwards one lands before the record.
+  const ca = (() => { const body = Buffer.alloc(24); body.writeUInt16LE(1, 2); body.writeInt32LE(-10, 8); body.writeBigUInt64LE(2n, 16); return mdf.add('##CA', [0], body); })();
+  const channels = chain([
+    (next) => cn(mdf, 't', { type: 2, sync: 1, dataType: 4, bits: 64, next }),
+    (next) => cn(mdf, 'Speed', { byteOffset: 8, bits: 16, next }),
+    (next) => cn(mdf, 'Back', { byteOffset: 8, bits: 16, composition: ca, next }),
+  ]);
+  const group = cg(mdf, 0, 10, channels, 'Body', 0);
+  const record = (seconds: number, value: number) => { const body = Buffer.alloc(10); body.writeDoubleLE(seconds, 0); body.writeUInt16LE(value, 8); return body; };
+  mdf.link(header, 0, dg(mdf, 0, group, mdf.add('##DT', [], Buffer.concat([record(1, 5), record(2, 6)]))));
+  const { signals } = await parse(mdf.build());
+  assert.deepEqual(Array.from(signals.find((item) => item.channel === 'Speed')!.values), [5, 6]);
+  assert.ok(!signals.some((item) => item.channel === 'Back[1]'), 'an element before the record is not read');
 });

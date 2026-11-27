@@ -88,3 +88,11 @@ test('joined axes with repeated timestamps stay within the per-series drawing li
   const series = store.seriesSlice(['x', 'y'], undefined, 100, undefined, true);
   for (const item of series) assert.ok(item.samples.length <= 100);
 });
+
+test('thinning to a single item gives the first item, never one past the end', async () => {
+  const { downsampleEven, downsampleExtremes } = await import('../src/core/timeline/timeline');
+  const items = [{ timestamp: 0, value: 1 }, { timestamp: 1, value: 5 }, { timestamp: 2, value: 3 }];
+  assert.deepEqual(downsampleEven(items, 1), [items[0]]);
+  const extremes = downsampleExtremes(items, 1, (item) => [item.value]);
+  assert.ok(extremes.length >= 1 && extremes.every((item) => items.includes(item)), 'only original items');
+});
