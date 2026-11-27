@@ -647,13 +647,15 @@
     "check-types": "tsc --noEmit -p ./",
     "check-boundaries": "node scripts/check-boundaries.mjs",
     "test": "node scripts/run-tests.mjs",
-    "verify": "npm run check-boundaries && npm run check-types && npm test && npm run compile"
+    "verify": "npm run check-boundaries && npm run check-types && npm test && npm run test:ui && npm run compile",
+    "test:ui": "node scripts/run-ui-tests.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.2",
+    "playwright": "^1.63.0",
     "typescript": "^5.4.0"
   },
   "dependencies": {
