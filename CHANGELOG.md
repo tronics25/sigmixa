@@ -1,5 +1,10 @@
 # Change Log
 
+## Unreleased
+
+- Added **Show receive points** to the drawing settings of graphs, next to **Connect gaps**: a dot at each value as it was received, on the line, so you can see when a Signal was received. Where the values are too close together to tell apart, the dots are left out until you zoom in. In Visualize, on the comparison screen and in HTML reports.
+- A value with no neighbour on its graph line (received once, or once between breaks in reception) is drawn as a larger dot, twice as wide as before, so it is easy to see. In Visualize, on the comparison screen, in HTML reports and on saved images.
+
 ## 2.5.0 - 2026-11-23
 
 - Added a city drive to the sample workspace: a three-minute drive through city streets, onto a highway and into hard braking behind a car ahead, with prepared views and Clips.

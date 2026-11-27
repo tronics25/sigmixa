@@ -55,3 +55,4 @@ if (reportData.table) {
     tabs.appendChild(button);
   }
 } else tabs.hidden = true;
+

@@ -124,6 +124,8 @@ export interface LogViewState {
   readonly chartColors?: Readonly<Record<string, string>>;
   readonly chartMode?: 'raw' | 'normalized';
   readonly chartConnectGaps?: boolean;
+  /** Graphs draw a dot at each received sample, where they stand apart. */
+  readonly chartShowPoints?: boolean;
   readonly chartAxisRange?: ChartAxisRangeSetting;
   readonly chartGroupLayout?: readonly (readonly string[])[];
   /** @deprecated Migrated to chartAxisRange when an older workspace is opened. */

@@ -48,6 +48,7 @@ export interface ComparisonGraphDefinition {
   /** Instead of `axes`: several paths on one plot, as in a Visualize trajectory. Colour tells the series apart, line style the target. */
   readonly trajectorySeries?: readonly ComparisonTrajectorySeries[];
   readonly equalAspect?: boolean;
+  /** A trajectory's data points (shown unless false); a time-series graph's dot at each received sample, where they stand apart (shown when true). */
   readonly showPoints?: boolean;
   readonly showGrid?: boolean;
   readonly invert?: { readonly x: boolean; readonly y: boolean; readonly z: boolean };
