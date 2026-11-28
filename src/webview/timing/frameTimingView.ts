@@ -53,7 +53,7 @@ export class FrameTimingView {
   constructor(host: HTMLElement, initial: LogViewState | undefined, private readonly post: (message: ToExtensionMessage) => void, private readonly save: (partial: Partial<LogViewState>) => void, private readonly timeline: TimelineController, private readonly optionsHost?: HTMLElement) {
     this.hidden = new Set(initial?.frameTimingHiddenKeys ?? []);
     host.innerHTML = `<div class="frame-timing"><div class="frame-timing-legend"></div><div class="frame-timing-canvas-wrap"><canvas class="frame-timing-canvas"></canvas></div></div>`;
-    this.elements = host.querySelector<HTMLElement>('.frame-timing')!; this.canvas = host.querySelector('canvas')!; this.legend = host.querySelector<HTMLElement>('.frame-timing-legend')!; 
+    this.elements = host.querySelector<HTMLElement>('.frame-timing')!; this.canvas = host.querySelector('canvas')!; this.legend = host.querySelector<HTMLElement>('.frame-timing-legend')!;
     // On the page itself: inside the card it would be cut off at the card's edge.
     this.tip = document.createElement('div'); this.tip.className = 'frame-timing-tip'; this.tip.hidden = true; document.body.appendChild(this.tip);
     const signal = this.lifetime.signal;
@@ -209,4 +209,3 @@ function clampRange(view: Range | undefined, full: Range | undefined): Range | u
   if (!view || !full) return undefined; const span = Math.min(full.end - full.start, view.end - view.start); if (!(span > 0) || view.end < full.start || view.start > full.end) return undefined;
   const start = Math.max(full.start, Math.min(view.start, full.end - span)); return { start, end: start + span };
 }
-

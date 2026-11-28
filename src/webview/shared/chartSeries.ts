@@ -3,33 +3,38 @@ import { convertDisplayUnit } from '../../core/units/displayUnit';
 import type { SignalSample } from '../../core/signal/signal';
 import type { ChartContext } from './svgCanvas';
 
+/** The radius of a receive point, in pixels: big enough to see at a glance. */
+const RECEIVE_DOT_RADIUS = 3;
 /**
- * Draws a Signal's line on a canvas: `point` for each drawable sample, `end` where the line stops. A stretch of line too
- * short to see (a lone sample between gaps, or samples that fall on the same spot) becomes a dot, so its value stays
- * visible when gaps are not connected.
- * With `receivePoints` (the most dots that still stand apart), every sample drawn between `left` and `right` (the plot)
- * also gets a dot, while there are at most that many there.
+ * Pixels of plot width per receive point. Denser than this, the dots (6 px wide, 8 px on an emphasized line) would run
+ * into each other and into a line, so they are left out until zoomed in.
  */
-/** The radius of a lone sample's dot, in pixels. */
-const LONE_DOT_RADIUS = 3;
+const RECEIVE_POINT_SPACING = 10;
 /** A stretch of line spanning less than this many pixels both across and up is not visible as a line. */
 const VISIBLE_LINE_SPAN = 1;
 
+/**
+ * Draws a Signal's line on a canvas: `point` for each drawable sample, `end` where the line stops.
+ * With `receivePoints` (the most dots that still stand apart, from receivePointLimit), every sample drawn between `left`
+ * and `right` (the plot) also gets a dot at its receive time, while there are at most that many there.
+ * A stretch of line too short to see (a lone sample between gaps, or samples on the same spot) follows the same rule:
+ * a receive point while they are shown, otherwise a mark as wide as the line, so its value stays visible.
+ */
 export class SeriesPath {
-  private count = 0; private lastX = 0; private lastY = 0; private firstX = 0; private firstY = 0; private short = true; private readonly dots: [number, number][] = []; private readonly all: [number, number][] = [];
+  private count = 0; private firstX = 0; private firstY = 0; private short = true; private readonly dots: [number, number][] = []; private readonly all: [number, number][] = [];
   constructor(private readonly context: ChartContext, private readonly receivePoints = 0, private readonly left = -Infinity, private readonly right = Infinity) { context.beginPath(); }
   point(x: number, y: number, separated = false): void {
     if (separated) this.end();
     if (this.count) this.context.lineTo(x, y); else { this.context.moveTo(x, y); this.firstX = x; this.firstY = y; this.short = true; }
     if (this.short && (Math.abs(x - this.firstX) >= VISIBLE_LINE_SPAN || Math.abs(y - this.firstY) >= VISIBLE_LINE_SPAN)) this.short = false;
-    this.count++; this.lastX = x; this.lastY = y; if (this.receivePoints > 0 && x >= this.left && x <= this.right && this.all.length <= this.receivePoints) this.all.push([x, y]);
+    this.count++; if (this.receivePoints > 0 && x >= this.left && x <= this.right && this.all.length <= this.receivePoints) this.all.push([x, y]);
   }
   end(): void { if (this.count && this.short) this.dots.push([this.firstX, this.firstY]); this.count = 0; }
   stroke(): void {
     const context = this.context; this.end(); context.stroke();
-    const dots = this.receivePoints > 0 && this.all.length <= this.receivePoints ? this.all : this.dots; if (!dots.length) return;
-    // Big enough to see at a glance: a dot as wide as the line was easy to miss.
-    const radius = Math.max(LONE_DOT_RADIUS, context.lineWidth + 1);
+    const shown = this.receivePoints > 0 && this.all.length <= this.receivePoints;
+    const dots = shown ? this.all : this.dots; if (!dots.length) return;
+    const radius = shown ? Math.max(RECEIVE_DOT_RADIUS, context.lineWidth + 1) : context.lineWidth;
     context.save(); context.setLineDash([]); context.fillStyle = context.strokeStyle; context.beginPath();
     for (const [x, y] of dots) { context.moveTo(x + radius, y); context.arc(x, y, radius, 0, Math.PI * 2); }
     context.fill(); context.restore();
@@ -37,18 +42,20 @@ export class SeriesPath {
 }
 
 /**
- * The most receive points a plot of this width shows (each needs room to stand apart), for a series drawn over the
- * sample times `start`…`end`; 0 when they are off, too dense there, or the series was thinned for drawing (not every
- * receive time is known then). A report holds every sample, so zooming into it brings its points out.
+ * The most receive points a plot of this width shows, for samples at `timestamps` drawn over `start`…`end`; 0 when
+ * they are too dense there to stand apart, or not every receive time is known (`complete` false: thinned for drawing).
+ * Zooming in brings them out; a report holds every sample, so zooming into it does too.
  */
-export function receivePointLimit(enabled: boolean, plotWidth: number, series: { readonly samples: readonly SignalSample[]; readonly totalSamplesInRange: number }, start: number, end: number): number {
-  if (!enabled || series.totalSamplesInRange > series.samples.length) return 0;
+export function receivePointLimit(plotWidth: number, complete: boolean, timestamps: Iterable<number>, start: number, end: number): number {
+  if (!complete) return 0;
   const limit = Math.floor(plotWidth / RECEIVE_POINT_SPACING); let shown = 0;
-  for (const sample of series.samples) if (sample.timestamp >= start && sample.timestamp <= end && ++shown > limit) return 0;
+  for (const timestamp of timestamps) if (timestamp >= start && timestamp <= end && ++shown > limit) return 0;
   return limit;
 }
-/** Pixels of plot width per receive point: denser than this, the points would run into a line, so they are left out until zoomed in. */
-const RECEIVE_POINT_SPACING = 4;
+/** receivePointLimit for a series of samples: thinned for drawing when it holds fewer than the samples in its range. */
+export function seriesReceivePointLimit(plotWidth: number, series: { readonly samples: readonly SignalSample[]; readonly totalSamplesInRange: number }, start: number, end: number): number {
+  return receivePointLimit(plotWidth, series.totalSamplesInRange <= series.samples.length, { *[Symbol.iterator]() { for (const sample of series.samples) yield sample.timestamp; } }, start, end);
+}
 
 export function displaySeriesRange(series: readonly SignalSeriesDto[], setting?: ChartAxisRangeSetting, visibleRange?: { readonly start: number; readonly end: number }, displayUnit?: string): { minimum: number; maximum: number } {
   let range = visibleDisplayRange(series, visibleRange, displayUnit);

@@ -17,7 +17,7 @@ test('a lone sample between gaps is drawn as a dot; samples on a line are not', 
   path.point(5, 5, true);
   path.point(9, 9, true); path.point(10, 10);
   path.stroke();
-  assert.deepEqual(calls.filter((call) => call.startsWith('dot')), ['dot 5,5']); assert.ok(calls.includes('radius 3'), 'a dot wider than the line');
+  assert.deepEqual(calls.filter((call) => call.startsWith('dot')), ['dot 5,5']); assert.ok(calls.includes('radius 1.5'), 'zoomed out: a mark as wide as the line, like the line itself');
   assert.deepEqual(calls.filter((call) => call.startsWith('line')), ['line 1,1', 'line 10,10']);
 });
 
@@ -42,17 +42,23 @@ test('a Signal received once, or once between its frame\'s dropouts, is drawn as
   }
 });
 
-test('receive points: a dot at every sample while they stand apart, none (but lone samples) when too dense', async () => {
-  const { receivePointLimit } = await import('../src/webview/shared/chartSeries');
+test('receive points: a dot at every sample while they stand apart (10 px each), none when too dense or thinned', async () => {
+  const { receivePointLimit, seriesReceivePointLimit } = await import('../src/webview/shared/chartSeries');
   const series = (count: number, total = count) => ({ samples: Array.from({ length: count }, (_, index) => ({ timestamp: index, value: 0 })), totalSamplesInRange: total });
-  assert.equal(receivePointLimit(false, 400, series(10), 0, 10), 0); assert.equal(receivePointLimit(true, 400, series(10), 0, 10), 100);
-  assert.equal(receivePointLimit(true, 400, series(500), 0, 500), 0, 'too many to tell apart');
-  assert.equal(receivePointLimit(true, 400, series(500), 100, 150), 100, 'zoomed in: only the samples in view count');
-  assert.equal(receivePointLimit(true, 400, series(50, 5000), 0, 10), 0, 'thinned for drawing: receive times not all known');
+  assert.equal(seriesReceivePointLimit(400, series(10), 0, 10), 40);
+  assert.equal(seriesReceivePointLimit(400, series(41), 0, 41), 0, 'too many to tell apart');
+  assert.equal(seriesReceivePointLimit(400, series(500), 100, 130), 40, 'zoomed in: only the samples in view count');
+  assert.equal(seriesReceivePointLimit(400, series(50, 5000), 0, 10), 0, 'thinned for drawing: receive times not all known');
+  assert.equal(receivePointLimit(400, false, [1, 2], 0, 10), 0);
+});
+
+test('receive points are bigger than the line; a lone sample takes the same dot while they are shown, and only then', () => {
   const shown = fakeContext(); const path = new SeriesPath(shown.context, 3); path.point(0, 0); path.point(1, 1); path.point(5, 5, true); path.stroke();
   assert.deepEqual(shown.calls.filter((call) => call.startsWith('dot')), ['dot 0,0', 'dot 1,1', 'dot 5,5']);
+  assert.deepEqual([...new Set(shown.calls.filter((call) => call.startsWith('radius')))], ['radius 3']);
   const dense = fakeContext(); const crowded = new SeriesPath(dense.context, 2); crowded.point(0, 0); crowded.point(1, 1); crowded.point(5, 5, true); crowded.stroke();
-  assert.deepEqual(dense.calls.filter((call) => call.startsWith('dot')), ['dot 5,5'], 'over the limit: only the lone sample');
+  assert.deepEqual(dense.calls.filter((call) => call.startsWith('dot')), ['dot 5,5'], 'over the limit: only the lone sample, so its value stays visible');
+  assert.deepEqual(dense.calls.filter((call) => call.startsWith('radius')), ['radius 1.5'], 'as wide as the line, not a receive point');
 });
 
 test('receive points count only what is drawn inside the plot, so a report zoomed into its full series still shows them', () => {

@@ -6,7 +6,7 @@ import { convertDisplayUnit, preferredDisplayUnit, resolveDisplayUnit } from '..
 import type { ComparisonSeriesDto, ComparisonTargetStateDto } from '../../extension/comparison/comparisonProtocol';
 import type { SignalGroupDto } from '../../extension/editors/rawLogProtocol';
 import { layoutTimestampMarker, timestampGutterRows, paintTimestampConnector, paintValueBoxes, type HoverLabelRect, type ValueBox } from '../shared/chartHoverLabels';
-import { crossesSeriesGap, displaySeriesRange, interpolatedSeriesSample, receivePointLimit, SeriesPath } from '../shared/chartSeries';
+import { crossesSeriesGap, displaySeriesRange, interpolatedSeriesSample, SeriesPath, seriesReceivePointLimit } from '../shared/chartSeries';
 import { chartWheelGesture, wheelZoomFactor } from '../shared/chartWheel';
 import { enhanceChoiceSelect } from '../shared/choiceGroup';
 import { graphDisplayPolicy, partitionActualGraphs } from '../shared/graphDisplayPolicy';
@@ -239,12 +239,11 @@ export class GraphCard implements ComparisonCard {
     const details = document.createElement('details'); details.className = 'display-settings';
     details.innerHTML = `<summary>${t('Drawing settings', '描画設定')}</summary>
       <div class="settings-row"><div class="choice-group" role="group" aria-label="${t('Display mode', '表示形式')}"><button type="button" class="mode-raw">${t('Actual (converted units)', '実値（単位換算）')}</button><button type="button" class="mode-normalized">${t('Normalized 0–100%', '正規化 0–100%')}</button></div></div>
-      <div class="settings-row"><label class="chart-option"><input class="connect-gaps" type="checkbox">${t('Connect gaps', '欠損区間を接続')}</label><label class="chart-option"><input class="show-receive-points" type="checkbox">${t('Show receive points', '受信位置を点で表示')}</label></div>
+      <div class="settings-row"><label class="chart-option"><input class="connect-gaps" type="checkbox">${t('Connect gaps', '欠損区間を接続')}</label></div>
       <div class="settings-row axis-settings"><label class="axis-mode">${t('Y axis', 'Y軸')}<select class="axis-range-mode"><option value="visible">${t('Visible interval', '表示区間')}</option><option value="global">${t('All data', '全データ')}</option></select></label><label class="chart-option"><input class="axis-include-zero" type="checkbox">${t('Include 0', '0を含める')}</label></div>`;
     details.querySelector('.mode-raw')!.addEventListener('click', () => this.switchToActual());
     details.querySelector('.mode-normalized')!.addEventListener('click', () => { this.update({ mode: 'normalized' }); this.syncSettings(); this.draw(); });
     const gaps = details.querySelector<HTMLInputElement>('.connect-gaps')!; gaps.addEventListener('change', () => { this.update({ connectGaps: gaps.checked }); this.draw(); });
-    const points = details.querySelector<HTMLInputElement>('.show-receive-points')!; points.addEventListener('change', () => { this.update({ showPoints: points.checked || undefined }); this.draw(); });
     const axis = details.querySelector<HTMLSelectElement>('.axis-range-mode')!; axis.addEventListener('change', () => { this.update({ axisRange: { ...this.axisRange(), mode: axis.value === 'global' ? 'global' : 'visible' } }); this.draw(); });
     enhanceChoiceSelect(axis);
     const zero = details.querySelector<HTMLInputElement>('.axis-include-zero')!; zero.addEventListener('change', () => { this.update({ axisRange: { ...this.axisRange(), includeZero: zero.checked } }); this.draw(); });
@@ -266,7 +265,6 @@ export class GraphCard implements ComparisonCard {
       raw.title = requiresSplit ? t('Split into actual-value graphs', '実値のグラフに分割') : '';
     }
     const gaps = this.options.querySelector<HTMLInputElement>('.connect-gaps'); if (gaps) gaps.checked = this.connectGaps;
-    const points = this.options.querySelector<HTMLInputElement>('.show-receive-points'); if (points) points.checked = this.definitionValue.showPoints === true;
     const axis = this.options.querySelector<HTMLSelectElement>('.axis-range-mode'); if (axis) axis.value = this.axisRange().mode;
     const zero = this.options.querySelector<HTMLInputElement>('.axis-include-zero'); if (zero) zero.checked = this.axisRange().includeZero === true;
     const axisRow = this.options.querySelector<HTMLElement>('.axis-settings'); if (axisRow) axisRow.hidden = normalized;
@@ -549,7 +547,7 @@ export class GraphCard implements ComparisonCard {
       }));
       const values = hover === undefined ? [] : own.flatMap(({ entry, displayUnit }) => { const sample = interpolatedSeriesSample(entry.series, entry.anchor + hover, this.connectGaps); return sample ? [`${this.valueLabel(entry, sample.value, displayUnit, normalized)}${sample.valueLabel ? ` (${sample.valueLabel})` : ''}`] : []; });
       return { name: definitions.get(signalId)?.name ?? signalId, color: this.color(signalId), emphasized: highlighted === signalId, markers: markerValues, value: values.length ? values.join('  ') : undefined,
-        lines: own.map(({ entry, displayUnit }) => ({ runs: laneRuns(entry.series, (value) => this.value(entry, value, displayUnit, normalized), this.connectGaps, entry.anchor), dash: dashFor(entry.targetIndex) })) };
+        lines: own.map(({ entry, displayUnit }) => ({ runs: laneRuns(entry.series, (value) => this.value(entry, value, displayUnit, normalized), this.connectGaps, entry.anchor), dash: dashFor(entry.targetIndex), complete: entry.series.totalSamplesInRange <= entry.series.samples.length })) };
     });
     const left = 72; const right = groups.length > 1 ? 72 : 24;
     paintChartLanes(context, lanes, { left, width: Math.max(32, width - left - right), top }, { start: range.start, end: range.end === range.start ? range.start + 1 : range.end }, { cursor: hover, markers: markers.map((marker) => marker.time), selection: interactive ? this.selection : undefined });
@@ -589,7 +587,7 @@ export class GraphCard implements ComparisonCard {
       for (const entry of group.entries) {
         const color = this.color(entry.signalId);
         context.save(); context.beginPath(); context.rect(left, laneTop, plotW, laneHeight); context.clip(); context.setLineDash(dashFor(entry.targetIndex)); context.strokeStyle = color;
-        context.lineWidth = highlighted === entry.signalId ? 3 : 1.5; const path = new SeriesPath(context, receivePointLimit(this.definitionValue.showPoints === true, plotW, entry.series, xMin + entry.anchor, xMax + entry.anchor), left, left + plotW); let previous: number | undefined;
+        context.lineWidth = highlighted === entry.signalId ? 3 : 1.5; const path = new SeriesPath(context, seriesReceivePointLimit(plotW, entry.series, xMin + entry.anchor, xMax + entry.anchor), left, left + plotW); let previous: number | undefined;
         for (const sample of entry.series.samples) {
           const value = this.value(entry, sample.value, group.displayUnit, normalized); const usable = Number.isFinite(value) && (sample.quality === undefined || sample.quality === 'valid');
           if (!usable) { if (!this.connectGaps) path.end(); continue; }

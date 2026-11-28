@@ -1,5 +1,5 @@
 import type { SignalSample } from '../../core/signal/signal';
-import { crossesSeriesGap, SeriesPath } from './chartSeries';
+import { crossesSeriesGap, receivePointLimit, SeriesPath } from './chartSeries';
 import { paintValueBoxes, type HoverLabelRect } from './chartHoverLabels';
 import { t } from './i18n';
 import type { ChartContext } from './svgCanvas';
@@ -15,8 +15,11 @@ export const LANE_TOP_GAP = 8;
 const LANE_BOTTOM_GAP = 8;
 
 export interface LanePoint { readonly time: number; readonly value: number }
-/** One line in a lane: runs of drawable points (a gap or an invalid sample ends a run, as on the graph). */
-export interface LaneLine { readonly runs: readonly (readonly LanePoint[])[]; readonly dash?: readonly number[] }
+/**
+ * One line in a lane: runs of drawable points (a gap or an invalid sample ends a run, as on the graph). `complete`: every
+ * sample is there (not thinned for drawing), so receive points can be shown when zoomed in, as on the graph.
+ */
+export interface LaneLine { readonly runs: readonly (readonly LanePoint[])[]; readonly dash?: readonly number[]; readonly complete?: boolean }
 /** A Signal's measured value at a marker: drawn in its lane as on the graph, a box beside the marker line pointing at the sample. */
 export interface LaneMarkerValue { readonly time: number; readonly sampleTime: number; readonly value: number; readonly text: string; readonly dash?: readonly number[] }
 export interface ChartLane { readonly name: string; readonly color: string; readonly lines: readonly LaneLine[]; readonly value?: string; readonly emphasized?: boolean; readonly markers?: readonly LaneMarkerValue[] }
@@ -115,7 +118,8 @@ export function paintChartLanes(context: ChartContext, lanes: readonly ChartLane
       context.fillStyle = fill; context.setLineDash([]);
       for (const points of line.runs) { if (points.length < 2) continue; context.beginPath(); context.moveTo(x(points[0].time), bandBottom); for (const point of points) context.lineTo(x(point.time), y(point.value)); context.lineTo(x(points[points.length - 1].time), bandBottom); context.closePath(); context.fill(); }
       context.strokeStyle = lane.color; context.lineWidth = lane.emphasized ? 3 : 1.5; context.setLineDash([...(line.dash ?? [])]);
-      const path = new SeriesPath(context);
+      const times = { *[Symbol.iterator]() { for (const run of line.runs) for (const point of run) yield point.time; } };
+      const path = new SeriesPath(context, receivePointLimit(plotWidth, line.complete === true, times, view.start, view.end), left, right);
       for (const points of line.runs) { for (const point of points) path.point(x(point.time), y(point.value)); path.end(); }
       path.stroke();
       const value = cursor === undefined ? undefined : valueAt(line.runs, cursor);

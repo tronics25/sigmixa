@@ -2,8 +2,7 @@
 
 ## Unreleased
 
-- Added **Show receive points** to the drawing settings of graphs, next to **Connect gaps**: a dot at each value as it was received, on the line, so you can see when a Signal was received. Where the values are too close together to tell apart, the dots are left out until you zoom in. In Visualize, on the comparison screen and in HTML reports.
-- A value with no neighbour on its graph line (received once, or once between breaks in reception) is drawn as a larger dot, twice as wide as before, so it is easy to see. In Visualize, on the comparison screen, in HTML reports and on saved images.
+- Graphs now show when each value was received: a dot on the line at each received value. The dots appear by themselves once you zoom in far enough that they stand apart, and go away when you zoom out, so the line stays clean. A value with no neighbour on its line (received once, or once between breaks in reception) gets the same dot under the same rule. In Visualize (also with lanes open), on the comparison screen, in HTML reports and on saved images.
 
 ## 2.5.0 - 2026-11-23
 
