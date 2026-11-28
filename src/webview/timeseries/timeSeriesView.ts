@@ -28,6 +28,7 @@ import { createLaneToggle, laneIndexAt, laneRuns, lanesHeight, paintChartLanes, 
 import type { SheetImage } from '../shared/imageSheet';
 import { withBrandMark } from '../shared/brandMark';
 import { viewActionGroup, iconButton, secondaryToolbar, type ViewCardState } from '../shared/iconButton';
+import { chartDragDirection, createValueZoomButton, paintValueEdgeLabel, paintValueSpan, placeValueZoomButton, usableValueSelection, valueEdgeLabel, valueSelection, type ValuePlot, type ValueRange, type ValueSpanButton } from '../shared/chartValueZoom';
 
 interface ChartMarker { readonly id: string; readonly timestamp: number; readonly signalIds: readonly string[]; }
 interface TimeSeriesGroup { readonly key: string; readonly label: string; readonly displayUnit?: string; readonly items: readonly SignalSeriesDto[]; }
@@ -50,7 +51,7 @@ export class TimeSeriesView {
   get isConfigured(): boolean { return this.shown.length > 0; }
   /** The selected Signals the graph can show (those shown checked). */
   private get shown(): string[] { return this.selector.shownSelection(); }
-  dispose(): void { this.hide(); this.lifetime.abort(); this.resizeObserver?.disconnect(); this.unsubscribeTimeline?.(); this.unsubscribeTimeDisplay?.(); this.unsubscribePosition?.(); this.unsubscribeVisibility?.(); this.unsubscribeRange?.(); this.unsubscribeViewRange?.(); this.unsubscribeClipRanges?.(); }
+  dispose(): void { this.hide(); this.lifetime.abort(); this.resizeObserver?.disconnect(); this.unsubscribeTimeline?.(); this.unsubscribeTimeDisplay?.(); this.unsubscribePosition?.(); this.unsubscribeVisibility?.(); this.unsubscribeRange?.(); this.unsubscribeValueSelection?.(); this.unsubscribeViewRange?.(); this.unsubscribeClipRanges?.(); }
   private listenWindow<K extends keyof WindowEventMap>(type: K, listener: (event: WindowEventMap[K]) => void): void { window.addEventListener(type, listener, { signal: this.lifetime.signal }); }
   private readonly selected: Set<string>;
   private readonly colors: Map<string, string>;
@@ -96,6 +97,20 @@ export class TimeSeriesView {
   private rangeDragged = false;
   private suppressNextClick = false;
   private selectedRange: { start: number; end: number } | undefined;
+  private selectionAnchorClientY: number | undefined;
+  /** A vertical drag in progress: the heights it spans on the plot, in canvas CSS pixels. */
+  private valueDrag: { from: number; to: number } | undefined;
+  /** The values a vertical selection covers on each axis of this graph; `key` names the axes they are values of. */
+  private valueSelected: { key: string; ranges: readonly ValueRange[] } | undefined;
+  /** Each axis's values while this graph is zoomed vertically, until reset; `key` names the axes they are values of. */
+  private valueZoom: { key: string; ranges: readonly ValueRange[] } | undefined;
+  /** What the plot last showed: each axis's values, where the plot is, which axes, and where the span marker's button goes. */
+  private valueAxes: ValueRange[] = [];
+  private valuePlot: ValuePlot | undefined;
+  private valueKey = '';
+  private valueButton: { kind: 'zoom' | 'reset'; at: ValueSpanButton } | undefined;
+  private readonly valueZoomButton: HTMLButtonElement;
+  private unsubscribeValueSelection?: () => void;
   private readonly markers = new Map<string, ChartMarker>();
   private readonly measured: MeasuredSamples;
   private legendHeights: readonly number[] = [];
@@ -191,6 +206,10 @@ export class TimeSeriesView {
     const mainToolbar = this.elements.querySelector<HTMLElement>('.chart-main>.view-toolbar')!; const paneToggle = iconButton(this.elements.querySelector<HTMLButtonElement>('.pane-toggle')!, 'layout-sidebar-left', t('Toggle Signal selection', 'シグナル選択を表示／非表示')); iconButton(this.saveImageButton, 'export', t('Save image', '画像を保存')); const secondary = secondaryToolbar(paneToggle, this.saveImageButton); secondary.setAttribute('aria-label', t('Secondary actions', '補助操作')); mainToolbar.appendChild(secondary);
     this.laneToggle = createLaneToggle(() => { this.lanesExpanded = !this.lanesExpanded; this.persist(); this.draw(false); });
     this.elements.querySelector('.chart-canvas-wrap')!.appendChild(this.laneToggle);
+    this.valueZoomButton = createValueZoomButton((kind) => { if (kind === 'zoom') this.zoomToSelectedValues(); else this.resetValueZoom(); });
+    this.elements.querySelector('.chart-canvas-wrap')!.appendChild(this.valueZoomButton);
+    // Only one graph holds a vertical selection; another graph's selection, or a selected time range, replaces this one's.
+    this.unsubscribeValueSelection = this.timeline?.subscribeValueSelection(() => { if (this.valueSelected && this.timeline?.valueSelectionOwner !== this.timelineSource) { this.valueSelected = undefined; if (this.visible) this.draw(false); } });
     this.selector = new SignalSelector({
       host: this.elements.querySelector('.chart-selector')!, selected: this.selected, colors: this.colors,
       grouping: initial?.chartSignalGrouping, onGroupingChange: () => this.persist(),
@@ -201,12 +220,12 @@ export class TimeSeriesView {
     this.elements.querySelector('.mode-raw')!.addEventListener('click', () => this.switchToActual());
     this.elements.querySelector('.mode-normalized')!.addEventListener('click', () => { this.mode = 'normalized'; this.persist(); this.updateModeButtons(); this.draw(); });
     const connectGaps = this.elements.querySelector<HTMLInputElement>('.connect-gaps')!; connectGaps.checked = this.connectGaps; connectGaps.addEventListener('change', () => { this.connectGaps = connectGaps.checked; this.persist(); this.draw(); });
-    const axisMode = this.elements.querySelector<HTMLSelectElement>('.axis-range-mode')!; axisMode.value = this.axisRange.mode === 'global' ? 'global' : 'visible'; axisMode.addEventListener('change', () => { this.axisRange = { ...this.axisRange, mode: axisMode.value as 'visible' | 'global' }; this.persist(); this.draw(); });
+    const axisMode = this.elements.querySelector<HTMLSelectElement>('.axis-range-mode')!; axisMode.value = this.axisRange.mode === 'global' ? 'global' : 'visible'; axisMode.addEventListener('change', () => { this.axisRange = { ...this.axisRange, mode: axisMode.value as 'visible' | 'global' }; this.valueZoom = undefined; this.persist(); this.draw(); });
     enhanceChoiceSelect(axisMode);
-    const includeZero = this.elements.querySelector<HTMLInputElement>('.axis-include-zero')!; includeZero.checked = this.axisRange.includeZero === true; includeZero.addEventListener('change', () => { this.axisRange = { ...this.axisRange, includeZero: includeZero.checked }; this.persist(); this.draw(); });
+    const includeZero = this.elements.querySelector<HTMLInputElement>('.axis-include-zero')!; includeZero.checked = this.axisRange.includeZero === true; includeZero.addEventListener('change', () => { this.axisRange = { ...this.axisRange, includeZero: includeZero.checked }; this.valueZoom = undefined; this.persist(); this.draw(); });
     this.saveImageButton.addEventListener('click', () => this.saveImage());
     for (const [selector, label, action] of [['.zoom-in', t('Zoom in; hold to repeat', '拡大・長押しで連続'), () => this.zoom(1 / 1.5)], ['.zoom-out', t('Zoom out; hold to repeat', '縮小・長押しで連続'), () => this.zoom(1.5)]] as const) { const button = this.elements.querySelector<HTMLButtonElement>(selector)!; iconButton(button, selector === '.zoom-in' ? 'zoom-in' : 'zoom-out', label); bindPressRepeat(button, action, { intervalMs: 180 }); }
-    const zoomReset = this.elements.querySelector<HTMLButtonElement>('.zoom-reset')!; iconButton(zoomReset, 'discard', t('Reset zoom', 'ズームをリセット')); this.elements.querySelector('.chart-navigation .segmented')!.appendChild(zoomReset); zoomReset.addEventListener('click', () => this.requestSeries(this.fullRange, true));
+    const zoomReset = this.elements.querySelector<HTMLButtonElement>('.zoom-reset')!; iconButton(zoomReset, 'discard', t('Reset zoom', 'ズームをリセット')); this.elements.querySelector('.chart-navigation .segmented')!.appendChild(zoomReset); zoomReset.addEventListener('click', () => { this.resetValueZoom(); this.requestSeries(this.fullRange, true); });
     iconButton(this.elements.querySelector<HTMLButtonElement>('.chart-marker-clear')!, 'clear-all', t('Clear markers', 'マーカーを全解除'));
     this.elements.querySelector('.analysis-cancel')!.addEventListener('click', () => this.post({ type: 'cancelAnalysis' }));
     iconButton(this.elements.querySelector<HTMLButtonElement>('.clip-clear')!, 'close', t('Clear selected range', '選択範囲を解除'));
@@ -233,7 +252,7 @@ export class TimeSeriesView {
     this.listenWindow('mouseup', (event) => { if (this.selectionAnchor !== undefined && event.target !== this.canvas) this.endRangeSelection(event); });
     this.listenWindow('mousemove', (event) => this.updateClipEdit(event));
     this.listenWindow('mouseup', (event) => this.endClipEdit(event));
-    this.listenWindow('keydown', (event) => { if (event.key !== 'Escape' || event.defaultPrevented) return; if (this.clipEdit) { event.preventDefault(); this.endClipEdit(undefined); } else if (this.visible && (this.selectedRange || this.selectionAnchor !== undefined) && !isTextEditing(event.target)) { event.preventDefault(); this.selectionAnchor = undefined; this.selectionAnchorClientX = undefined; this.clearSelectedRange(); } });
+    this.listenWindow('keydown', (event) => { if (event.key !== 'Escape' || event.defaultPrevented) return; if (this.clipEdit) { event.preventDefault(); this.endClipEdit(undefined); } else if (this.visible && (this.selectedRange || this.selectionAnchor !== undefined) && !isTextEditing(event.target)) { event.preventDefault(); this.selectionAnchor = undefined; this.selectionAnchorClientX = undefined; this.clearSelectedRange(); } else if (this.visible && this.valueSelected && !isTextEditing(event.target)) { event.preventDefault(); this.clearValueSelection(); } });
     (this.resizeObserver = new ResizeObserver(() => this.draw())).observe(this.elements.querySelector('.chart-canvas-wrap')!);
     this.applyPane(); this.updateModeButtons(); this.updateRangeControls(); this.updateMarkerControls(); this.updateStatus();
     this.unsubscribeTimeline = this.timeline?.subscribe((timestamp, source) => { if (source === this.timelineSource) return; this.cursorTimestamp = timestamp; if (this.visible && this.shown.length) this.scheduleInteractionDraw(); });
@@ -280,12 +299,14 @@ export class TimeSeriesView {
     const action = (selector: string, label?: string) => buttonContextAction(this.elements.querySelector<HTMLButtonElement>(selector)!, label);
     const items: (ViewContextAction | null)[] = [];
     if (this.selectedRange) items.push(action('.range-zoom'), action('.clip-create'), action('.clip-clear'), null);
+    else if (this.valueSelected) items.push({ label: t('Zoom to the selected values', '選択した値の範囲を拡大'), icon: 'zoom-in', run: () => this.zoomToSelectedValues() }, { label: t('Clear the selected values', '値の選択を解除'), icon: 'close', run: () => this.clearValueSelection() }, null);
     else if (pointer) {
       const timestamp = this.timestampAt(pointer); const rect = this.canvas.getBoundingClientRect();
       const graphIndex = this.graphIndexAt(pointer.clientY);
       if (timestamp !== undefined && graphIndex !== undefined && this.series.length) items.push({ label: t('Fix marker here', 'ここにマーカーを固定'), icon: 'pin', run: () => this.addMarkerAt(timestamp, graphIndex) });
     }
     items.push(action('.zoom-in', t('Zoom in', '拡大')), action('.zoom-out', t('Zoom out', '縮小')), action('.zoom-reset'));
+    if (this.valueZoom) items.push({ label: t('Reset the vertical zoom', '縦方向のズームをリセット'), icon: 'discard', run: () => this.resetValueZoom() });
     if (this.markers.size) items.push(action('.chart-marker-clear'));
     items.push(action('.save-chart-image'));
     return items;
@@ -411,24 +432,59 @@ export class TimeSeriesView {
     const signalIds = timeSeriesGraphSignalIds(timeSeriesGraphs(this.series, this.mode, this.groupLayout))[graphIndex]; if (!signalIds?.length) return;
     // A press is only a possible drag. Do not create range labels or resize
     // the chart until the movement threshold is crossed.
-    this.selectionAnchor = timestamp; this.selectionAnchorClientX = event.clientX; this.selectionGraphIndex = graphIndex; this.rangeDragged = false; event.preventDefault();
+    this.selectionAnchor = timestamp; this.selectionAnchorClientX = event.clientX; this.selectionAnchorClientY = event.clientY; this.selectionGraphIndex = graphIndex; this.rangeDragged = false; event.preventDefault();
   }
   private updateRangeSelection(event: MouseEvent): void {
-    const timestamp = this.timestampAt(event); if (timestamp === undefined || this.selectionAnchor === undefined) return;
+    if (this.selectionAnchor === undefined) return;
+    // The longer way from the press decides, at every move: across selects time on every graph, up or down this graph's values.
+    const direction = chartDragDirection(event.clientX - (this.selectionAnchorClientX ?? event.clientX), event.clientY - (this.selectionAnchorClientY ?? event.clientY), this.rangeDragged);
+    if (direction === 'none') return;
     if (!this.rangeDragged) {
-      if (this.selectionAnchorClientX === undefined || Math.abs(event.clientX - this.selectionAnchorClientX) <= 6) return;
       this.rangeDragged = true; this.rangePending = false; this.latestRangeRequest = ++this.counter;
       this.rangeSignalIds = timeSeriesGraphSignalIds(timeSeriesGraphs(this.series, this.mode, this.groupLayout))[this.selectionGraphIndex!] ?? [];
     }
+    const plot = this.valuePlot; const top = this.canvas.getBoundingClientRect().top; const anchorY = (this.selectionAnchorClientY ?? event.clientY) - top;
+    if (direction === 'value' && plot && anchorY >= plot.top && anchorY <= plot.top + plot.height) {
+      const clamp = (y: number) => Math.max(plot.top, Math.min(plot.top + plot.height, y));
+      this.valueDrag = { from: anchorY, to: clamp(event.clientY - top) }; this.selectedRange = undefined; this.activeRangeEdge = undefined;
+      this.cursorTimestamp = undefined; this.hoverGraphIndex = undefined; this.timeline?.set(undefined, this.timelineSource); this.scheduleInteractionDraw(); return;
+    }
+    this.valueDrag = undefined;
+    const timestamp = this.timestampAt(event); if (timestamp === undefined) return;
     this.selectedRange = { start: Math.min(this.selectionAnchor, timestamp), end: Math.max(this.selectionAnchor, timestamp) }; this.activeRangeEdge = timestamp < this.selectionAnchor ? 'start' : 'end'; this.cursorTimestamp = timestamp; this.hoverGraphIndex = this.selectionGraphIndex; this.timeline?.set(timestamp, this.timelineSource); this.scheduleInteractionDraw();
   }
   private endRangeSelection(event: MouseEvent): void {
-    if (this.selectionAnchor === undefined) return; this.updateRangeSelection(event); this.suppressNextClick = this.rangeDragged && event.target === this.canvas; this.selectionAnchor = undefined; this.selectionAnchorClientX = undefined;
+    if (this.selectionAnchor === undefined) return; this.updateRangeSelection(event); this.suppressNextClick = this.rangeDragged && event.target === this.canvas; this.selectionAnchor = undefined; this.selectionAnchorClientX = undefined; this.selectionAnchorClientY = undefined;
     if (!this.rangeDragged) { this.selectionGraphIndex = undefined; return; }
+    const drag = this.valueDrag; if (drag) { this.valueDrag = undefined; this.selectionGraphIndex = undefined; this.selectValues(drag.from, drag.to); return; }
+    this.clearValueSelection(false);
     if (this.selectedRange) { this.rangePending = true; this.latestRangeRequest = ++this.counter; this.post({ type: 'snapTimeRangeRequest', requestId: this.latestRangeRequest, startTimestamp: this.selectedRange.start, endTimestamp: this.selectedRange.end }); }
     this.selectionGraphIndex = undefined;
     this.updateRangeControls(); this.draw();
   }
+  /** Holds a vertical selection between two heights of the plot: each axis's values there. It replaces any selected time range. */
+  private selectValues(from: number, to: number): void {
+    const plot = this.valuePlot; const ranges = plot ? valueSelection(this.valueAxes, from, to, plot) : [];
+    this.latestRangeRequest = ++this.counter; this.rangePending = false; this.selectedRange = undefined; this.rangeSignalIds = []; this.activeRangeEdge = undefined; this.rangeDragged = false;
+    this.valueSelected = usableValueSelection(ranges) ? { key: this.valueKey, ranges } : undefined;
+    this.updateRangeControls();
+    if (this.valueSelected) this.timeline?.setValueSelectionOwner(this.timelineSource);
+    this.draw(false);
+  }
+  private clearValueSelection(redraw = true): void {
+    const had = !!this.valueSelected || !!this.valueDrag; this.valueSelected = undefined; this.valueDrag = undefined;
+    if (this.timeline?.valueSelectionOwner === this.timelineSource) this.timeline.setValueSelectionOwner(undefined);
+    if (redraw && had) this.draw(false);
+  }
+  /** Zooms this graph's value axes to the vertical selection. Time and the other graphs stay as they are. */
+  private zoomToSelectedValues(): void {
+    const selection = this.valueSelected; if (!selection || selection.key !== this.valueKey) return;
+    this.valueZoom = { key: selection.key, ranges: selection.ranges }; this.clearValueSelection(false); this.updateZoomControls(); this.draw(false);
+  }
+  /** Back to the automatic value range (the Y axis setting); the time axis stays as it is. */
+  resetValueZoom(): void { if (!this.valueZoom) return; this.valueZoom = undefined; this.updateZoomControls(); this.draw(false); }
+  /** True while this graph's values are zoomed. */
+  get valueZoomed(): boolean { return !!this.valueZoom && this.valueZoom.key === this.valueKey; }
   private updateRangeControls(): void {
     this.canvas.setAttribute('aria-label', this.selectedRange ? t('Time-series graph. Click to clear the selected range; drag to replace it.', '時系列グラフ。クリックで範囲選択を解除、ドラッグで選択範囲を変更。') : t('Time-series graph. Click to add a marker; drag to select a range.', '時系列グラフ。クリックでマーカー追加、ドラッグで範囲選択。'));
     this.timeline?.setRange(this.selectedRange, this.timelineSource);
@@ -459,7 +515,7 @@ export class TimeSeriesView {
   }
 
   private clearRangeSelection(redraw = true): void {
-    this.latestRangeRequest = ++this.counter; this.rangePending = false; this.selectedRange = undefined; this.selectionAnchor = undefined; this.selectionAnchorClientX = undefined; this.selectionGraphIndex = undefined; this.rangeSignalIds = []; this.activeRangeEdge = undefined; this.rangeDragged = false; this.cursorTimestamp = undefined; this.hoverGraphIndex = undefined; this.updateRangeControls(); if (redraw) this.draw(false);
+    this.latestRangeRequest = ++this.counter; this.rangePending = false; this.selectedRange = undefined; this.selectionAnchor = undefined; this.selectionAnchorClientX = undefined; this.selectionAnchorClientY = undefined; this.valueDrag = undefined; this.selectionGraphIndex = undefined; this.rangeSignalIds = []; this.activeRangeEdge = undefined; this.rangeDragged = false; this.cursorTimestamp = undefined; this.hoverGraphIndex = undefined; this.updateRangeControls(); if (redraw) this.draw(false);
   }
 
   private adjustRange(edge: 'start' | 'end', direction: -1 | 1): void { if (!this.selectedRange || this.rangePending) return; this.rangePending = true; this.activeRangeEdge = edge; this.cursorTimestamp = this.selectedRange[edge]; this.hoverGraphIndex = findGraphIndexBySignals(timeSeriesGraphSignalIds(timeSeriesGraphs(this.series, this.mode, this.groupLayout)), this.rangeSignalIds); this.updateRangeControls(); this.draw(false); this.latestRangeRequest = ++this.counter; this.post({ type: 'adjustTimeRangeRequest', requestId: this.latestRangeRequest, edge, direction, startTimestamp: this.selectedRange.start, endTimestamp: this.selectedRange.end }); }
@@ -473,8 +529,8 @@ export class TimeSeriesView {
   private draw(renderControls = true): void {
     this.updateMeasuredSamples();
     if (!this.visible) return; const wrapper = this.canvas.parentElement!; const width = Math.max(1, wrapper.clientWidth); const graphCount = Math.max(1, timeSeriesGraphs(this.series, this.mode, this.groupLayout).length); if (renderControls || this.legendHeights.length !== graphCount) this.legendHeights = this.renderLegend(width); this.axisGutters = this.measureAxisGutters(width, true); let legendTop = 0; this.elements.querySelectorAll<HTMLElement>('.chart-legend-group').forEach((row, index) => { row.style.top = `${legendTop}px`; legendTop += (this.legendHeights[index] ?? 0) + this.plotHeight + (this.axisGutters[index] ?? 0); }); const contentHeight = this.axisGutters.reduce((a, b) => a + b, 0) + graphCount * this.plotHeight + this.legendHeights.reduce((sum, value) => sum + value, 0); const lanes = this.series.length && this.viewRange ? this.laneItems() : []; this.lanesTop = lanes.length ? contentHeight : undefined; const height = contentHeight + (this.lanesExpanded ? lanesHeight(lanes.length) : 0); placeLaneToggle(this.laneToggle, lanes.length, this.lanesExpanded, contentHeight); const ratio = window.devicePixelRatio || 1; this.canvas.width = width * ratio; this.canvas.height = height * ratio; this.canvas.style.width = `${width}px`; this.canvas.style.height = `${height}px`; const context = this.canvas.getContext('2d')!; context.scale(ratio, ratio); context.clearRect(0, 0, width, height); context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height); if (renderControls) this.updateZoomControls();
-    if (!this.series.length || !this.viewRange) { context.font = '12px sans-serif'; context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.fillText(this.seriesPending ? t('Loading selected Signals…', '選択したシグナルを読み込んでいます…') : this.shown.length ? t('No samples in this range.', 'この範囲にサンプルがありません。') : this.optionsHost ? t('Select Signals in Graph settings.', 'グラフ設定でシグナルを選択してください。') : t('Select Signals from the left pane.', '左側からシグナルを選択してください。'), 24, 34); this.updateExportAction(); return; }
-    this.paintChart(context, width, height, 0, height - contentHeight, true, this.legendHeights); if (this.lanesExpanded) this.paintLanes(context, width, contentHeight, true); this.updateExportAction();
+    if (!this.series.length || !this.viewRange) { context.font = '12px sans-serif'; context.fillStyle = css('--vscode-descriptionForeground', '#888'); placeValueZoomButton(this.valueZoomButton, this.canvas, undefined); context.fillText(this.seriesPending ? t('Loading selected Signals…', '選択したシグナルを読み込んでいます…') : this.shown.length ? t('No samples in this range.', 'この範囲にサンプルがありません。') : this.optionsHost ? t('Select Signals in Graph settings.', 'グラフ設定でシグナルを選択してください。') : t('Select Signals from the left pane.', '左側からシグナルを選択してください。'), 24, 34); this.updateExportAction(); return; }
+    this.valueButton = undefined; this.paintChart(context, width, height, 0, height - contentHeight, true, this.legendHeights); const valueButton = this.valueButton as TimeSeriesView['valueButton']; placeValueZoomButton(this.valueZoomButton, this.canvas, valueButton?.kind, valueButton?.at); if (this.lanesExpanded) this.paintLanes(context, width, contentHeight, true); this.updateExportAction();
   }
 
   /** Every shown Signal in legend order, each with the display unit of its axis. */
@@ -534,8 +590,13 @@ export class TimeSeriesView {
       const legendHeight = legendHeights[graphIndex] ?? 0; const blockTop = top + precedingHeight; const graphTop = blockTop + legendHeight; const laneTop = graphTop + 30; const laneHeight = (interactions ? this.plotHeight : GRAPH_HEIGHT) - 58; const pair = graphs[graphIndex] ?? []; const hoverValues: CanvasHoverValue[] = []; const markerValues = new Map<string, CanvasHoverValue[]>(); if (!interactions) this.paintGraphLegend(context, pair, width, blockTop); precedingHeight += legendHeight + (interactions ? this.plotHeight : GRAPH_HEIGHT) + (gutters[graphIndex] ?? 0);
       context.strokeStyle = css('--vscode-panel-border', '#777'); context.strokeRect(left, laneTop, plotW, laneHeight);
       for (const { timestamp, label } of timeTicks(this.viewRange.start, this.viewRange.end, Math.max(1, Math.min(5, Math.floor(plotW / 100))))) { const px = x(timestamp); context.globalAlpha = .48; context.beginPath(); context.moveTo(px, laneTop); context.lineTo(px, laneTop + laneHeight); context.stroke(); context.globalAlpha = 1; const labelWidth = context.measureText(label).width; context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.fillText(label, Math.max(left, Math.min(left + plotW - labelWidth, px - labelWidth / 2)), laneTop + laneHeight + 20); }
+      // A vertical zoom or selection belongs to these axes: their units and the display mode. Another set of axes drops it.
+      const valueKey = `${this.mode}|${pair.map((group) => `${group.key}:${group.displayUnit ?? ''}`).join('|')}`; const valueZoom = this.valueZoom?.key === valueKey ? this.valueZoom : undefined;
+      const valueSelected = interactions && this.valueSelected?.key === valueKey ? this.valueSelected : undefined; const valueDrag = interactions ? this.valueDrag : undefined;
+      const plot: ValuePlot = { left, width: plotW, top: laneTop, height: laneHeight }; const axes: ValueRange[] = []; const selectionColor = css('--vscode-focusBorder', '#007acc');
       pair.forEach((group, axisIndex) => {
-        const range = this.mode === 'normalized' ? { minimum: 0, maximum: 100 } : displaySeriesRange(group.items, this.axisRange, this.viewRange, group.displayUnit); let { minimum, maximum } = range; if (minimum === maximum) { const pad = Math.abs(minimum) * .05 || 1; minimum -= pad; maximum += pad; }
+        const range = valueZoom?.ranges[axisIndex] ?? (this.mode === 'normalized' ? { minimum: 0, maximum: 100 } : displaySeriesRange(group.items, this.axisRange, this.viewRange, group.displayUnit)); let { minimum, maximum } = range; if (minimum === maximum) { const pad = Math.abs(minimum) * .05 || 1; minimum -= pad; maximum += pad; }
+        axes.push({ minimum, maximum });
         const y = (value: number) => laneTop + (1 - (value - minimum) / (maximum - minimum)) * laneHeight; const rightAxis = axisIndex % 2 === 1; const axisX = rightAxis ? left + plotW + Math.floor(axisIndex / 2) * axisWidth : left - Math.floor(axisIndex / 2) * axisWidth;
         const axisColor = this.color(group.items[0].definition.id);
         context.save(); context.font = '600 11px sans-serif'; context.textAlign = rightAxis ? 'left' : 'right'; context.fillStyle = axisColor;
@@ -552,6 +613,9 @@ export class TimeSeriesView {
           context.fillText(label, 0, 0); context.restore();
         }
         context.restore();
+        // The selected values' edges, on each axis in its own unit, over its tick labels.
+        const chosen = valueDrag ? valueSelection([{ minimum, maximum }], valueDrag.from, valueDrag.to, plot)[0] : valueSelected?.ranges[axisIndex];
+        if (chosen) for (const value of [chosen.maximum, chosen.minimum]) paintValueEdgeLabel(context, valueEdgeLabel(value, maximum - minimum), axisX, y(value), rightAxis, plot, axisWidth - 4, selectionColor, css('--vscode-button-foreground', '#fff'));
         context.save(); context.beginPath(); context.rect(left, laneTop, plotW, laneHeight); context.clip();
         for (const item of group.items) {
           const color = this.color(item.definition.id); context.strokeStyle = color; context.lineWidth = interactions && item.definition.id === this.highlightedSignalId ? 3 : 1.5;
@@ -584,6 +648,14 @@ export class TimeSeriesView {
       if (interactions) this.clipMarkers.push(...drawnClips);
       // The selection is see-through: the lines under it stay visible, so its edges can be set against them.
       if (this.selectedRange) { const rangeStart = Math.max(this.viewRange.start, this.selectedRange.start); const rangeEnd = Math.min(this.viewRange.end, this.selectedRange.end); if (rangeEnd >= rangeStart) { const start = x(rangeStart); const end = x(rangeEnd); context.save(); context.fillStyle = css('--vscode-focusBorder', '#007acc'); context.globalAlpha = .16; context.fillRect(start, laneTop, end - start, laneHeight); context.globalAlpha = .8; context.strokeStyle = css('--vscode-focusBorder', '#007acc'); context.strokeRect(start, laneTop, end - start, laneHeight); context.restore(); } }
+      if (interactions) {
+        this.valueAxes = axes; this.valuePlot = plot; this.valueKey = valueKey;
+        // A vertical selection: a band over this graph and the span marker ⊤↕⊥ with the zoom button. Zoomed: the marker over the whole height, with reset.
+        const axis = axes[0]; const yOf = (value: number) => axis ? laneTop + (1 - (value - axis.minimum) / (axis.maximum - axis.minimum)) * laneHeight : laneTop;
+        if (valueDrag) paintValueSpan(context, plot, valueDrag.from, valueDrag.to, selectionColor, true);
+        else if (valueSelected?.ranges[0]) this.valueButton = { kind: 'zoom', at: paintValueSpan(context, plot, yOf(valueSelected.ranges[0].maximum), yOf(valueSelected.ranges[0].minimum), selectionColor, true) };
+        else if (valueZoom) this.valueButton = { kind: 'reset', at: paintValueSpan(context, plot, laneTop, laneTop + laneHeight, selectionColor, false) };
+      }
       const visibleMarkers = markers.filter((marker) => findGraphIndexBySignals(graphSignalIds, marker.signalIds) === graphIndex && marker.timestamp >= this.viewRange!.start && marker.timestamp <= this.viewRange!.end);
       for (const marker of visibleMarkers) { context.strokeStyle = css('--vscode-focusBorder', '#007acc'); context.beginPath(); const px = x(marker.timestamp); context.moveTo(px, laneTop); context.lineTo(px, laneTop + laneHeight); context.stroke(); }
       const traceTime = this.timeline?.position;
@@ -668,6 +740,7 @@ export class TimeSeriesView {
   private addMarker(event: MouseEvent): void {
     if (this.suppressNextClick) { this.suppressNextClick = false; return; }
     if (this.selectedRange) { this.clearRangeSelection(); return; }
+    if (this.valueSelected) { this.clearValueSelection(); return; }
     const timestamp = this.timestampAt(event); if (timestamp === undefined || !this.shown.length) return;
     const graphIndex = this.graphIndexAt(event.clientY); if (graphIndex === undefined) return;
     this.addMarkerAt(timestamp, graphIndex);
@@ -738,7 +811,7 @@ export class TimeSeriesView {
   }
   private updateZoomControls(): void {
     const full = this.fullRange; const view = this.viewRange; const reset = this.elements.querySelector<HTMLButtonElement>('.zoom-reset')!; const out = this.elements.querySelector<HTMLButtonElement>('.zoom-out')!; const input = this.elements.querySelector<HTMLButtonElement>('.zoom-in')!; const label = this.elements.querySelector('.view-range')!;
-    const zoomed = Boolean(full && view && (Math.abs(view.start - full.start) > 1e-9 || Math.abs(view.end - full.end) > 1e-9)); reset.disabled = !zoomed; out.disabled = !zoomed; input.disabled = !full || !view || (view.end - view.start) <= (full.end - full.start) * .005 + 1e-12;
+    const zoomed = Boolean(full && view && (Math.abs(view.start - full.start) > 1e-9 || Math.abs(view.end - full.end) > 1e-9)); reset.disabled = !zoomed && !this.valueZoomed; out.disabled = !zoomed; input.disabled = !full || !view || (view.end - view.start) <= (full.end - full.start) * .005 + 1e-12;
     label.textContent = view ? `${timeRangeLabel(view.start, view.end, formatSeconds)} · ${formatNumber(view.end - view.start)} s` : '';
   }
   private updateExportAction(): void { this.saveImageButton.disabled = !this.series.length || !this.viewRange || this.seriesPending || this.measured.pendingMarkers(); this.saveImageButton.title = t('Save image', '画像を保存'); }

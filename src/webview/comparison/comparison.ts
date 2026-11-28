@@ -16,6 +16,7 @@ import { MeasuredSamples } from '../shared/measuredSamples';
 import { bindPressRepeat } from '../shared/pressRepeat';
 import { SIGNAL_LEGEND_STYLES } from '../shared/signalLegend';
 import { CHART_LANES_STYLES } from '../shared/chartLanes';
+import { CHART_VALUE_ZOOM_STYLES } from '../shared/chartValueZoom';
 import { SIGNAL_COLOR_PRESETS } from '../shared/signalSelector';
 import type { ViewContextAction } from '../shared/viewContextAction';
 import { COMPARISON_STYLES } from './comparisonStyles';
@@ -48,7 +49,7 @@ let highlightedSignal: string | undefined;
 let requestCounter = 0;
 const pendingSeries = new Map<number, string>();
 
-app.innerHTML = `<style>${DESIGN_TOKENS}${COMPARISON_STYLES}${ICON_BUTTON_STYLES}${CHOICE_GROUP_STYLES}${SIGNAL_LEGEND_STYLES}${CHART_LANES_STYLES}${COMPONENT_STYLES}</style>
+app.innerHTML = `<style>${DESIGN_TOKENS}${COMPARISON_STYLES}${ICON_BUTTON_STYLES}${CHOICE_GROUP_STYLES}${SIGNAL_LEGEND_STYLES}${CHART_LANES_STYLES}${CHART_VALUE_ZOOM_STYLES}${COMPONENT_STYLES}</style>
 <section class="targets" aria-label="${t('Compared files and Clips', '比較するファイル／クリップ')}"><div class="targets-head"><strong>${t('Compared files and Clips', '比較するファイル／クリップ')}</strong><span class="targets-count muted"></span></div><div class="target-rows"></div></section>
 <div class="visualize-workspace"><div class="visualize-content"><div class="view-toolbar"><button class="add-graph" type="button"><span class="codicon codicon-add" aria-hidden="true"></span> ${t('Add view', 'ビューを追加')}</button><span class="spacer"></span><div class="range-controls comparison-range" role="group" aria-label="${t('Selected range', '選択範囲')}" hidden><span class="clip-range muted"></span><button class="range-zoom" type="button"></button><button class="range-clear" type="button"></button></div><button class="zoom-all-in" type="button"></button><button class="zoom-all-out" type="button"></button><button class="zoom-all-reset" type="button"></button><button class="save-sheet" type="button"></button></div><div class="visualize-list"></div></div>
 <aside class="visualize-options" aria-label="${t('Graph settings', 'グラフ設定')}" hidden><header><strong>${t('Graph settings', 'グラフ設定')}</strong><button class="close-view-options" type="button"></button></header><div class="options-view-name"></div><p class="options-empty muted">${t('Add a graph to configure it.', 'ビューを追加すると設定できます。')}</p><div class="view-options-panels"></div></aside></div>`;
@@ -67,24 +68,27 @@ const zoomAllIn = labeledIconButton(app.querySelector<HTMLButtonElement>('.zoom-
 const zoomAllOut = labeledIconButton(app.querySelector<HTMLButtonElement>('.zoom-all-out')!, 'zoom-out', t('Zoom out', '縮小'));
 const zoomAllReset = labeledIconButton(app.querySelector<HTMLButtonElement>('.zoom-all-reset')!, 'discard', t('Reset', 'リセット'), t('Reset zoom', 'ズームをリセット'));
 bindPressRepeat(zoomAllIn, () => time.zoom(1 / 1.5), { intervalMs: 180 }); bindPressRepeat(zoomAllOut, () => time.zoom(1.5), { intervalMs: 180 });
-zoomAllReset.addEventListener('click', () => time.reset());
+zoomAllReset.addEventListener('click', () => { cards.forEach((card) => card.resetValueZoom?.()); time.reset(); updateTimeButtons(); });
 // The selected range is the comparison's too: shown on every graph, with its actions here. While a range is selected the
 // step zoom gives way to "Zoom to range", as in Visualize.
 let selection: { start: number; end: number } | undefined;
+// A vertical selection is one graph's own values: at most one graph holds one, and a selected time range replaces it (and back).
+let valueSelectionOwner: string | undefined;
+const setValueSelectionOwner = (graphId: string | undefined) => { if (graphId === valueSelectionOwner) return; valueSelectionOwner = graphId; cards.forEach((card) => card.scheduleDraw()); };
 const rangeControls = app.querySelector<HTMLElement>('.comparison-range')!;
 const trim = (value: number) => value.toFixed(6).replace(/\.?0+$/, '');
 const setSelection = (range: { start: number; end: number } | undefined) => {
-  selection = range && range.end > range.start ? range : undefined; rangeControls.hidden = !selection; zoomAllIn.hidden = !!selection; zoomAllOut.hidden = !!selection;
+  selection = range && range.end > range.start ? range : undefined; if (selection) valueSelectionOwner = undefined; rangeControls.hidden = !selection; zoomAllIn.hidden = !!selection; zoomAllOut.hidden = !!selection;
   if (selection) rangeControls.querySelector('.clip-range')!.textContent = `${trim(selection.start)}–${trim(selection.end)} s · ${trim(selection.end - selection.start)} s`;
   cards.forEach((card) => card.scheduleDraw());
 };
 window.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || event.defaultPrevented || !selection || isTextEditing(event.target)) return;
-  event.preventDefault(); setSelection(undefined);
+  if (event.key !== 'Escape' || event.defaultPrevented || (!selection && !valueSelectionOwner) || isTextEditing(event.target)) return;
+  event.preventDefault(); if (selection) setSelection(undefined); else setValueSelectionOwner(undefined);
 });
 labeledIconButton(app.querySelector<HTMLButtonElement>('.range-zoom')!, 'zoom-in', t('Zoom to range', '選択範囲を拡大')).addEventListener('click', () => { const range = selection; if (!range) return; setSelection(undefined); time.setView(range); });
 labeledIconButton(app.querySelector<HTMLButtonElement>('.range-clear')!, 'close', t('Clear', '解除'), t('Clear selected range', '選択範囲を解除')).addEventListener('click', () => setSelection(undefined));
-const updateTimeButtons = () => { zoomAllIn.disabled = !time.canZoomIn; zoomAllOut.disabled = !time.zoomed; zoomAllReset.disabled = !time.zoomed; };
+const updateTimeButtons = () => { zoomAllIn.disabled = !time.canZoomIn; zoomAllOut.disabled = !time.zoomed; zoomAllReset.disabled = !time.zoomed && !cards.some((card) => card.valueZoomed); };
 time.subscribe(() => { updateTimeButtons(); cards.forEach((card) => card.scheduleDraw()); }); updateTimeButtons();
 labeledIconButton(app.querySelector<HTMLButtonElement>('.save-sheet')!, 'export', t('Export', 'エクスポート')).addEventListener('click', () => saveSheet());
 /** Export: all graphs on one PNG/SVG sheet (the subtitle says which line style is which file/Clip), or the HTML report. */
@@ -127,6 +131,7 @@ const host: GraphHost = {
   definitions: () => definitions, groups: () => groups,
   colors, color, measured, time,
   selection: () => selection, setSelection,
+  valueSelectionOwner: () => valueSelectionOwner, setValueSelectionOwner, valueZoomChanged: () => updateTimeButtons(),
   // Clips are in their log's time; the graphs' axis starts at the target's (shifted) start.
   clipSpans: () => { const target = clipSpans.length ? comparison?.targets[0] : undefined; const start = target ? anchor(target.id) : undefined; return start === undefined ? [] : clipSpans.map((clip) => ({ ...clip, start: clip.start - start, end: clip.end - start })); },
   refreshMeasured: () => measured.update(cards.flatMap((card) => card.markerQueries())),

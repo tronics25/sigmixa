@@ -1,5 +1,9 @@
 # Change Log
 
+## Unreleased
+
+- Graphs in Visualize and on the comparison screen can now be zoomed vertically. Drag up or down on a graph to select a range of its values: the selected range is shown as a band, with its top and bottom values on each Y axis and a zoom button between them. The zoom button shows only those values on that graph; the other graphs and the time axis stay as they are. Once zoomed, the button resets the graph to its automatic Y range. A drag still selects time when it moves more across than up or down, and a new time or value selection replaces the previous one. **Reset** now also resets the vertical zoom of every graph. The vertical zoom is not saved.
+
 ## 2.5.0 - 2026-11-23
 
 - Added a city drive to the sample workspace: a three-minute drive through city streets, onto a highway and into hard braking behind a car ahead, with prepared views and Clips.

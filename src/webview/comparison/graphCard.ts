@@ -25,6 +25,7 @@ import type { SheetImage } from '../shared/imageSheet';
 import { withBrandMark } from '../shared/brandMark';
 import { buttonContextAction, type ViewContextAction } from '../shared/viewContextAction';
 import { createLaneToggle, laneIndexAt, laneRuns, lanesHeight, paintChartLanes, placeLaneToggle, type ChartLane } from '../shared/chartLanes';
+import { chartDragDirection, createValueZoomButton, paintValueEdgeLabel, paintValueSpan, placeValueZoomButton, usableValueSelection, valueEdgeLabel, valueSelection, type ValuePlot, type ValueRange, type ValueSpanButton } from '../shared/chartValueZoom';
 
 export const DASH_PATTERNS: readonly number[][] = [[], [8, 4], [2, 3], [10, 3, 2, 3]];
 export const dashFor = (index: number): number[] => DASH_PATTERNS[index % DASH_PATTERNS.length];
@@ -58,6 +59,9 @@ export interface ComparisonCard {
   markerQueries(): { slot: string; sourceId: string; timestamp: number; signalIds: string[] }[];
   revealSignal(signalId: string): void;
   renderImage(heading?: string, width?: number): SheetImage | undefined;
+  /** A time-series graph zoomed vertically: back to its automatic value range. */
+  resetValueZoom?(): void;
+  readonly valueZoomed?: boolean;
 }
 
 /** What a card needs from the page: shared targets, catalog, colours, hover time and persistence. */
@@ -65,6 +69,11 @@ export interface GraphHost {
   /** The time range selected by dragging on any graph; undefined when none. */
   selection(): TimeRange | undefined;
   setSelection(range: TimeRange | undefined): void;
+  /** The graph holding a vertical selection of its own values, if any: one at most, and never with a selected time range. */
+  valueSelectionOwner(): string | undefined;
+  setValueSelectionOwner(graphId: string | undefined): void;
+  /** A graph was zoomed vertically or reset, so the comparison's zoom reset can follow. */
+  valueZoomChanged(): void;
   /** Clips to mark on the graphs, already on the comparison's time axis. Empty except in the report of one log. */
   clipSpans(): readonly ClipSpan[];
   /** The time axis every time-series graph of the comparison shares. */
@@ -115,7 +124,20 @@ export class GraphCard implements ComparisonCard {
   private readonly buttons: Record<'clear' | 'image' | 'settings' | 'up' | 'copy' | 'trash', HTMLButtonElement>;
   /** The selected time range belongs to the whole comparison, like the time axis: every graph shows it. */
   private get selection(): TimeRange | undefined { return this.host.selection(); }
-  private press?: { x: number; time: number };
+  private press?: { x: number; y: number; time: number; dragged: boolean };
+  /** A vertical drag in progress: the heights it spans on the plot, in canvas CSS pixels. */
+  private valueDrag?: { from: number; to: number };
+  /** The values a vertical selection covers on each axis; shown while this graph holds the comparison's vertical selection. */
+  private valueSelected?: { key: string; ranges: readonly ValueRange[] };
+  /** Each axis's values while this graph is zoomed vertically, until reset; `key` names the axes they are values of. */
+  private valueZoom?: { key: string; ranges: readonly ValueRange[] };
+  private valueAxes: ValueRange[] = [];
+  private valuePlot?: ValuePlot;
+  private valueKey = '';
+  private valueButton?: { kind: 'zoom' | 'reset'; at: ValueSpanButton };
+  private readonly valueZoomButton: HTMLButtonElement;
+  private get shownValueSelection(): { key: string; ranges: readonly ValueRange[] } | undefined { const selection = this.valueSelected; return selection && selection.key === this.valueKey && this.host.valueSelectionOwner() === this.id ? selection : undefined; }
+  get valueZoomed(): boolean { return !!this.valueZoom && this.valueZoom.key === this.valueKey; }
   private suppressClick = false;
   private series = new Map<string, readonly ComparisonSeriesDto[]>();
   private latestRequest = 0;
@@ -164,6 +186,8 @@ export class GraphCard implements ComparisonCard {
     wrap.appendChild(this.canvas);
     this.laneToggle = createLaneToggle(() => { this.update({ lanes: !this.lanesOpen }); this.draw(); });
     wrap.appendChild(this.laneToggle);
+    this.valueZoomButton = createValueZoomButton((kind) => { if (kind === 'zoom') this.zoomToSelectedValues(); else this.resetValueZoom(); });
+    wrap.appendChild(this.valueZoomButton);
     this.element.append(this.header, this.notice, this.legend, wrap); list.appendChild(this.element);
 
     this.options = document.createElement('section'); this.options.className = 'view-specific-options'; this.options.hidden = true;
@@ -244,9 +268,9 @@ export class GraphCard implements ComparisonCard {
     details.querySelector('.mode-raw')!.addEventListener('click', () => this.switchToActual());
     details.querySelector('.mode-normalized')!.addEventListener('click', () => { this.update({ mode: 'normalized' }); this.syncSettings(); this.draw(); });
     const gaps = details.querySelector<HTMLInputElement>('.connect-gaps')!; gaps.addEventListener('change', () => { this.update({ connectGaps: gaps.checked }); this.draw(); });
-    const axis = details.querySelector<HTMLSelectElement>('.axis-range-mode')!; axis.addEventListener('change', () => { this.update({ axisRange: { ...this.axisRange(), mode: axis.value === 'global' ? 'global' : 'visible' } }); this.draw(); });
+    const axis = details.querySelector<HTMLSelectElement>('.axis-range-mode')!; axis.addEventListener('change', () => { this.update({ axisRange: { ...this.axisRange(), mode: axis.value === 'global' ? 'global' : 'visible' } }); this.dropValueZoom(); this.draw(); });
     enhanceChoiceSelect(axis);
-    const zero = details.querySelector<HTMLInputElement>('.axis-include-zero')!; zero.addEventListener('change', () => { this.update({ axisRange: { ...this.axisRange(), includeZero: zero.checked } }); this.draw(); });
+    const zero = details.querySelector<HTMLInputElement>('.axis-include-zero')!; zero.addEventListener('change', () => { this.update({ axisRange: { ...this.axisRange(), includeZero: zero.checked } }); this.dropValueZoom(); this.draw(); });
     queueMicrotask(() => this.syncSettings());
     return details;
   }
@@ -292,7 +316,9 @@ export class GraphCard implements ComparisonCard {
   contextActions(pointer?: { clientX: number; clientY: number }): (ViewContextAction | null)[] {
     const items: (ViewContextAction | null)[] = [];
     const time = pointer ? this.pointerTime(pointer.clientX, pointer.clientY) : undefined;
-    if (!this.selection && time !== undefined) items.push({ label: t('Fix marker here', 'ここにマーカーを固定'), icon: 'pin', run: () => this.addMarker(time) });
+    if (this.shownValueSelection) items.push({ label: t('Zoom to the selected values', '選択した値の範囲を拡大'), icon: 'zoom-in', run: () => this.zoomToSelectedValues() }, { label: t('Clear the selected values', '値の選択を解除'), icon: 'close', run: () => this.host.setValueSelectionOwner(undefined) }, null);
+    else if (!this.selection && time !== undefined) items.push({ label: t('Fix marker here', 'ここにマーカーを固定'), icon: 'pin', run: () => this.addMarker(time) });
+    if (this.valueZoomed) items.push({ label: t('Reset the vertical zoom', '縦方向のズームをリセット'), icon: 'discard', run: () => this.resetValueZoom() });
     if (this.markers.size) items.push(buttonContextAction(this.buttons.clear));
     items.push(buttonContextAction(this.buttons.image));
     return items;
@@ -303,16 +329,26 @@ export class GraphCard implements ComparisonCard {
   private bindCanvas(): void {
     this.canvas.addEventListener('mousemove', (event) => { const time = this.pointerTime(event.clientX, event.clientY); this.host.setHoverTime(time); });
     this.canvas.addEventListener('mouseleave', () => this.host.setHoverTime(undefined));
-    // Drag to select a range (like the time-series graph in Visualize); a click clears it, or adds a marker.
-    this.canvas.addEventListener('mousedown', (event) => { const time = event.button === 0 ? this.pointerTime(event.clientX, event.clientY) : undefined; this.press = time === undefined ? undefined : { x: event.clientX, time }; });
+    // Drag to select a range (like the time-series graph in Visualize); a click clears it, or adds a marker. The longer way from
+    // the press decides, at every move: across selects time on every graph, up or down this graph's values.
+    this.canvas.addEventListener('mousedown', (event) => { const time = event.button === 0 ? this.pointerTime(event.clientX, event.clientY) : undefined; this.press = time === undefined ? undefined : { x: event.clientX, y: event.clientY, time, dragged: false }; });
     this.canvas.addEventListener('mousemove', (event) => {
-      if (!this.press || Math.abs(event.clientX - this.press.x) <= 6) return;
-      const time = this.clampedTime(event.clientX); this.host.setSelection({ start: Math.min(this.press.time, time), end: Math.max(this.press.time, time) }); this.suppressClick = true;
+      const press = this.press; if (!press) return;
+      const direction = chartDragDirection(event.clientX - press.x, event.clientY - press.y, press.dragged); if (direction === 'none') return;
+      press.dragged = true; this.suppressClick = true;
+      const plot = this.valuePlot; const top = this.canvas.getBoundingClientRect().top; const anchorY = press.y - top;
+      if (direction === 'value' && plot && anchorY >= plot.top && anchorY <= plot.top + plot.height) {
+        this.valueDrag = { from: anchorY, to: Math.max(plot.top, Math.min(plot.top + plot.height, event.clientY - top)) };
+        if (this.selection) this.host.setSelection(undefined); this.scheduleDraw(); return;
+      }
+      if (this.valueDrag) { this.valueDrag = undefined; this.scheduleDraw(); }
+      const time = this.clampedTime(event.clientX); this.host.setSelection({ start: Math.min(press.time, time), end: Math.max(press.time, time) });
     });
-    window.addEventListener('mouseup', () => { this.press = undefined; });
+    window.addEventListener('mouseup', () => { const drag = this.valueDrag; this.press = undefined; if (drag) { this.valueDrag = undefined; this.selectValues(drag.from, drag.to); } });
     this.canvas.addEventListener('click', (event) => {
       if (this.suppressClick) { this.suppressClick = false; return; }
       if (this.selection) { this.host.setSelection(undefined); return; }
+      if (this.shownValueSelection) { this.host.setValueSelectionOwner(undefined); return; }
       const time = this.pointerTime(event.clientX, event.clientY); if (time !== undefined) this.addMarker(time);
     });
     // The wheel moves the graphs by what was turned, at once: no waiting for the gesture to end, no fixed steps.
@@ -389,6 +425,22 @@ export class GraphCard implements ComparisonCard {
   private addMarker(time: number): void { const id = `m${++this.markerCounter}`; this.markers.set(id, { id, time }); this.host.setHoverTime(undefined); this.draw(); }
 
   private zoom(factor: number, center?: number): void { this.host.time.zoom(factor, center); }
+  /** Holds a vertical selection between two heights of the plot: each axis's values there. It replaces any selected time range. */
+  private selectValues(from: number, to: number): void {
+    const plot = this.valuePlot; const ranges = plot ? valueSelection(this.valueAxes, from, to, plot) : [];
+    this.valueSelected = usableValueSelection(ranges) ? { key: this.valueKey, ranges } : undefined;
+    if (this.selection) this.host.setSelection(undefined);
+    if (this.valueSelected) this.host.setValueSelectionOwner(this.id); else if (this.host.valueSelectionOwner() === this.id) this.host.setValueSelectionOwner(undefined);
+    this.scheduleDraw();
+  }
+  /** Zooms this graph's value axes to its vertical selection. Time and the other graphs stay as they are. */
+  private zoomToSelectedValues(): void {
+    const selection = this.shownValueSelection; if (!selection) return;
+    this.valueZoom = { key: selection.key, ranges: selection.ranges }; this.valueSelected = undefined; this.host.setValueSelectionOwner(undefined); this.host.valueZoomChanged(); this.draw();
+  }
+  /** Back to the automatic value range (the Y axis setting); the time axis stays as it is. */
+  resetValueZoom(): void { if (!this.valueZoom) return; this.dropValueZoom(); this.draw(); }
+  private dropValueZoom(): void { if (!this.valueZoom) return; this.valueZoom = undefined; this.host.valueZoomChanged(); }
   private pan(direction: -1 | 1): void { this.host.time.pan(direction); }
 
   // ---- data -------------------------------------------------------------------------------------
@@ -523,11 +575,13 @@ export class GraphCard implements ComparisonCard {
     const context = this.canvas.getContext('2d')!; context.scale(ratio, ratio);
     context.fillStyle = css('--vscode-editor-background', '#1e1e1e'); context.fillRect(0, 0, width, height);
     if (!full || !this.viewRange || !groups.length) {
+      placeValueZoomButton(this.valueZoomButton, this.canvas, undefined);
       context.fillStyle = css('--vscode-descriptionForeground', '#888'); context.font = '12px sans-serif';
       context.fillText(this.pending || this.host.targets().some((target) => target.status === 'loading') ? t('Loading selected Signals…', '選択したシグナルを読み込んでいます…') : this.shown.length ? t('No comparable samples for the selected Signals.', '選択したシグナルに比較可能なサンプルがありません。') : t('Select Signals in Graph settings.', 'グラフ設定でシグナルを選択してください。'), 20, 30);
       return;
     }
-    this.paint(context, width, 0, groups, this.viewRange, true);
+    this.valueButton = undefined; this.paint(context, width, 0, groups, this.viewRange, true);
+    const valueButton = this.valueButton as GraphCard['valueButton']; placeValueZoomButton(this.valueZoomButton, this.canvas, valueButton?.kind, valueButton?.at);
     if (this.lanesOpen) this.paintLanes(context, width, this.plotHeight, groups, this.viewRange, true);
   }
 
@@ -573,9 +627,14 @@ export class GraphCard implements ComparisonCard {
     }
     const hover = interactive ? this.host.hoverTime() : undefined; const hoverValues: HoverValue[] = []; const markerValues = new Map<string, HoverValue[]>();
     const markers = [...this.markers.values()].flatMap((marker) => { const time = this.markerTime(marker, groups.flatMap((group) => group.entries)); return time === undefined ? [] : [{ ...marker, time }]; }).filter((marker) => marker.time >= xMin && marker.time <= xMax);
+    // A vertical zoom or selection belongs to these axes: their units and the display mode. Another set of axes drops it.
+    const valueKey = groups.map((group) => `${group.key}:${group.displayUnit ?? ''}`).join('|'); const valueZoom = this.valueZoom?.key === valueKey ? this.valueZoom : undefined;
+    if (interactive) this.valueKey = valueKey;
+    const valueSelected = interactive ? this.shownValueSelection : undefined; const valueDrag = interactive ? this.valueDrag : undefined;
+    const plot: ValuePlot = { left, width: plotW, top: laneTop, height: laneHeight }; const axes: ValueRange[] = []; const selectionColor = css('--vscode-focusBorder', '#007acc');
     groups.forEach((group, axisIndex) => {
-      const raw = this.groupRange(group, range, normalized); let yMin = raw.minimum; let yMax = raw.maximum; if (yMin === yMax) { const pad = Math.abs(yMin) * .05 || 1; yMin -= pad; yMax += pad; }
-      const y = (value: number) => laneTop + (1 - (value - yMin) / (yMax - yMin)) * laneHeight; const rightAxis = axisIndex === 1;
+      const raw = valueZoom?.ranges[axisIndex] ?? this.groupRange(group, range, normalized); let yMin = raw.minimum; let yMax = raw.maximum; if (yMin === yMax) { const pad = Math.abs(yMin) * .05 || 1; yMin -= pad; yMax += pad; }
+      const y = (value: number) => laneTop + (1 - (value - yMin) / (yMax - yMin)) * laneHeight; const rightAxis = axisIndex === 1; axes.push({ minimum: yMin, maximum: yMax });
       context.save(); context.font = '600 11px sans-serif'; context.textAlign = rightAxis ? 'right' : 'left'; context.fillStyle = css('--vscode-foreground', '#ddd');
       context.fillText(group.label, rightAxis ? left + plotW : left, laneTop - 8); context.restore();
       for (const value of chartTicks(yMin, yMax, 4)) {
@@ -584,6 +643,9 @@ export class GraphCard implements ComparisonCard {
         const label = String(value); context.fillStyle = css('--vscode-descriptionForeground', '#888');
         context.fillText(label, rightAxis ? left + plotW + 7 : Math.max(4, left - context.measureText(label).width - 7), Math.min(laneTop + laneHeight - 2, py + 4));
       }
+      // The selected values' edges, on each axis in its own unit, over its tick labels.
+      const chosen = valueDrag ? valueSelection([{ minimum: yMin, maximum: yMax }], valueDrag.from, valueDrag.to, plot)[0] : valueSelected?.ranges[axisIndex];
+      if (chosen) for (const value of [chosen.maximum, chosen.minimum]) paintValueEdgeLabel(context, valueEdgeLabel(value, yMax - yMin), rightAxis ? left + plotW : left, y(value), rightAxis, plot, (rightAxis ? right : left) - 6, selectionColor, css('--vscode-button-foreground', '#fff'));
       for (const entry of group.entries) {
         const color = this.color(entry.signalId);
         context.save(); context.beginPath(); context.rect(left, laneTop, plotW, laneHeight); context.clip(); context.setLineDash(dashFor(entry.targetIndex)); context.strokeStyle = color;
@@ -607,6 +669,14 @@ export class GraphCard implements ComparisonCard {
       }
     });
     context.setLineDash([]);
+    if (interactive) {
+      this.valueAxes = axes; this.valuePlot = plot;
+      // A vertical selection: a band over this graph and the span marker ⊤↕⊥ with the zoom button. Zoomed: the marker over the whole height, with reset.
+      const axis = axes[0]; const yOf = (value: number) => axis ? laneTop + (1 - (value - axis.minimum) / (axis.maximum - axis.minimum)) * laneHeight : laneTop;
+      if (valueDrag) paintValueSpan(context, plot, valueDrag.from, valueDrag.to, selectionColor, true);
+      else if (valueSelected?.ranges[0]) this.valueButton = { kind: 'zoom', at: paintValueSpan(context, plot, yOf(valueSelected.ranges[0].maximum), yOf(valueSelected.ranges[0].minimum), selectionColor, true) };
+      else if (valueZoom) this.valueButton = { kind: 'reset', at: paintValueSpan(context, plot, laneTop, laneTop + laneHeight, selectionColor, false) };
+    }
     for (const marker of markers) { const px = x(marker.time); context.strokeStyle = css('--vscode-focusBorder', '#007acc'); context.beginPath(); context.moveTo(px, laneTop); context.lineTo(px, laneTop + laneHeight); context.stroke(); }
     const showHover = hover !== undefined && hover >= xMin && hover <= xMax;
     if (showHover) { const px = x(hover!); context.strokeStyle = css('--vscode-editorCursor-foreground', '#fff'); context.beginPath(); context.moveTo(px, laneTop); context.lineTo(px, laneTop + laneHeight); context.stroke(); }

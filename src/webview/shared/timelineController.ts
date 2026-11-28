@@ -48,8 +48,19 @@ export class TimelineController {
     if (range && (!Number.isFinite(range.start) || !Number.isFinite(range.end))) return;
     if (range?.start === this.rangeValue?.start && range?.end === this.rangeValue?.end) return;
     this.rangeValue = range && { start: Math.min(range.start, range.end), end: Math.max(range.start, range.end) };
+    // A selected time range and a vertical selection are never held at once: the later selection replaces the other.
+    if (this.rangeValue) this.setValueSelectionOwner(undefined);
     for (const listener of this.rangeListeners) listener(this.rangeValue, source);
   }
+  private valueSelectionOwnerValue?: TimelineSource;
+  private readonly valueSelectionListeners = new Set<() => void>();
+  /** The graph holding a vertical selection (of its own values), if any. Only one graph holds one, and never with a time range. */
+  get valueSelectionOwner(): TimelineSource | undefined { return this.valueSelectionOwnerValue; }
+  setValueSelectionOwner(owner: TimelineSource | undefined): void {
+    if (owner === this.valueSelectionOwnerValue) return;
+    this.valueSelectionOwnerValue = owner; for (const listener of this.valueSelectionListeners) listener();
+  }
+  subscribeValueSelection(listener: () => void): () => void { this.valueSelectionListeners.add(listener); return () => this.valueSelectionListeners.delete(listener); }
   subscribeRange(listener: (range: TimeRange | undefined, source: TimelineSource) => void): () => void { this.rangeListeners.add(listener); return () => this.rangeListeners.delete(listener); }
   private viewRangeValue?: TimeRange;
   private readonly viewRangeListeners = new Set<(range: TimeRange | undefined, source: TimelineSource) => void>();
